@@ -46,20 +46,22 @@ const requireLogin = (req, res, next) => {
 const requireAdminOrCoord = (req, res, next) => {
     // Verificamos de forma segura que la sesión y el rol existan
     if (!req.session.user || !req.session.user.rol) {
-        // Si la sesión está mal formada (sin usuario o sin rol), negamos el acceso.
         return res.status(403).send('<h1>Acceso Denegado 🚫</h1><p>Su sesión es inválida o no contiene los permisos necesarios.</p>');
     }
 
-    const userRole = req.session.user.rol;
+    // ===== ¡AQUÍ ESTÁ LA CORRECCIÓN CLAVE! =====
+    // Normalizamos el rol que está guardado en la sesión antes de compararlo
+    const userRole = req.session.user.rol.toLowerCase().trim();
     
-    if (userRole === 'administrador' || userRole === 'coordinador') {
-        next(); // El rol es correcto, puede continuar.
+    const allowedRoles = ['administrador', 'coordinador'];
+    
+    if (allowedRoles.includes(userRole)) {
+        next(); // El rol es correcto, ¡puede pasar!
     } else {
         // El rol existe pero no es el correcto.
         res.status(403).send('<h1>Acceso Denegado 🚫</h1><p>No tienes los permisos necesarios para acceder a esta sección.</p>');
     }
-};
-    
+};    
 app.get('/login', (req, res) => {
     if (req.session.user) {
         return res.redirect('/');
