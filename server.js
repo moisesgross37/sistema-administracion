@@ -42,15 +42,20 @@ const requireLogin = (req, res, next) => {
     next();
 };
 
-// ===== NUEVO MIDDLEWARE DE AUTORIZACIÓN (CORREGIDO) =====
+// ===== MIDDLEWARE DE AUTORIZACIÓN MEJORADO Y MÁS SEGURO =====
 const requireAdminOrCoord = (req, res, next) => {
-    // Asumimos que requireLogin ya se ejecutó, por lo que req.session.user existe.
+    // Verificamos de forma segura que la sesión y el rol existan
+    if (!req.session.user || !req.session.user.rol) {
+        // Si la sesión está mal formada (sin usuario o sin rol), negamos el acceso.
+        return res.status(403).send('<h1>Acceso Denegado 🚫</h1><p>Su sesión es inválida o no contiene los permisos necesarios.</p>');
+    }
+
     const userRole = req.session.user.rol;
     
     if (userRole === 'administrador' || userRole === 'coordinador') {
-        next(); // El usuario tiene un rol permitido, puede continuar.
+        next(); // El rol es correcto, puede continuar.
     } else {
-        // El usuario no tiene permiso, le mostramos un error de acceso denegado.
+        // El rol existe pero no es el correcto.
         res.status(403).send('<h1>Acceso Denegado 🚫</h1><p>No tienes los permisos necesarios para acceder a esta sección.</p>');
     }
 };
@@ -72,12 +77,10 @@ app.post('/login', async (req, res) => {
         }
         const isMatch = await bcrypt.compare(password, user.password);
         if (isMatch) {
-            // ===== NUEVA VALIDACIÓN DE ROL =====
             const allowedRoles = ['administrador', 'coordinador'];
             if (!allowedRoles.includes(user.rol)) {
                 return res.status(403).send('Acceso denegado. Este sistema es solo para administradores y coordinadores.');
             }
-            // Si el rol es correcto, creamos la sesión
             req.session.user = { id: user.id, nombre: user.nombre, username: user.username, rol: user.rol };
             res.redirect('/');
         } else {
@@ -157,8 +160,7 @@ const dashboardHeader = (user) => `
     </header>
 `;
 
-// Correcto ✅
-const backToDashboardLink = `<a href="/" class="back-link">🏠 Volver al Panel Principal</a>`;
+const backToDashboardLink = \`<a href="/" class="back-link">🏠 Volver al Panel Principal</a>\`;
 // =======================================================
 // ============== RUTAS DE LA APLICACIÓN ==============
 // =======================================================
