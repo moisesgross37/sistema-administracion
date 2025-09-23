@@ -75,14 +75,29 @@ app.post('/login', async (req, res) => {
         if (!user) {
             return res.status(401).send('Usuario o contraseña incorrectos.');
         }
+
         const isMatch = await bcrypt.compare(password, user.password);
         if (isMatch) {
+            // ===== VALIDACIÓN DE ROL MEJORADA Y MÁS FLEXIBLE =====
+
+            // 1. Verificamos que el usuario tenga un rol asignado en la base de datos.
+            if (!user.rol) {
+                return res.status(403).send('Acceso denegado. Tu usuario no tiene un rol definido.');
+            }
+
+            // 2. Normalizamos el rol: lo convertimos a minúsculas y quitamos espacios.
+            const userRole = user.rol.toLowerCase().trim();
+            
+            // 3. Comparamos el rol normalizado con la lista de roles permitidos.
             const allowedRoles = ['administrador', 'coordinador'];
-            if (!allowedRoles.includes(user.rol)) {
+            if (!allowedRoles.includes(userRole)) {
                 return res.status(403).send('Acceso denegado. Este sistema es solo para administradores y coordinadores.');
             }
+            
+            // Si la validación es exitosa, creamos la sesión.
             req.session.user = { id: user.id, nombre: user.nombre, username: user.username, rol: user.rol };
             res.redirect('/');
+            
         } else {
             res.status(401).send('Usuario o contraseña incorrectos.');
         }
