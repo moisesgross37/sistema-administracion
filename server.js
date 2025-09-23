@@ -42,6 +42,19 @@ const requireLogin = (req, res, next) => {
     next();
 };
 
+// ===== NUEVO MIDDLEWARE DE AUTORIZACIÓN (CORREGIDO) =====
+const requireAdminOrCoord = (req, res, next) => {
+    // Asumimos que requireLogin ya se ejecutó, por lo que req.session.user existe.
+    const userRole = req.session.user.rol;
+    
+    if (userRole === 'administrador' || userRole === 'coordinador') {
+        next(); // El usuario tiene un rol permitido, puede continuar.
+    } else {
+        // El usuario no tiene permiso, le mostramos un error de acceso denegado.
+        res.status(403).send('<h1>Acceso Denegado 🚫</h1><p>No tienes los permisos necesarios para acceder a esta sección.</p>');
+    }
+};
+    
 app.get('/login', (req, res) => {
     if (req.session.user) {
         return res.redirect('/');
@@ -59,6 +72,12 @@ app.post('/login', async (req, res) => {
         }
         const isMatch = await bcrypt.compare(password, user.password);
         if (isMatch) {
+            // ===== NUEVA VALIDACIÓN DE ROL =====
+            const allowedRoles = ['administrador', 'coordinador'];
+            if (!allowedRoles.includes(user.rol)) {
+                return res.status(403).send('Acceso denegado. Este sistema es solo para administradores y coordinadores.');
+            }
+            // Si el rol es correcto, creamos la sesión
             req.session.user = { id: user.id, nombre: user.nombre, username: user.username, rol: user.rol };
             res.redirect('/');
         } else {
@@ -138,13 +157,12 @@ const dashboardHeader = (user) => `
     </header>
 `;
 
-const backToDashboardLink = `<a href="/" class="back-link">🏠 Volver al Panel Principal</a>`;
-
+const backToDashboardLink = \`<a href="/" class="back-link">🏠 Volver al Panel Principal</a>\`;
 // =======================================================
 // ============== RUTAS DE LA APLICACIÓN ==============
 // =======================================================
 
-app.get('/', requireLogin, (req, res) => {
+app.get('/', requireLogin, requireAdminOrCoord, (req, res) => {
     res.send(`
         <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
             <div class="container">
@@ -193,7 +211,7 @@ app.get('/', requireLogin, (req, res) => {
     `);
 });
 
-app.get('/todos-los-centros', requireLogin, async (req, res) => {
+app.get('/todos-los-centros', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
         const result = await client.query('SELECT * FROM centers ORDER BY name ASC;');
@@ -213,7 +231,7 @@ app.get('/todos-los-centros', requireLogin, async (req, res) => {
     }
 });
 
-app.get('/clientes', requireLogin, async (req, res) => {
+app.get('/clientes', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
         const result = await client.query(`SELECT DISTINCT c.* FROM centers c INNER JOIN quotes q ON c.name = q.clientname WHERE q.status = 'activa'`);
@@ -233,7 +251,7 @@ app.get('/clientes', requireLogin, async (req, res) => {
     }
 });
 
-app.get('/proyectos-por-activar', requireLogin, async (req, res) => {
+app.get('/proyectos-por-activar', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
         const result = await client.query("SELECT * FROM quotes WHERE status = 'formalizada' ORDER BY createdat ASC");
@@ -256,7 +274,7 @@ app.get('/proyectos-por-activar', requireLogin, async (req, res) => {
     }
 });
 
-app.post('/activar-proyecto/:id', requireLogin, async (req, res) => {
+app.post('/activar-proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
     const quoteId = req.params.id;
     const { notas_administrativas } = req.body;
     try {
@@ -269,7 +287,7 @@ app.post('/activar-proyecto/:id', requireLogin, async (req, res) => {
     }
 });
 
-app.get('/suplidores', requireLogin, async (req, res) => {
+app.get('/suplidores', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
         const result = await client.query('SELECT * FROM suppliers ORDER BY name ASC');
@@ -293,7 +311,7 @@ app.get('/suplidores', requireLogin, async (req, res) => {
     }
 });
 
-app.post('/suplidores', requireLogin, async (req, res) => {
+app.post('/suplidores', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { name, contact_info } = req.body;
     if (!name) return res.status(400).send("El nombre del suplidor es obligatorio.");
     try {
@@ -307,7 +325,7 @@ app.post('/suplidores', requireLogin, async (req, res) => {
     }
 });
 
-app.get('/cuentas-por-cobrar', requireLogin, async (req, res) => {
+app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
         const result = await client.query(`
@@ -360,7 +378,7 @@ app.get('/cuentas-por-cobrar', requireLogin, async (req, res) => {
     }
 });
 
-app.get('/reporte-gastos', requireLogin, async (req, res) => {
+app.get('/reporte-gastos', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
         const result = await client.query(`
@@ -402,9 +420,7 @@ app.get('/reporte-gastos', requireLogin, async (req, res) => {
     }
 });
 
-// Ruta para mostrar y gestionar empleados (ACTUALIZADA)
-// Ruta para mostrar y gestionar empleados (ACTUALIZADA con acciones)
-app.get('/empleados', requireLogin, async (req, res) => {
+app.get('/empleados', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
         const result = await client.query('SELECT * FROM employees ORDER BY first_name, last_name ASC');
@@ -475,8 +491,7 @@ app.get('/empleados', requireLogin, async (req, res) => {
     }
 });
 
-// Ruta para guardar un nuevo empleado (ACTUALIZADA)
-app.post('/empleados', requireLogin, async (req, res) => {
+app.post('/empleados', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { first_name, last_name, cedula, hire_date, base_salary, payment_frequency, birth_date, address } = req.body;
 
     if (!first_name || !last_name) {
@@ -498,8 +513,7 @@ app.post('/empleados', requireLogin, async (req, res) => {
     }
 });
 
-// 1. RUTA PARA MOSTRAR LA PÁGINA DE EDICIÓN
-app.get('/empleado/editar/:id', requireLogin, async (req, res) => {
+app.get('/empleado/editar/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const { id } = req.params;
         const client = await pool.connect();
@@ -511,7 +525,6 @@ app.get('/empleado/editar/:id', requireLogin, async (req, res) => {
         }
 
         const employee = result.rows[0];
-        // Formatear fechas para que el input type="date" las acepte
         const hireDate = employee.hire_date ? new Date(employee.hire_date).toISOString().split('T')[0] : '';
         const birthDate = employee.birth_date ? new Date(employee.birth_date).toISOString().split('T')[0] : '';
 
@@ -547,8 +560,7 @@ app.get('/empleado/editar/:id', requireLogin, async (req, res) => {
     }
 });
 
-// 2. RUTA PARA PROCESAR LA ACTUALIZACIÓN
-app.post('/empleado/editar/:id', requireLogin, async (req, res) => {
+app.post('/empleado/editar/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const { id } = req.params;
         const { first_name, last_name, cedula, hire_date, base_salary, payment_frequency, birth_date, address } = req.body;
@@ -569,14 +581,11 @@ app.post('/empleado/editar/:id', requireLogin, async (req, res) => {
     }
 });
 
-// 3. RUTA PARA PROCESAR LA ELIMINACIÓN
-app.post('/empleado/eliminar/:id', requireLogin, async (req, res) => {
+app.post('/empleado/eliminar/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const { id } = req.params;
         const client = await pool.connect();
-        // Primero, eliminamos cualquier registro de nómina asociado para evitar errores.
         await client.query('DELETE FROM payroll_records WHERE employee_id = $1', [id]);
-        // Luego, eliminamos al empleado.
         await client.query('DELETE FROM employees WHERE id = $1', [id]);
         client.release();
         res.redirect('/empleados');
@@ -586,11 +595,9 @@ app.post('/empleado/eliminar/:id', requireLogin, async (req, res) => {
     }
 });
 
-// Ruta para mostrar la herramienta de generación de nómina (ACTUALIZADA)
-app.get('/generar-nomina', requireLogin, async (req, res) => {
+app.get('/generar-nomina', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
-        // Ahora también pedimos la frecuencia de pago
         const result = await client.query('SELECT id, first_name, last_name, base_salary, payment_frequency FROM employees ORDER BY first_name, last_name ASC');
         const employees = result.rows;
         client.release();
@@ -599,8 +606,6 @@ app.get('/generar-nomina', requireLogin, async (req, res) => {
             const monthlySalary = parseFloat(e.base_salary || 0);
             let salaryForPeriod = monthlySalary;
 
-            // --- ¡AQUÍ ESTÁ LA LÓGICA CLAVE! ---
-            // Si la frecuencia es quincenal, dividimos el salario entre 2
             if (e.payment_frequency === 'quincenal') {
                 salaryForPeriod /= 2;
             }
@@ -651,7 +656,6 @@ app.get('/generar-nomina', requireLogin, async (req, res) => {
                 </div>
 
                 <script>
-                    // Este script calcula el PAGO NETO automáticamente
                     document.querySelectorAll('.payroll-input').forEach(input => {
                         input.addEventListener('input', (event) => {
                             const row = event.target.closest('tr');
@@ -673,7 +677,7 @@ app.get('/generar-nomina', requireLogin, async (req, res) => {
     }
 });
 
-app.post('/guardar-nomina', requireLogin, async (req, res) => {
+app.post('/guardar-nomina', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { pay_date } = req.body;
     if (!pay_date) {
         return res.status(400).send("La fecha de pago es obligatoria.");
@@ -689,7 +693,6 @@ app.post('/guardar-nomina', requireLogin, async (req, res) => {
         for (const employee of employees) {
             const employeeId = employee.id;
             const baseSalary = parseFloat(employee.base_salary || 0);
-
             const bonuses = parseFloat(req.body[`bonuses_${employeeId}`] || 0);
             const deductions = parseFloat(req.body[`deductions_${employeeId}`] || 0);
             const notes = req.body[`notes_${employeeId}`] || '';
@@ -716,11 +719,9 @@ app.post('/guardar-nomina', requireLogin, async (req, res) => {
     }
 });
 
-// Ruta para ver el historial de nóminas guardadas
-app.get('/historial-nomina', requireLogin, async (req, res) => {
+app.get('/historial-nomina', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
-        // Consulta que une los registros de nómina con la tabla de empleados para obtener el nombre
         const result = await client.query(`
             SELECT 
                 pr.*,
@@ -779,7 +780,7 @@ app.get('/historial-nomina', requireLogin, async (req, res) => {
     }
 });
 
-app.get('/proyecto/:id', requireLogin, async (req, res) => {
+app.get('/proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
     const centerId = req.params.id;
     try {
         const client = await pool.connect();
@@ -859,7 +860,7 @@ app.get('/proyecto/:id', requireLogin, async (req, res) => {
     }
 });
 
-app.post('/proyecto/:id/nuevo-pago', requireLogin, async (req, res) => {
+app.post('/proyecto/:id/nuevo-pago', requireLogin, requireAdminOrCoord, async (req, res) => {
     const quoteId = req.params.id;
     const { centerId, payment_date, amount, students_covered, comment } = req.body;
     try {
@@ -873,7 +874,7 @@ app.post('/proyecto/:id/nuevo-pago', requireLogin, async (req, res) => {
     }
 });
 
-app.post('/proyecto/:id/nuevo-gasto', requireLogin, async (req, res) => {
+app.post('/proyecto/:id/nuevo-gasto', requireLogin, requireAdminOrCoord, async (req, res) => {
     const quoteId = req.params.id;
     const { centerId, expense_date, supplier_id, amount, description, type } = req.body;
     if (!expense_date || !supplier_id || !amount || !description) {
