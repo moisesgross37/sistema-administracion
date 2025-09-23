@@ -157,7 +157,8 @@ const dashboardHeader = (user) => `
     </header>
 `;
 
-const backToDashboardLink = \`<a href="/" class="back-link">🏠 Volver al Panel Principal</a>\`;
+// Correcto ✅
+const backToDashboardLink = `<a href="/" class="back-link">🏠 Volver al Panel Principal</a>`;
 // =======================================================
 // ============== RUTAS DE LA APLICACIÓN ==============
 // =======================================================
