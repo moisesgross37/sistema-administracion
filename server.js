@@ -43,27 +43,20 @@ const requireLogin = (req, res, next) => {
     next();
 };
 
-// ===== MIDDLEWARE DE AUTORIZACIÓN MEJORADO Y MÁS SEGURO =====
 const requireAdminOrCoord = (req, res, next) => {
-    // Verificamos de forma segura que la sesión y el rol existan
     if (!req.session.user || !req.session.user.rol) {
         return res.status(403).send('<h1>Acceso Denegado 🚫</h1><p>Su sesión es inválida o no contiene los permisos necesarios.</p>');
     }
-
-    // ===== ¡AQUÍ ESTÁ LA CORRECCIÓN CLAVE! =====
-    // Normalizamos el rol que está guardado en la sesión antes de compararlo
     const userRole = req.session.user.rol.toLowerCase().trim();
-    
     const allowedRoles = ['administrador', 'coordinador'];
-    
     if (allowedRoles.includes(userRole)) {
-        next(); // El rol es correcto, ¡puede pasar!
+        next();
     } else {
-        // El rol existe pero no es el correcto.
-        res.status(403).send('<h1>Acceso Denegado 🚫</h1><p>No tienes los permisos necesarios para acceder a esta sección.</p>');
+        res.status(403).send('<h1>Acceso Denied 🚫</h1><p>No tienes los permisos necesarios para acceder a esta sección.</p>');
     }
-};    
-('/login', (req, res) => {
+};
+
+app.get('/login', (req, res) => {
     if (req.session.user) {
         return res.redirect('/');
     }
@@ -81,26 +74,16 @@ app.post('/login', async (req, res) => {
 
         const isMatch = await bcrypt.compare(password, user.password);
         if (isMatch) {
-            // ===== VALIDACIÓN DE ROL MEJORADA Y MÁS FLEXIBLE =====
-
-            // 1. Verificamos que el usuario tenga un rol asignado en la base de datos.
             if (!user.rol) {
                 return res.status(403).send('Acceso denegado. Tu usuario no tiene un rol definido.');
             }
-
-            // 2. Normalizamos el rol: lo convertimos a minúsculas y quitamos espacios.
             const userRole = user.rol.toLowerCase().trim();
-            
-            // 3. Comparamos el rol normalizado con la lista de roles permitidos.
             const allowedRoles = ['administrador', 'coordinador'];
             if (!allowedRoles.includes(userRole)) {
                 return res.status(403).send('Acceso denegado. Este sistema es solo para administradores y coordinadores.');
             }
-            
-            // Si la validación es exitosa, creamos la sesión.
             req.session.user = { id: user.id, nombre: user.nombre, username: user.username, rol: user.rol };
             res.redirect('/');
-            
         } else {
             res.status(401).send('Usuario o contraseña incorrectos.');
         }
@@ -146,7 +129,7 @@ const commonHtmlHead = `
         th, td { padding: 12px 15px; border: 1px solid #ddd; text-align: left; vertical-align: middle; }
         thead { background-color: #007bff; color: white; }
         tbody tr:nth-child(even) { background-color: #f2f2f2; }
-        .btn { background-color: #007bff; color: white; padding: 10px 15px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; }
+        .btn { background-color: #007bff; color: white; padding: 10px 15px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; text-decoration: none; display: inline-block; }
         .btn-activar { background-color: #28a745; }
         .btn-toggle { background-color: #17a2b8; }
         .btn-gasto { background-color: #ffc107; color: #212529; }
@@ -178,13 +161,13 @@ const dashboardHeader = (user) => `
     </header>
 `;
 
-// ✅ ASÍ DEBE VERSE
 const backToDashboardLink = `<a href="/" class="back-link">🏠 Volver al Panel Principal</a>`;
+
 // =======================================================
 // ============== RUTAS DE LA APLICACIÓN ==============
 // =======================================================
 
-('/', requireLogin, requireAdminOrCoord, (req, res) => {
+app.get('/', requireLogin, requireAdminOrCoord, (req, res) => {
     res.send(`
         <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
             <div class="container">
@@ -200,32 +183,17 @@ const backToDashboardLink = `<a href="/" class="back-link">🏠 Volver al Panel 
                 <div class="module">
                     <h2>Finanzas y Contabilidad</h2>
                     <div class="dashboard">
-                        <a href="/cuentas-por-cobrar" class="dashboard-card">
-                            <h3>📊 Cuentas por Cobrar</h3>
-                            <p>Consulta un resumen de todas las deudas pendientes.</p>
-                        </a>
-                        <a href="/reporte-gastos" class="dashboard-card">
-                            <h3>🧾 Reporte de Gastos</h3>
-                            <p>Consulta un resumen de todos los gastos de la empresa.</p>
-                        </a>
+                        <a href="/cuentas-por-cobrar" class="dashboard-card"><h3>📊 Cuentas por Cobrar</h3><p>Consulta un resumen de todas las deudas pendientes.</p></a>
+                        <a href="/reporte-gastos" class="dashboard-card"><h3>🧾 Reporte de Gastos</h3><p>Consulta un resumen de todos los gastos de la empresa.</p></a>
                         <a href="/suplidores" class="dashboard-card"><h3>🚚 Gestionar Suplidores</h3><p>Añade o edita la información de tus suplidores.</p></a>
                     </div>
                 </div>
                 <div class="module">
                     <h2>Nómina</h2>
                     <div class="dashboard">
-                        <a href="/empleados" class="dashboard-card">
-                            <h3>👥 Gestionar Empleados</h3>
-                            <p>Añade o edita la información de tu personal.</p>
-                        </a>
-                        <a href="/generar-nomina" class="dashboard-card">
-                            <h3>💵 Generar Nómina</h3>
-                            <p>Calcula la nómina quincenal de tu equipo.</p>
-                        </a>
-                        <a href="/historial-nomina" class="dashboard-card">
-                            <h3>📂 Historial de Nómina</h3>
-                            <p>Consulta los registros de pagos de nómina anteriores.</p>
-                        </a>
+                        <a href="/empleados" class="dashboard-card"><h3>👥 Gestionar Empleados</h3><p>Añade o edita la información de tu personal.</p></a>
+                        <a href="/generar-nomina" class="dashboard-card"><h3>💵 Generar Nómina</h3><p>Calcula la nómina quincenal de tu equipo.</p></a>
+                        <a href="/historial-nomina" class="dashboard-card"><h3>📂 Historial de Nómina</h3><p>Consulta los registros de pagos de nómina anteriores.</p></a>
                     </div>
                 </div>
             </div>
@@ -233,7 +201,7 @@ const backToDashboardLink = `<a href="/" class="back-link">🏠 Volver al Panel 
     `);
 });
 
-('/todos-los-centros', requireLogin, requireAdminOrCoord, async (req, res) => {
+app.get('/todos-los-centros', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
         const result = await client.query('SELECT * FROM centers ORDER BY name ASC;');
@@ -253,7 +221,7 @@ const backToDashboardLink = `<a href="/" class="back-link">🏠 Volver al Panel 
     }
 });
 
-('/clientes', requireLogin, requireAdminOrCoord, async (req, res) => {
+app.get('/clientes', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
         const result = await client.query(`SELECT DISTINCT c.* FROM centers c INNER JOIN quotes q ON c.name = q.clientname WHERE q.status = 'activa'`);
@@ -273,52 +241,38 @@ const backToDashboardLink = `<a href="/" class="back-link">🏠 Volver al Panel 
     }
 });
 
-//
-// REEMPLAZA ESTA RUTA COMPLETA EN TU ARCHIVO server.js
-//
+// =======================================================================
+// ============== RUTA DE PROYECTOS POR ACTIVAR (VERSIÓN FINAL) ==============
+// =======================================================================
 app.get('/proyectos-por-activar', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
-        
-        // ===============================================
-        // SOLUCIÓN #1: Consulta a la base de datos corregida con INNER JOIN
-        // Solo trae cotizaciones cuyo cliente (center) todavía existe.
-        // ===============================================
         const result = await client.query(
             `SELECT q.* FROM quotes q
              INNER JOIN centers c ON q.clientname = c.name 
              WHERE q.status = 'formalizada' 
              ORDER BY q.createdat ASC`
         );
-        
         const quotes = result.rows;
         client.release();
 
-        // ===============================================
-        // SOLUCIÓN #2: HTML de la tabla reestructurado con dos columnas
-        // ===============================================
         let quotesHtml = quotes.map(quote => `
             <tr>
                 <td>${quote.quotenumber}</td>
-                <td>${quote.clientname}</td>
-                <td>${quote.advisorname}</td>
                 
-                <td>
-                    <textarea 
-                        name="notas_administrativas" 
-                        rows="3" 
-                        placeholder="Añadir notas internas..." 
-                        form="form-activar-${quote.id}" 
-                        style="width: 100%; box-sizing: border-box;"
-                    ></textarea>
+                <td style="text-align: center;">
+                    <a href="/ver-cotizacion-pdf/${quote.id}" target="_blank" class="btn" style="padding: 5px 10px; font-size: 14px; background-color: #6c757d;">
+                        Ver PDF 📄
+                    </a>
                 </td>
 
+                <td>${quote.clientname}</td>
+                <td>${quote.advisorname}</td>
+                <td>
+                    <textarea name="notas_administrativas" rows="3" placeholder="Añadir notas internas..." form="form-activar-${quote.id}" style="width: 100%; box-sizing: border-box;"></textarea>
+                </td>
                 <td style="text-align: center; vertical-align: middle;">
-                    <form 
-                        id="form-activar-${quote.id}" 
-                        action="/activar-proyecto/${quote.id}" 
-                        method="POST"
-                    >
+                    <form id="form-activar-${quote.id}" action="/activar-proyecto/${quote.id}" method="POST">
                         <button type="submit" class="btn btn-activar">Activar Proyecto</button>
                     </form>
                 </td>
@@ -326,10 +280,9 @@ app.get('/proyectos-por-activar', requireLogin, requireAdminOrCoord, async (req,
         `).join('');
 
         if (quotes.length === 0) {
-            // Se ajusta el colspan a 5 porque ahora la tabla tiene 5 columnas
-            quotesHtml = '<tr><td colspan="5">No hay proyectos pendientes de activación.</td></tr>';
+            quotesHtml = '<tr><td colspan="6">No hay proyectos pendientes de activación.</td></tr>';
         }
-        
+
         res.send(`
             <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
                 <div class="container">
@@ -339,7 +292,7 @@ app.get('/proyectos-por-activar', requireLogin, requireAdminOrCoord, async (req,
                         <thead>
                             <tr>
                                 <th># Cotización</th>
-                                <th>Cliente</th>
+                                <th>Cotización</th> <th>Cliente</th>
                                 <th>Asesor</th>
                                 <th>Notas Internas</th>
                                 <th>Acciones</th>
@@ -353,10 +306,11 @@ app.get('/proyectos-por-activar', requireLogin, requireAdminOrCoord, async (req,
             </body></html>`);
 
     } catch (error) {
-        console.error("Error en /proyectos-por-activar:", error); // Añadimos un log más específico
+        console.error("Error en /proyectos-por-activar:", error);
         res.status(500).send('<h1>Error al cargar la página ❌</h1>');
     }
 });
+
 app.post('/activar-proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
     const quoteId = req.params.id;
     const { notas_administrativas } = req.body;
@@ -369,6 +323,37 @@ app.post('/activar-proyecto/:id', requireLogin, requireAdminOrCoord, async (req,
         res.status(500).send('<h1>Error al activar el proyecto ❌</h1>');
     }
 });
+
+// =======================================================
+// ============== NUEVA RUTA PROXY PARA PDFs ==============
+// =======================================================
+app.get('/ver-cotizacion-pdf/:quoteId', requireLogin, async (req, res) => {
+    try {
+        const { quoteId } = req.params;
+
+        // URL real de tu aplicación "Proyecto Gestión" en Render
+        const gestionApiUrl = `https://be-gestion.onrender.com/api/quote-requests/${quoteId}/pdf`;
+
+        const response = await axios.get(gestionApiUrl, {
+            headers: {
+                // Esta es la llave secreta que el otro servidor espera
+                'X-API-Key': 'MI_LLAVE_SECRETA_12345'
+            },
+            responseType: 'stream' // Muy importante para manejar archivos
+        });
+
+        // Le decimos al navegador del usuario que estamos enviando un PDF
+        res.setHeader('Content-Type', 'application/pdf');
+
+        // Enviamos el PDF que recibimos del otro servidor directamente al navegador
+        response.data.pipe(res);
+
+    } catch (error) {
+        console.error("Error en el proxy de PDF:", error.message);
+        res.status(500).send("Error al obtener el documento de la cotización.");
+    }
+});
+
 
 app.get('/suplidores', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
@@ -576,11 +561,9 @@ app.get('/empleados', requireLogin, requireAdminOrCoord, async (req, res) => {
 
 app.post('/empleados', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { first_name, last_name, cedula, hire_date, base_salary, payment_frequency, birth_date, address } = req.body;
-
     if (!first_name || !last_name) {
         return res.status(400).send("El nombre y el apellido son obligatorios.");
     }
-
     try {
         const client = await pool.connect();
         await client.query(
