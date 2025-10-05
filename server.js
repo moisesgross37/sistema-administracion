@@ -259,7 +259,7 @@ app.get('/proyectos-por-activar', requireLogin, requireAdminOrCoord, async (req,
         let quotesHtml = quotes.map(quote => `
             <tr>
                 <td>${quote.quotenumber}</td>
-                
+
                 <td style="text-align: center;">
                     <a href="/ver-cotizacion-pdf/${quote.id}" target="_blank" class="btn" style="padding: 5px 10px; font-size: 14px; background-color: #6c757d;">
                         Ver PDF 📄
@@ -310,7 +310,6 @@ app.get('/proyectos-por-activar', requireLogin, requireAdminOrCoord, async (req,
         res.status(500).send('<h1>Error al cargar la página ❌</h1>');
     }
 });
-
 app.post('/activar-proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
     const quoteId = req.params.id;
     const { notas_administrativas } = req.body;
