@@ -10,7 +10,7 @@ const app = express();
 const PORT = 3002;
 
 // 🚨 IMPORTANTE: Define aquí tu código secreto para autorizar ajustes.
-const CODIGO_SECRETO_AJUSTE = 'SUPER_ADMIN_2025'; // ¡Cámbialo por algo seguro!
+const CODIGO_SECRETO_AJUSTE = '1022'; // ¡Cámbialo por algo seguro!
 
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
