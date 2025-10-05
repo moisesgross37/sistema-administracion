@@ -62,7 +62,7 @@ const requireAdminOrCoord = (req, res, next) => {
         res.status(403).send('<h1>Acceso Denegado 🚫</h1><p>No tienes los permisos necesarios para acceder a esta sección.</p>');
     }
 };    
-app.get('/login', (req, res) => {
+('/login', (req, res) => {
     if (req.session.user) {
         return res.redirect('/');
     }
@@ -183,7 +183,7 @@ const backToDashboardLink = `<a href="/" class="back-link">🏠 Volver al Panel 
 // ============== RUTAS DE LA APLICACIÓN ==============
 // =======================================================
 
-app.get('/', requireLogin, requireAdminOrCoord, (req, res) => {
+('/', requireLogin, requireAdminOrCoord, (req, res) => {
     res.send(`
         <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
             <div class="container">
@@ -232,7 +232,7 @@ app.get('/', requireLogin, requireAdminOrCoord, (req, res) => {
     `);
 });
 
-app.get('/todos-los-centros', requireLogin, requireAdminOrCoord, async (req, res) => {
+('/todos-los-centros', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
         const result = await client.query('SELECT * FROM centers ORDER BY name ASC;');
@@ -252,7 +252,7 @@ app.get('/todos-los-centros', requireLogin, requireAdminOrCoord, async (req, res
     }
 });
 
-app.get('/clientes', requireLogin, requireAdminOrCoord, async (req, res) => {
+('/clientes', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
         const result = await client.query(`SELECT DISTINCT c.* FROM centers c INNER JOIN quotes q ON c.name = q.clientname WHERE q.status = 'activa'`);
@@ -272,29 +272,90 @@ app.get('/clientes', requireLogin, requireAdminOrCoord, async (req, res) => {
     }
 });
 
+//
+// REEMPLAZA ESTA RUTA COMPLETA EN TU ARCHIVO server.js
+//
 app.get('/proyectos-por-activar', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
-        const result = await client.query("SELECT * FROM quotes WHERE status = 'formalizada' ORDER BY createdat ASC");
+        
+        // ===============================================
+        // SOLUCIÓN #1: Consulta a la base de datos corregida con INNER JOIN
+        // Solo trae cotizaciones cuyo cliente (center) todavía existe.
+        // ===============================================
+        const result = await client.query(
+            `SELECT q.* FROM quotes q
+             INNER JOIN centers c ON q.clientname = c.name 
+             WHERE q.status = 'formalizada' 
+             ORDER BY q.createdat ASC`
+        );
+        
         const quotes = result.rows;
         client.release();
-        let quotesHtml = quotes.map(quote => `<tr><td>${quote.quotenumber}</td><td>${quote.clientname}</td><td>${quote.advisorname}</td><td><form action="/activar-proyecto/${quote.id}" method="POST"><div class="form-group"><textarea name="notas_administrativas" rows="3" placeholder="Añadir notas internas sobre el acuerdo..."></textarea></div><button type="submit" class="btn btn-activar">Activar Proyecto</button></form></td></tr>`).join('');
+
+        // ===============================================
+        // SOLUCIÓN #2: HTML de la tabla reestructurado con dos columnas
+        // ===============================================
+        let quotesHtml = quotes.map(quote => `
+            <tr>
+                <td>${quote.quotenumber}</td>
+                <td>${quote.clientname}</td>
+                <td>${quote.advisorname}</td>
+                
+                <td>
+                    <textarea 
+                        name="notas_administrativas" 
+                        rows="3" 
+                        placeholder="Añadir notas internas..." 
+                        form="form-activar-${quote.id}" 
+                        style="width: 100%; box-sizing: border-box;"
+                    ></textarea>
+                </td>
+
+                <td style="text-align: center; vertical-align: middle;">
+                    <form 
+                        id="form-activar-${quote.id}" 
+                        action="/activar-proyecto/${quote.id}" 
+                        method="POST"
+                    >
+                        <button type="submit" class="btn btn-activar">Activar Proyecto</button>
+                    </form>
+                </td>
+            </tr>
+        `).join('');
+
         if (quotes.length === 0) {
-            quotesHtml = '<tr><td colspan="4">No hay proyectos pendientes de activación.</td></tr>';
+            // Se ajusta el colspan a 5 porque ahora la tabla tiene 5 columnas
+            quotesHtml = '<tr><td colspan="5">No hay proyectos pendientes de activación.</td></tr>';
         }
+        
         res.send(`
             <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
                 <div class="container">
                     ${backToDashboardLink}
                     <h2>Proyectos Formalizados por Activar</h2>
-                    <table><thead><tr><th># Cotización</th><th>Cliente</th><th>Asesor</th><th>Acciones</th></tr></thead><tbody>${quotesHtml}</tbody></table>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th># Cotización</th>
+                                <th>Cliente</th>
+                                <th>Asesor</th>
+                                <th>Notas Internas</th>
+                                <th>Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${quotesHtml}
+                        </tbody>
+                    </table>
                 </div>
             </body></html>`);
+
     } catch (error) {
+        console.error("Error en /proyectos-por-activar:", error); // Añadimos un log más específico
         res.status(500).send('<h1>Error al cargar la página ❌</h1>');
     }
 });
-
 app.post('/activar-proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
     const quoteId = req.params.id;
     const { notas_administrativas } = req.body;
