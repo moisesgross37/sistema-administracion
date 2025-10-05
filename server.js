@@ -9,6 +9,9 @@ const path = require('path');
 const app = express();
 const PORT = 3002;
 
+// 🚨 IMPORTANTE: Define aquí tu código secreto para autorizar ajustes.
+const CODIGO_SECRETO_AJUSTE = 'SUPER_ADMIN_2025'; // ¡Cámbialo por algo seguro!
+
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
@@ -52,7 +55,7 @@ const requireAdminOrCoord = (req, res, next) => {
     if (allowedRoles.includes(userRole)) {
         next();
     } else {
-        res.status(403).send('<h1>Acceso Denied 🚫</h1><p>No tienes los permisos necesarios para acceder a esta sección.</p>');
+        res.status(403).send('<h1>Acceso Denegado 🚫</h1><p>No tienes los permisos necesarios para acceder a esta sección.</p>');
     }
 };
 
@@ -146,6 +149,7 @@ const commonHtmlHead = `
         .blue { color: #007bff; }
         .orange { color: #fd7e14; }
         .back-link { display: inline-block; margin-bottom: 20px; font-weight: 600; text-decoration: none; color: #007bff; background-color: #fff; padding: 10px 15px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        .header-with-button { display: flex; justify-content: space-between; align-items: center; }
     </style>
 `;
 
@@ -162,7 +166,6 @@ const dashboardHeader = (user) => `
 `;
 
 const backToDashboardLink = `<a href="/" class="back-link">🏠 Volver al Panel Principal</a>`;
-
 // =======================================================
 // ============== RUTAS DE LA APLICACIÓN ==============
 // =======================================================
@@ -183,17 +186,32 @@ app.get('/', requireLogin, requireAdminOrCoord, (req, res) => {
                 <div class="module">
                     <h2>Finanzas y Contabilidad</h2>
                     <div class="dashboard">
-                        <a href="/cuentas-por-cobrar" class="dashboard-card"><h3>📊 Cuentas por Cobrar</h3><p>Consulta un resumen de todas las deudas pendientes.</p></a>
-                        <a href="/reporte-gastos" class="dashboard-card"><h3>🧾 Reporte de Gastos</h3><p>Consulta un resumen de todos los gastos de la empresa.</p></a>
+                        <a href="/cuentas-por-cobrar" class="dashboard-card">
+                            <h3>📊 Cuentas por Cobrar</h3>
+                            <p>Consulta un resumen de todas las deudas pendientes.</p>
+                        </a>
+                        <a href="/reporte-gastos" class="dashboard-card">
+                            <h3>🧾 Reporte de Gastos</h3>
+                            <p>Consulta un resumen de todos los gastos de la empresa.</p>
+                        </a>
                         <a href="/suplidores" class="dashboard-card"><h3>🚚 Gestionar Suplidores</h3><p>Añade o edita la información de tus suplidores.</p></a>
                     </div>
                 </div>
                 <div class="module">
                     <h2>Nómina</h2>
                     <div class="dashboard">
-                        <a href="/empleados" class="dashboard-card"><h3>👥 Gestionar Empleados</h3><p>Añade o edita la información de tu personal.</p></a>
-                        <a href="/generar-nomina" class="dashboard-card"><h3>💵 Generar Nómina</h3><p>Calcula la nómina quincenal de tu equipo.</p></a>
-                        <a href="/historial-nomina" class="dashboard-card"><h3>📂 Historial de Nómina</h3><p>Consulta los registros de pagos de nómina anteriores.</p></a>
+                        <a href="/empleados" class="dashboard-card">
+                            <h3>👥 Gestionar Empleados</h3>
+                            <p>Añade o edita la información de tu personal.</p>
+                        </a>
+                        <a href="/generar-nomina" class="dashboard-card">
+                            <h3>💵 Generar Nómina</h3>
+                            <p>Calcula la nómina quincenal de tu equipo.</p>
+                        </a>
+                        <a href="/historial-nomina" class="dashboard-card">
+                            <h3>📂 Historial de Nómina</h3>
+                            <p>Consulta los registros de pagos de nómina anteriores.</p>
+                        </a>
                     </div>
                 </div>
             </div>
@@ -241,9 +259,6 @@ app.get('/clientes', requireLogin, requireAdminOrCoord, async (req, res) => {
     }
 });
 
-// =======================================================================
-// ============== RUTA DE PROYECTOS POR ACTIVAR (VERSIÓN FINAL) ==============
-// =======================================================================
 app.get('/proyectos-por-activar', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
@@ -259,13 +274,11 @@ app.get('/proyectos-por-activar', requireLogin, requireAdminOrCoord, async (req,
         let quotesHtml = quotes.map(quote => `
             <tr>
                 <td>${quote.quotenumber}</td>
-
                 <td style="text-align: center;">
                     <a href="/ver-cotizacion-pdf/${quote.id}" target="_blank" class="btn" style="padding: 5px 10px; font-size: 14px; background-color: #6c757d;">
                         Ver PDF 📄
                     </a>
                 </td>
-
                 <td>${quote.clientname}</td>
                 <td>${quote.advisorname}</td>
                 <td>
@@ -292,7 +305,8 @@ app.get('/proyectos-por-activar', requireLogin, requireAdminOrCoord, async (req,
                         <thead>
                             <tr>
                                 <th># Cotización</th>
-                                <th>Cotización</th> <th>Cliente</th>
+                                <th>Cotización</th>
+                                <th>Cliente</th>
                                 <th>Asesor</th>
                                 <th>Notas Internas</th>
                                 <th>Acciones</th>
@@ -304,12 +318,12 @@ app.get('/proyectos-por-activar', requireLogin, requireAdminOrCoord, async (req,
                     </table>
                 </div>
             </body></html>`);
-
     } catch (error) {
         console.error("Error en /proyectos-por-activar:", error);
         res.status(500).send('<h1>Error al cargar la página ❌</h1>');
     }
 });
+
 app.post('/activar-proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
     const quoteId = req.params.id;
     const { notas_administrativas } = req.body;
@@ -323,36 +337,23 @@ app.post('/activar-proyecto/:id', requireLogin, requireAdminOrCoord, async (req,
     }
 });
 
-// =======================================================
-// ============== NUEVA RUTA PROXY PARA PDFs ==============
-// =======================================================
 app.get('/ver-cotizacion-pdf/:quoteId', requireLogin, async (req, res) => {
     try {
         const { quoteId } = req.params;
-
-        // URL real de tu aplicación "Proyecto Gestión" en Render
         const gestionApiUrl = `https://be-gestion.onrender.com/api/quote-requests/${quoteId}/pdf`;
-
         const response = await axios.get(gestionApiUrl, {
             headers: {
-                // Esta es la llave secreta que el otro servidor espera
                 'X-API-Key': 'MI_LLAVE_SECRETA_12345'
             },
-            responseType: 'stream' // Muy importante para manejar archivos
+            responseType: 'stream'
         });
-
-        // Le decimos al navegador del usuario que estamos enviando un PDF
         res.setHeader('Content-Type', 'application/pdf');
-
-        // Enviamos el PDF que recibimos del otro servidor directamente al navegador
         response.data.pipe(res);
-
     } catch (error) {
         console.error("Error en el proxy de PDF:", error.message);
         res.status(500).send("Error al obtener el documento de la cotización.");
     }
 });
-
 
 app.get('/suplidores', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
@@ -419,7 +420,7 @@ app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, re
             totalGeneralAbonado += totalAbonado;
             return `<tr><td>${p.clientname}</td><td>${p.quotenumber}</td><td>$${totalVenta.toFixed(2)}</td><td style="color: green;">$${totalAbonado.toFixed(2)}</td><td style="color: red; font-weight: bold;">$${balancePendiente.toFixed(2)}</td></tr>`;
         }).join('');
-        
+
         const totalGeneralPendiente = totalGeneralVenta - totalGeneralAbonado;
 
         if (projects.length === 0) {
@@ -560,9 +561,11 @@ app.get('/empleados', requireLogin, requireAdminOrCoord, async (req, res) => {
 
 app.post('/empleados', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { first_name, last_name, cedula, hire_date, base_salary, payment_frequency, birth_date, address } = req.body;
+
     if (!first_name || !last_name) {
         return res.status(400).send("El nombre y el apellido son obligatorios.");
     }
+
     try {
         const client = await pool.connect();
         await client.query(
@@ -849,6 +852,7 @@ app.get('/proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => 
     const centerId = req.params.id;
     try {
         const client = await pool.connect();
+        
         const quoteResult = await client.query(
             `SELECT q.*, c.name as centerName FROM quotes q LEFT JOIN centers c ON q.clientname = c.name WHERE c.id = $1 AND q.status = 'activa' ORDER BY q.createdat DESC LIMIT 1`,
             [centerId]
@@ -862,10 +866,11 @@ app.get('/proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => 
         }
         const quote = quoteResult.rows[0];
         
-        const [paymentsResult, expensesResult, suppliersResult] = await Promise.all([
+        const [paymentsResult, expensesResult, suppliersResult, adjustmentsResult] = await Promise.all([
             client.query(`SELECT * FROM payments WHERE quote_id = $1 ORDER BY payment_date DESC`, [quote.id]),
             client.query(`SELECT e.*, s.name as supplier_name FROM expenses e JOIN suppliers s ON e.supplier_id = s.id WHERE e.quote_id = $1 ORDER BY e.expense_date DESC`, [quote.id]),
-            client.query('SELECT * FROM suppliers ORDER BY name ASC')
+            client.query('SELECT * FROM suppliers ORDER BY name ASC'),
+            client.query(`SELECT * FROM ajustes_cotizacion WHERE quote_id = $1 ORDER BY fecha_ajuste ASC`, [quote.id])
         ]);
         
         client.release();
@@ -873,11 +878,25 @@ app.get('/proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => 
         const expenses = expensesResult.rows;
         const suppliers = suppliersResult.rows;
         
-        const totalVenta = parseFloat(quote.preciofinalporestudiante || 0) * parseFloat(quote.estudiantesparafacturar || 0);
+        const montoOriginal = parseFloat(quote.preciofinalporestudiante || 0) * parseFloat(quote.estudiantesparafacturar || 0);
+        const totalAjustes = adjustmentsResult.rows.reduce((sum, adj) => sum + parseFloat(adj.monto_ajuste), 0);
+        const totalVenta = montoOriginal + totalAjustes;
+
         const totalAbonado = payments.reduce((sum, payment) => sum + parseFloat(payment.amount), 0);
         const totalGastado = expenses.reduce((sum, expense) => sum + parseFloat(expense.amount), 0);
         const balancePendiente = totalVenta - totalAbonado;
         const rentabilidad = totalAbonado - totalGastado;
+
+        let adjustmentsHtml = adjustmentsResult.rows.map(adj => `
+            <tr>
+                <td>${new Date(adj.fecha_ajuste).toLocaleString('es-DO')}</td>
+                <td style="color: ${adj.monto_ajuste >= 0 ? 'green' : 'red'}; font-weight: bold;">
+                    ${adj.monto_ajuste >= 0 ? '+' : ''}$${parseFloat(adj.monto_ajuste).toFixed(2)}
+                </td>
+                <td>${adj.motivo}</td>
+                <td>${adj.ajustado_por}</td>
+            </tr>
+        `).join('') || '<tr><td colspan="4">No se han realizado ajustes.</td></tr>';
 
         let paymentsHtml = payments.map(p => `<tr><td>${new Date(p.payment_date).toLocaleDateString()}</td><td>$${parseFloat(p.amount).toFixed(2)}</td><td>${p.students_covered || 'N/A'}</td><td>${p.comment || ''}</td></tr>`).join('') || '<tr><td colspan="4">No hay pagos registrados.</td></tr>';
         let expensesHtml = expenses.map(e => `<tr><td>${new Date(e.expense_date).toLocaleDateString()}</td><td>${e.supplier_name}</td><td>${e.description}</td><td>$${parseFloat(e.amount).toFixed(2)}</td><td>${e.type || ''}</td></tr>`).join('') || '<tr><td colspan="5">No hay gastos registrados.</td></tr>';
@@ -886,7 +905,7 @@ app.get('/proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => 
         res.send(`
             <!DOCTYPE html><html lang="es">
             <head>
-                ${commonHtmlHead.replace('<title>Panel de Administración</title>', '<title>Detalle del Proyecto</title>')}
+                ${commonHtmlHead.replace('<title>Panel de Administración</title>', `<title>Proyecto ${quote.clientname}</title>`)}
                 <style>.admin-notes { background-color: #fff3cd; border-left: 5px solid #ffeeba; padding: 15px; margin: 20px 0; border-radius: 5px; }</style>
             </head>
             <body>
@@ -895,11 +914,25 @@ app.get('/proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => 
                     <div class="header" style="border-bottom: 2px solid #007bff; padding-bottom: 10px; margin-bottom: 20px;"><h1>${quote.clientname}</h1><p>Cotización #${quote.quotenumber} &bull; Asesor: ${quote.advisorname}</p></div>
                     ${quote.notas_administrativas ? `<div class="admin-notes"><strong>Notas Administrativas:</strong><br>${quote.notas_administrativas.replace(/\n/g, '<br>')}</div>` : ''}
                     <div class="summary">
-                        <div class="summary-box"><h3>Monto Total Venta</h3><p class="amount">$${totalVenta.toFixed(2)}</p></div>
+                        <div class="summary-box">
+                            <div class="header-with-button">
+                                <h3 style="margin:0;">Monto Total Venta</h3>
+                                <button onclick="abrirModalAjuste()" style="padding: 3px 8px; font-size: 12px;" class="btn">Ajustar</button>
+                            </div>
+                            <p class="amount">$${totalVenta.toFixed(2)}</p>
+                        </div>
                         <div class="summary-box"><h3>Total Abonado</h3><p class="amount green">$${totalAbonado.toFixed(2)}</p></div>
                         <div class="summary-box"><h3>Total Gastado</h3><p class="amount orange">$${totalGastado.toFixed(2)}</p></div>
                         <div class="summary-box"><h3>Rentabilidad Actual</h3><p class="amount ${rentabilidad >= 0 ? 'blue' : 'red'}">$${rentabilidad.toFixed(2)}</p></div>
                     </div>
+                    
+                    <hr style="margin: 40px 0;">
+                    <h2>Historial de Ajustes al Monto de Venta</h2>
+                    <table>
+                        <thead><tr><th>Fecha</th><th>Ajuste (+/-)</th><th>Motivo</th><th>Realizado por</th></tr></thead>
+                        <tbody>${adjustmentsHtml}</tbody>
+                    </table>
+
                     <hr style="margin: 40px 0;">
                     <h2><span style="color: #28a745;">Ingresos</span> (Abonos Realizados)</h2>
                     <table><thead><tr><th>Fecha</th><th>Monto</th><th>Estudiantes Cubiertos</th><th>Comentario</th></tr></thead><tbody>${paymentsHtml}</tbody></table>
@@ -917,7 +950,47 @@ app.get('/proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => 
                         <form action="/proyecto/${quote.id}/nuevo-gasto" method="POST"><input type="hidden" name="centerId" value="${centerId}"><div class="form-group"><label>Fecha:</label><input type="date" name="expense_date" required></div><div class="form-group"><label>Suplidor:</label><select name="supplier_id" required><option value="">Seleccione un suplidor...</option>${suppliersOptionsHtml}</select></div><div class="form-group"><label>Monto:</label><input type="number" name="amount" step="0.01" required></div><div class="form-group"><label>Tipo:</label><select name="type"><option value="">Seleccionar...</option><option value="Con Valor Fiscal">Con Valor Fiscal</option><option value="Sin Valor Fiscal">Sin Valor Fiscal</option></select></div><div class="form-group"><label>Descripción:</label><textarea name="description" rows="2" required></textarea></div><button type="submit" class="btn">Guardar Gasto</button></form>
                     </div>
                 </div>
-                <script>function toggleForm(id) { const el = document.getElementById(id); el.style.display = el.style.display === 'none' || el.style.display === '' ? 'block' : 'none'; }</script>
+                <script>
+                    function toggleForm(id) { const el = document.getElementById(id); el.style.display = el.style.display === 'none' || el.style.display === '' ? 'block' : 'none'; }
+                    
+                    async function abrirModalAjuste() {
+                        const monto_ajuste_str = prompt("Introduce el monto a ajustar (ej: 500 para sumar, -250 para restar):");
+                        if (monto_ajuste_str === null) return;
+
+                        const motivo = prompt("Introduce el motivo del ajuste:");
+                        if (motivo === null || !motivo.trim()) {
+                            alert("Error: Se requiere un motivo para el ajuste.");
+                            return;
+                        }
+
+                        const codigo_secreto = prompt("Introduce el código de seguridad para confirmar:");
+                        if (codigo_secreto === null) return;
+
+                        const monto_ajuste = parseFloat(monto_ajuste_str);
+                        if (isNaN(monto_ajuste)) {
+                            alert("Error: El monto debe ser un número válido.");
+                            return;
+                        }
+
+                        try {
+                            const response = await fetch('/proyecto/${quote.id}/ajustar-monto', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ monto_ajuste, motivo, codigo_secreto })
+                            });
+                            const result = await response.json();
+                            if (response.ok && result.success) {
+                                alert('¡Ajuste guardado con éxito!');
+                                window.location.reload();
+                            } else {
+                                alert('Error al guardar: ' + (result.message || 'Respuesta no válida del servidor.'));
+                            }
+                        } catch (error) {
+                            console.error('Error en fetch:', error);
+                            alert('Hubo un error de conexión. Inténtalo de nuevo.');
+                        }
+                    }
+                </script>
             </body></html>`);
     } catch (error) {
         console.error("Error al obtener detalle del proyecto:", error);
@@ -956,6 +1029,47 @@ app.post('/proyecto/:id/nuevo-gasto', requireLogin, requireAdminOrCoord, async (
     } catch (error) {
         console.error("Error al guardar el gasto:", error);
         res.status(500).send('<h1>Error al guardar el gasto ❌</h1>');
+    }
+});
+
+// 1022
+// =======================================================
+// NUEVA RUTA PARA GUARDAR LOS AJUSTES DE MONTO
+// =======================================================
+app.post('/proyecto/:quoteId/ajustar-monto', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { quoteId } = req.params;
+    const { monto_ajuste, motivo, codigo_secreto } = req.body;
+    const ajustado_por = req.session.user.nombre;
+
+    if (codigo_secreto !== CODIGO_SECRETO_AJUSTE) {
+        return res.status(403).json({ success: false, message: 'Código de seguridad incorrecto.' });
+    }
+
+    const monto = parseFloat(monto_ajuste);
+    if (isNaN(monto) || !motivo || !motivo.trim()) {
+        return res.status(400).json({ success: false, message: 'El monto debe ser un número y el motivo es obligatorio.' });
+    }
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        // Insertar el nuevo ajuste en el historial
+        await client.query(
+            `INSERT INTO ajustes_cotizacion (quote_id, monto_ajuste, motivo, ajustado_por) 
+             VALUES ($1, $2, $3, $4)`,
+            [quoteId, monto, motivo, ajustado_por]
+        );
+        
+        await client.query('COMMIT');
+        res.json({ success: true, message: 'Ajuste guardado correctamente.' });
+
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error("Error al guardar el ajuste de monto:", error);
+        res.status(500).json({ success: false, message: 'Error en el servidor al guardar el ajuste.' });
+    } finally {
+        client.release();
     }
 });
 
