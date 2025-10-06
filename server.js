@@ -918,7 +918,22 @@ app.get('/proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => 
             </tr>
         `).join('') || '<tr><td colspan="4">No se han realizado ajustes.</td></tr>';
 
-        let paymentsHtml = payments.map(p => `<tr><td>${new Date(p.payment_date).toLocaleDateString()}</td><td>$${parseFloat(p.amount).toFixed(2)}</td><td>${p.students_covered || 'N/A'}</td><td>${p.comment || ''}</td></tr>`).join('') || '<tr><td colspan="4">No hay pagos registrados.</td></tr>';
+        // --- INICIO DE LA MODIFICACIÓN ---
+        let paymentsHtml = payments.map(p => `
+            <tr>
+                <td>${new Date(p.payment_date).toLocaleDateString()}</td>
+                <td>$${parseFloat(p.amount).toFixed(2)}</td>
+                <td>${p.students_covered || 'N/A'}</td>
+                <td>${p.comment || ''}</td>
+                <td style="text-align: center;">
+                    <a href="/recibo-pago/${p.id}/pdf" target="_blank" class="btn" style="padding: 5px 10px; font-size: 12px; background-color: #17a2b8;">
+                        Recibo
+                    </a>
+                </td>
+            </tr>
+        `).join('') || '<tr><td colspan="5">No hay pagos registrados.</td></tr>'; // Se cambió colspan a 5
+        // --- FIN DE LA MODIFICACIÓN ---
+
         let expensesHtml = expenses.map(e => `<tr><td>${new Date(e.expense_date).toLocaleDateString()}</td><td>${e.supplier_name}</td><td>${e.description}</td><td>$${parseFloat(e.amount).toFixed(2)}</td><td>${e.type || ''}</td></tr>`).join('') || '<tr><td colspan="5">No hay gastos registrados.</td></tr>';
         let suppliersOptionsHtml = suppliers.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
 
@@ -932,14 +947,14 @@ app.get('/proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => 
                 <div class="container" style="max-width: 900px;">
                     ${backToDashboardLink}
                     <div class="header" style="border-bottom: 2px solid #007bff; padding-bottom: 10px; margin-bottom: 20px;">
-    <h1>${quote.clientname}</h1>
-    <p>
-        Cotización #${quote.quotenumber} &bull; Asesor: ${quote.advisorname}
-        <a href="/ver-cotizacion-pdf/${quote.id}" target="_blank" class="btn" style="padding: 5px 10px; font-size: 12px; background-color: #6c757d; margin-left: 20px;">
-            Ver Cotización Original 📄
-        </a>
-    </p>
-</div>
+                        <h1>${quote.clientname}</h1>
+                        <p>
+                            Cotización #${quote.quotenumber} &bull; Asesor: ${quote.advisorname}
+                            <a href="/ver-cotizacion-pdf/${quote.id}" target="_blank" class="btn" style="padding: 5px 10px; font-size: 12px; background-color: #6c757d; margin-left: 20px;">
+                                Ver Cotización Original 📄
+                            </a>
+                        </p>
+                    </div>
                     ${quote.notas_administrativas ? `<div class="admin-notes"><strong>Notas Administrativas:</strong><br>${quote.notas_administrativas.replace(/\n/g, '<br>')}</div>` : ''}
                     <div class="summary">
                         <div class="summary-box">
@@ -963,7 +978,19 @@ app.get('/proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => 
 
                     <hr style="margin: 40px 0;">
                     <h2><span style="color: #28a745;">Ingresos</span> (Abonos Realizados)</h2>
-                    <table><thead><tr><th>Fecha</th><th>Monto</th><th>Estudiantes Cubiertos</th><th>Comentario</th></tr></thead><tbody>${paymentsHtml}</tbody></table>
+                    
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Fecha</th>
+                                <th>Monto</th>
+                                <th>Estudiantes Cubiertos</th>
+                                <th>Comentario</th>
+                                <th>Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>${paymentsHtml}</tbody>
+                    </table>
                     <button class="btn btn-toggle" onclick="toggleForm('payment-form-container')">Registrar Nuevo Abono</button>
                     <div id="payment-form-container" class="payment-form" style="display: none;">
                         <h2>Nuevo Abono</h2>
@@ -1060,7 +1087,6 @@ app.post('/proyecto/:id/nuevo-gasto', requireLogin, requireAdminOrCoord, async (
     }
 });
 
-// 1022
 // =======================================================
 // NUEVA RUTA PARA GUARDAR LOS AJUSTES DE MONTO
 // =======================================================
@@ -1098,6 +1124,121 @@ app.post('/proyecto/:quoteId/ajustar-monto', requireLogin, requireAdminOrCoord, 
         res.status(500).json({ success: false, message: 'Error en el servidor al guardar el ajuste.' });
     } finally {
         client.release();
+    }
+});
+// =======================================================
+//   NUEVA RUTA PARA GENERAR RECIBOS DE PAGO EN PDF
+// =======================================================
+
+// --- Función Auxiliar para convertir número a letras ---
+function numeroALetras(num) {
+    const unidades = ['', 'UNO', 'DOS', 'TRES', 'CUATRO', 'CINCO', 'SEIS', 'SIETE', 'OCHO', 'NUEVE'];
+    const decenas = ['', 'DIEZ', 'VEINTE', 'TREINTA', 'CUARENTA', 'CINCUENTA', 'SESENTA', 'SETENTA', 'OCHENTA', 'NOVENTA'];
+    const centenas = ['', 'CIENTO', 'DOSCIENTOS', 'TRESCIENTOS', 'CUATROCIENTOS', 'QUINIENTOS', 'SEISCIENTOS', 'SETECIENTOS', 'OCHOCIENTOS', 'NOVECIENTOS'];
+    const especiales = ['DIEZ', 'ONCE', 'DOCE', 'TRECE', 'CATORCE', 'QUINCE', 'DIECISÉIS', 'DIECISIETE', 'DIECIOCHO', 'DIECINUEVE'];
+
+    function convertir(n) {
+        if (n < 10) return unidades[n];
+        if (n < 20) return especiales[n - 10];
+        if (n < 100) {
+            const u = n % 10;
+            const d = Math.floor(n / 10);
+            return decenas[d] + (u > 0 ? ' Y ' + unidades[u] : '');
+        }
+        if (n < 1000) {
+            const c = Math.floor(n / 100);
+            const resto = n % 100;
+            return (n === 100 ? 'CIEN' : centenas[c]) + (resto > 0 ? ' ' + convertir(resto) : '');
+        }
+        if (n < 1000000) {
+            const miles = Math.floor(n / 1000);
+            const resto = n % 1000;
+            return (miles === 1 ? 'MIL' : convertir(miles) + ' MIL') + (resto > 0 ? ' ' + convertir(resto) : '');
+        }
+        return '';
+    }
+
+    const numeroEntero = Math.floor(num);
+    const centavos = Math.round((num - numeroEntero) * 100);
+    const letras = convertir(numeroEntero);
+
+    return `${letras} PESOS DOMINICANOS ${centavos.toString().padStart(2, '0')}/100`;
+}
+
+
+app.get('/recibo-pago/:paymentId/pdf', requireLogin, async (req, res) => {
+    try {
+        const { paymentId } = req.params;
+        const client = await pool.connect();
+        
+        // Buscamos el pago y la información del cliente/cotización asociada
+        const paymentResult = await client.query(
+            `SELECT p.*, q.clientname, q.quotenumber 
+             FROM payments p 
+             JOIN quotes q ON p.quote_id = q.id 
+             WHERE p.id = $1`,
+            [paymentId]
+        );
+        client.release();
+
+        if (paymentResult.rows.length === 0) {
+            return res.status(404).send('Recibo no encontrado.');
+        }
+        const payment = paymentResult.rows[0];
+
+        const PDFDocument = require('pdfkit');
+        const doc = new PDFDocument({ size: 'A4', margin: 50 });
+
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename=RECIBO-${payment.id}.pdf`);
+        doc.pipe(res);
+
+        // Dibuja el membrete de fondo
+        const backgroundImagePath = path.join(__dirname, 'plantillas', 'membrete.jpg');
+        doc.image(backgroundImagePath, 0, 0, { width: doc.page.width, height: doc.page.height });
+        
+        const pageMargin = 60;
+        const contentWidth = doc.page.width - (pageMargin * 2);
+
+        // Título del documento
+        doc.font('Helvetica-Bold').fontSize(20).text('RECIBO DE PAGO', { align: 'center', y: 180 });
+        doc.moveDown(3);
+
+        // Información del recibo (derecha)
+        doc.font('Helvetica-Bold').fontSize(11).text(`RECIBO No.:`, 350, doc.y, { continued: true }).font('Helvetica').text(` REC-${String(payment.id).padStart(4, '0')}`);
+        doc.font('Helvetica-Bold').text(`FECHA:`, { continued: true }).font('Helvetica').text(` ${new Date(payment.payment_date).toLocaleDateString('es-DO')}`);
+        
+        // Información del cliente (izquierda)
+        doc.y = doc.y - 30; // Regresamos el cursor para escribir en la misma altura
+        doc.font('Helvetica-Bold').text('RECIBIDO DE:', pageMargin, doc.y);
+        doc.font('Helvetica').fontSize(14).text(payment.clientname);
+        doc.moveDown(2);
+
+        // La suma de (en letras)
+        doc.font('Helvetica-Bold').fontSize(11).text('LA SUMA DE:', pageMargin);
+        doc.font('Helvetica').fontSize(10).text(numeroALetras(payment.amount));
+        doc.moveDown(2);
+
+        // Concepto de pago
+        doc.font('Helvetica-Bold').fontSize(11).text('POR CONCEPTO DE:');
+        const concepto = payment.comment || `Abono a cotización #${payment.quotenumber}`;
+        doc.font('Helvetica').fontSize(10).text(concepto);
+        doc.moveDown(4);
+
+        // Monto en número
+        doc.font('Helvetica-Bold').fontSize(16).text(`MONTO: RD$ ${parseFloat(payment.amount).toFixed(2)}`, { align: 'right' });
+        doc.moveDown(8);
+
+        // Línea de firma
+        doc.font('Helvetica').fontSize(10);
+        doc.text('___________________________', pageMargin, doc.y, { align: 'left' });
+        doc.text('Recibido por', { align: 'left' });
+
+        doc.end();
+
+    } catch (error) {
+        console.error("Error al generar el recibo PDF:", error);
+        res.status(500).send('Error al generar el recibo.');
     }
 });
 
