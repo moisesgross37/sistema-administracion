@@ -926,7 +926,7 @@ app.get('/proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => 
                 <td>${p.students_covered || 'N/A'}</td>
                 <td>${p.comment || ''}</td>
                 <td style="text-align: center;">
-                    <a href="/recibo-pago/${p.id}/pdf" target="_blank" class="btn" style="padding: 5px 10px; font-size: 12px; background-color: #17a2b8;">
+                    <a href="/recibo-pago/${p.id}/pdf?v=${Date.now()}" target="_blank" class="btn" style="padding: 5px 10px; font-size: 12px; background-color: #17a2b8;">
                         Recibo
                     </a>
                 </td>
