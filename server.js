@@ -1167,11 +1167,14 @@ function numeroALetras(num) {
 
 
 app.get('/recibo-pago/:paymentId/pdf', requireLogin, async (req, res) => {
+    // --- INICIO DE DIAGNÓSTICO ---
+    console.log(`[${new Date().toLocaleTimeString()}] -> Solicitud recibida para generar recibo.`);
+    // --- FIN DE DIAGNÓSTICO ---
+
     try {
         const { paymentId } = req.params;
         const client = await pool.connect();
         
-        // Buscamos el pago y la información del cliente/cotización asociada
         const paymentResult = await client.query(
             `SELECT p.*, q.clientname, q.quotenumber 
              FROM payments p 
@@ -1182,66 +1185,74 @@ app.get('/recibo-pago/:paymentId/pdf', requireLogin, async (req, res) => {
         client.release();
 
         if (paymentResult.rows.length === 0) {
+            // --- INICIO DE DIAGNÓSTICO ---
+            console.warn(`[${new Date().toLocaleTimeString()}] -> ADVERTENCIA: No se encontró el pago con ID: ${paymentId}`);
+            // --- FIN DE DIAGNÓSTICO ---
             return res.status(404).send('Recibo no encontrado.');
         }
         const payment = paymentResult.rows[0];
+        
+        // --- INICIO DE DIAGNÓSTICO ---
+        console.log(`[${new Date().toLocaleTimeString()}] -> Pago encontrado. ID: ${payment.id}, Cliente: ${payment.clientname}`);
+        // --- FIN DE DIAGNÓSTICO ---
 
         const PDFDocument = require('pdfkit');
         const doc = new PDFDocument({ size: 'A4', margin: 50 });
 
+        const nombreArchivo = `RECIBO-${payment.id}-${Date.now()}.pdf`;
         res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `inline; filename=RECIBO-${payment.id}-${Date.now()}.pdf`);
+        res.setHeader('Content-Disposition', `inline; filename=${nombreArchivo}`);
+        
+        // --- INICIO DE DIAGNÓSTICO ---
+        console.log(`[${new Date().toLocaleTimeString()}] -> Creando PDF con nombre de archivo: ${nombreArchivo}`);
+        // --- FIN DE DIAGNÓSTICO ---
+        
         doc.pipe(res);
 
-        // Dibuja el membrete de fondo
         const backgroundImagePath = path.join(__dirname, 'plantillas', 'membrete.jpg');
         doc.image(backgroundImagePath, 0, 0, { width: doc.page.width, height: doc.page.height });
         
-        const pageMargin = 60;
-        const contentWidth = doc.page.width - (pageMargin * 2);
+        const yPosition = 320;
+        // --- INICIO DE DIAGNÓSTICO ---
+        console.log(`[${new Date().toLocaleTimeString()}] -> Usando posición vertical (Y) de: ${yPosition}`);
+        // --- FIN DE DIAGNÓSTICO ---
 
-        // Título del documento
-        doc.font('Helvetica-Bold').fontSize(20).text('RECIBO DE PAGO', { align: 'center', y: 350 });
+        doc.font('Helvetica-Bold').fontSize(20).text('RECIBO DE PAGO', { align: 'center', y: yPosition });
+        
+        // (El resto del código de generación de PDF se mantiene igual...)
         doc.moveDown(3);
-
-        // Información del recibo (derecha)
         doc.font('Helvetica-Bold').fontSize(11).text(`RECIBO No.:`, 350, doc.y, { continued: true }).font('Helvetica').text(` REC-${String(payment.id).padStart(4, '0')}`);
         doc.font('Helvetica-Bold').text(`FECHA:`, { continued: true }).font('Helvetica').text(` ${new Date(payment.payment_date).toLocaleDateString('es-DO')}`);
-        
-        // Información del cliente (izquierda)
-        doc.y = doc.y - 30; // Regresamos el cursor para escribir en la misma altura
-        doc.font('Helvetica-Bold').text('RECIBIDO DE:', pageMargin, doc.y);
+        doc.y = doc.y - 30;
+        doc.font('Helvetica-Bold').text('RECIBIDO DE:', 60, doc.y);
         doc.font('Helvetica').fontSize(14).text(payment.clientname);
         doc.moveDown(2);
-
-        // La suma de (en letras)
-        doc.font('Helvetica-Bold').fontSize(11).text('LA SUMA DE:', pageMargin);
+        doc.font('Helvetica-Bold').fontSize(11).text('LA SUMA DE:');
         doc.font('Helvetica').fontSize(10).text(numeroALetras(payment.amount));
         doc.moveDown(2);
-
-        // Concepto de pago
         doc.font('Helvetica-Bold').fontSize(11).text('POR CONCEPTO DE:');
         const concepto = payment.comment || `Abono a cotización #${payment.quotenumber}`;
         doc.font('Helvetica').fontSize(10).text(concepto);
         doc.moveDown(4);
-
-        // Monto en número
         doc.font('Helvetica-Bold').fontSize(16).text(`MONTO: RD$ ${parseFloat(payment.amount).toFixed(2)}`, { align: 'right' });
         doc.moveDown(8);
-
-        // Línea de firma
         doc.font('Helvetica').fontSize(10);
-        doc.text('___________________________', pageMargin, doc.y, { align: 'left' });
+        doc.text('___________________________', 60, doc.y, { align: 'left' });
         doc.text('Recibido por', { align: 'left' });
+
+        // --- INICIO DE DIAGNÓSTICO ---
+        console.log(`[${new Date().toLocaleTimeString()}] -> PDF finalizado y enviado al navegador.`);
+        // --- FIN DE DIAGNÓSTICO ---
 
         doc.end();
 
     } catch (error) {
-        console.error("Error al generar el recibo PDF:", error);
+        // --- INICIO DE DIAGNÓSTICO ---
+        console.error(`[${new Date().toLocaleTimeString()}] -> !!! ERROR CATASTRÓFICO AL GENERAR RECIBO:`, error);
+        // --- FIN DE DIAGNÓSTICO ---
         res.status(500).send('Error al generar el recibo.');
     }
 });
-
 app.listen(PORT, () => {
     console.log(`✅ Servidor de Administración corriendo en http://localhost:${PORT}`);
 });
