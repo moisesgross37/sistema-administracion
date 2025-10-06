@@ -396,14 +396,30 @@ app.post('/suplidores', requireLogin, requireAdminOrCoord, async (req, res) => {
 app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
+        
+        // --- CONSULTA SQL MEJORADA ---
+        // Ahora también obtiene la suma de todos los ajustes para cada cotización.
         const result = await client.query(`
             SELECT
-                q.id as quote_id, q.quotenumber, q.clientname, q.preciofinalporestudiante, q.estudiantesparafacturar,
-                COALESCE(SUM(p.amount), 0) as total_abonado
+                q.id as quote_id,
+                q.quotenumber,
+                q.clientname,
+                q.preciofinalporestudiante,
+                q.estudiantesparafacturar,
+                COALESCE(p.total_abonado, 0) as total_abonado,
+                COALESCE(adj.total_ajustado, 0) as total_ajustado
             FROM quotes q
-            LEFT JOIN payments p ON q.id = p.quote_id
+            LEFT JOIN (
+                SELECT quote_id, SUM(amount) as total_abonado
+                FROM payments
+                GROUP BY quote_id
+            ) p ON q.id = p.quote_id
+            LEFT JOIN (
+                SELECT quote_id, SUM(monto_ajuste) as total_ajustado
+                FROM ajustes_cotizacion
+                GROUP BY quote_id
+            ) adj ON q.id = adj.quote_id
             WHERE q.status = 'activa'
-            GROUP BY q.id
             ORDER BY q.clientname ASC;
         `);
         const projects = result.rows;
@@ -413,14 +429,19 @@ app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, re
         let totalGeneralAbonado = 0;
 
         let projectsHtml = projects.map(p => {
-            const totalVenta = parseFloat(p.preciofinalporestudiante || 0) * parseFloat(p.estudiantesparafacturar || 0);
+            // --- CÁLCULO CORREGIDO ---
+            // Se calcula el monto original y se le suman los ajustes.
+            const montoOriginal = parseFloat(p.preciofinalporestudiante || 0) * parseFloat(p.estudiantesparafacturar || 0);
+            const totalAjustes = parseFloat(p.total_ajustado || 0);
+            const totalVenta = montoOriginal + totalAjustes;
+
             const totalAbonado = parseFloat(p.total_abonado);
             const balancePendiente = totalVenta - totalAbonado;
             totalGeneralVenta += totalVenta;
             totalGeneralAbonado += totalAbonado;
             return `<tr><td>${p.clientname}</td><td>${p.quotenumber}</td><td>$${totalVenta.toFixed(2)}</td><td style="color: green;">$${totalAbonado.toFixed(2)}</td><td style="color: red; font-weight: bold;">$${balancePendiente.toFixed(2)}</td></tr>`;
         }).join('');
-
+        
         const totalGeneralPendiente = totalGeneralVenta - totalGeneralAbonado;
 
         if (projects.length === 0) {
@@ -445,7 +466,6 @@ app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, re
         res.status(500).send('<h1>Error al cargar el reporte ❌</h1>');
     }
 });
-
 app.get('/reporte-gastos', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
