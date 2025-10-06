@@ -1210,7 +1210,7 @@ app.get('/recibo-pago/:paymentId/pdf', requireLogin, async (req, res) => {
         // --- FIN DE PRUEBA ---
         
         doc.moveDown(3);
-        doc.font('Helvetica-Bold').fontSize(11).text(`RECIBO No.:`, 350, doc.y, { continued: true }).font('Helvetica').text(` REC-${String(payment.id).padStart(4, '0')}`);
+        doc.font('Helvetica-Bold').fontSize(11).text(`RECIBO No.:`, 320, doc.y, { continued: true }).font('Helvetica').text(` REC-${String(payment.id).padStart(4, '0')}`);
         doc.font('Helvetica-Bold').text(`FECHA:`, { continued: true }).font('Helvetica').text(` ${new Date(payment.payment_date).toLocaleDateString('es-DO')}`);
         doc.y = doc.y - 30;
         doc.font('Helvetica-Bold').text('RECIBIDO DE:', 60, doc.y);
