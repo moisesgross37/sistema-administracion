@@ -1205,7 +1205,8 @@ app.get('/recibo-pago/:paymentId/pdf', requireLogin, async (req, res) => {
         
         // --- PRUEBA CLAVE ---
         console.log(`✅✅✅ CONFIRMACIÓN DE POSICIÓN Y: ${yPosition} ✅✅✅`);
-        doc.font('Helvetica-Bold').fontSize(20).text('RECIBO DE PAGO (V3)', { align: 'center', y: yPosition });
+        doc.y = yPosition; // <-- PASO 1: Establecemos la posición Y de forma explícita.
+        doc.font('Helvetica-Bold').fontSize(20).text('RECIBO DE PAGO', { align: 'center' }); // <-- PASO 2: Escribimos el texto.
         // --- FIN DE PRUEBA ---
         
         doc.moveDown(3);
