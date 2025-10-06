@@ -5,6 +5,7 @@ const session = require('express-session');
 const pgSession = require('connect-pg-simple')(session);
 const bcrypt = require('bcrypt');
 const path = require('path');
+const fs = require('fs');
 const PDFDocument = require('pdfkit');
 
 const app = express();
