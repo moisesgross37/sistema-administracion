@@ -1190,7 +1190,7 @@ app.get('/recibo-pago/:paymentId/pdf', requireLogin, async (req, res) => {
         const doc = new PDFDocument({ size: 'A4', margin: 50 });
 
         res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `inline; filename=RECIBO-${payment.id}.pdf`);
+        res.setHeader('Content-Disposition', `inline; filename=RECIBO-${payment.id}-${Date.now()}.pdf`);
         doc.pipe(res);
 
         // Dibuja el membrete de fondo
