@@ -1234,7 +1234,8 @@ app.get('/recibo-pago/:paymentId/pdf', requireLogin, async (req, res) => {
         const concepto = payment.comment || `Abono a cotización #${payment.quotenumber}`;
         doc.font('Helvetica').fontSize(10).text(concepto);
         doc.moveDown(4);
-        doc.font('Helvetica-Bold').fontSize(16).text(`MONTO: RD$ ${parseFloat(payment.amount).toFixed(2)}`, { align: 'right' });
+        const formattedAmount = parseFloat(payment.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+doc.font('Helvetica-Bold').fontSize(16).text(`MONTO: RD$ ${formattedAmount}`, { align: 'right' });
         doc.moveDown(8);
         doc.font('Helvetica').fontSize(10);
         doc.text('___________________________', 60, doc.y, { align: 'left' });
