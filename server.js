@@ -5,6 +5,7 @@ const session = require('express-session');
 const pgSession = require('connect-pg-simple')(session);
 const bcrypt = require('bcrypt');
 const path = require('path');
+const PDFDocument = require('pdfkit');
 
 const app = express();
 const PORT = 3002;
@@ -775,28 +776,38 @@ app.post('/guardar-nomina', requireLogin, requireAdminOrCoord, async (req, res) 
     try {
         await client.query('BEGIN');
 
-        const employeesResult = await client.query('SELECT id, base_salary FROM employees');
+        // Obtenemos también la frecuencia de pago para el cálculo correcto
+        const employeesResult = await client.query('SELECT id, base_salary, payment_frequency FROM employees');
         const employees = employeesResult.rows;
 
         for (const employee of employees) {
             const employeeId = employee.id;
-            const baseSalary = parseFloat(employee.base_salary || 0);
+            
+            // --- INICIO DE LA CORRECCIÓN ---
+            const monthlySalary = parseFloat(employee.base_salary || 0);
+            let salaryForPeriod = monthlySalary;
+
+            // Si es quincenal, usamos la mitad del salario para los cálculos y para guardarlo
+            if (employee.payment_frequency === 'quincenal') {
+                salaryForPeriod /= 2;
+            }
+            // --- FIN DE LA CORRECCIÓN ---
+
             const bonuses = parseFloat(req.body[`bonuses_${employeeId}`] || 0);
             const deductions = parseFloat(req.body[`deductions_${employeeId}`] || 0);
             const notes = req.body[`notes_${employeeId}`] || '';
             
-            const netPay = baseSalary + bonuses - deductions;
+            const netPay = salaryForPeriod + bonuses - deductions;
 
             await client.query(
                 `INSERT INTO payroll_records (employee_id, pay_date, base_salary_paid, bonuses, deductions, net_pay, notes)
                  VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-                [employeeId, pay_date, baseSalary, bonuses, deductions, netPay, notes]
+                [employeeId, pay_date, salaryForPeriod, bonuses, deductions, netPay, notes] // Guardamos el salario del período, no el mensual
             );
         }
 
         await client.query('COMMIT');
-        
-        res.redirect('/');
+        res.redirect('/historial-nomina'); // Redirigimos al historial para ver el resultado
 
     } catch (error) {
         await client.query('ROLLBACK');
@@ -806,15 +817,13 @@ app.post('/guardar-nomina', requireLogin, requireAdminOrCoord, async (req, res) 
         client.release();
     }
 });
-
 app.get('/historial-nomina', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
         const result = await client.query(`
             SELECT 
-                pr.*,
-                e.first_name,
-                e.last_name
+                pr.id, pr.pay_date, pr.base_salary_paid, pr.bonuses, pr.deductions, pr.net_pay,
+                e.first_name, e.last_name
             FROM payroll_records pr
             JOIN employees e ON pr.employee_id = e.id
             ORDER BY pr.pay_date DESC, e.last_name ASC;
@@ -830,7 +839,11 @@ app.get('/historial-nomina', requireLogin, requireAdminOrCoord, async (req, res)
                 <td>$${parseFloat(r.bonuses).toFixed(2)}</td>
                 <td>$${parseFloat(r.deductions).toFixed(2)}</td>
                 <td style="font-weight: bold;">$${parseFloat(r.net_pay).toFixed(2)}</td>
-                <td><button class="btn" disabled>Imprimir</button></td>
+                <td>
+                    <a href="/recibo-nomina/${r.id}/pdf" target="_blank" class="btn" style="padding: 5px 10px; font-size: 14px;">
+                        Imprimir
+                    </a>
+                </td>
             </tr>
         `).join('');
 
@@ -844,20 +857,8 @@ app.get('/historial-nomina', requireLogin, requireAdminOrCoord, async (req, res)
                     ${backToDashboardLink}
                     <h2>Historial de Pagos de Nómina</h2>
                     <table>
-                        <thead>
-                            <tr>
-                                <th>Fecha de Pago</th>
-                                <th>Empleado</th>
-                                <th>Salario Pagado</th>
-                                <th>Bonos</th>
-                                <th>Descuentos</th>
-                                <th>Pago Neto</th>
-                                <th>Acciones</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${recordsHtml}
-                        </tbody>
+                        <thead><tr><th>Fecha de Pago</th><th>Empleado</th><th>Salario Pagado</th><th>Bonos</th><th>Descuentos</th><th>Pago Neto</th><th>Acciones</th></tr></thead>
+                        <tbody>${recordsHtml}</tbody>
                     </table>
                 </div>
             </body></html>
@@ -867,6 +868,79 @@ app.get('/historial-nomina', requireLogin, requireAdminOrCoord, async (req, res)
         res.status(500).send('<h1>Error al cargar el historial ❌</h1>');
     }
 });
+
+// =======================================================
+// NUEVA RUTA PARA GENERAR PDF DE RECIBO DE NÓMINA
+// =======================================================
+app.get('/recibo-nomina/:recordId/pdf', requireLogin, requireAdminOrCoord, async (req, res) => {
+    try {
+        const { recordId } = req.params;
+        const client = await pool.connect();
+        const result = await client.query(`
+            SELECT 
+                pr.*,
+                e.first_name, e.last_name, e.cedula
+            FROM payroll_records pr
+            JOIN employees e ON pr.employee_id = e.id
+            WHERE pr.id = $1
+        `, [recordId]);
+        client.release();
+
+        if (result.rows.length === 0) {
+            return res.status(404).send('Registro de nómina no encontrado.');
+        }
+        const record = result.rows[0];
+
+        const doc = new PDFDocument({ size: 'letter', margin: 50 });
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename=recibo-nomina-${record.first_name}-${record.last_name}-${record.id}.pdf`);
+        doc.pipe(res);
+
+        const backgroundImagePath = path.join(__dirname, 'plantillas', 'membrete.jpg');
+        if (fs.existsSync(backgroundImagePath)) {
+            doc.image(backgroundImagePath, 0, 0, { width: doc.page.width, height: doc.page.height });
+        }
+        
+        doc.font('Helvetica-Bold').fontSize(16).text('VOLANTE DE PAGO DE NÓMINA', { align: 'center', y: 250 });
+        doc.moveDown(2);
+
+        const startY = doc.y;
+        doc.font('Helvetica').fontSize(11);
+        doc.text(`Nombre del Empleado:`, 70, startY).text(`${record.first_name} ${record.last_name}`, 200, startY);
+        doc.text(`Cédula:`, 70, startY + 20).text(record.cedula || 'N/A', 200, startY + 20);
+        doc.text(`Fecha de Pago:`, 70, startY + 40).text(new Date(record.pay_date).toLocaleDateString('es-DO'), 200, startY + 40);
+        doc.moveDown(4);
+
+        doc.moveTo(70, doc.y).lineTo(doc.page.width - 70, doc.y).stroke();
+        doc.moveDown();
+
+        doc.font('Helvetica-Bold').text('INGRESOS', 70, doc.y);
+        doc.font('Helvetica').text('Salario Base del Período', 90, doc.y + 20).text(`$${parseFloat(record.base_salary_paid).toFixed(2)}`, 400, doc.y, { align: 'right' });
+        doc.text('Bonos / Ingresos Adicionales', 90, doc.y + 15).text(`$${parseFloat(record.bonuses).toFixed(2)}`, 400, doc.y, { align: 'right' });
+        doc.moveDown(2);
+
+        doc.font('Helvetica-Bold').text('DEDUCCIONES', 70, doc.y);
+        doc.font('Helvetica').text('Descuentos / Avances', 90, doc.y + 20).text(`$${parseFloat(record.deductions).toFixed(2)}`, 400, doc.y, { align: 'right' });
+        doc.moveDown(2);
+
+        doc.moveTo(70, doc.y).lineTo(doc.page.width - 70, doc.y).stroke();
+        doc.moveDown();
+
+        doc.font('Helvetica-Bold').fontSize(14).text('MONTO NETO A PAGAR:', 70, doc.y).text(`RD$ ${parseFloat(record.net_pay).toFixed(2)}`, 350, doc.y, { align: 'right' });
+        doc.moveDown(5);
+        
+        doc.font('Helvetica').fontSize(10);
+        doc.text('___________________________', 70, doc.y + 50);
+        doc.text('Firma del Empleado', 70, doc.y + 5);
+
+        doc.end();
+
+    } catch (error) {
+        console.error("Error al generar recibo de nómina:", error);
+        res.status(500).send('Error al generar el recibo PDF.');
+    }
+});
+
 
 app.get('/proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
     const centerId = req.params.id;
