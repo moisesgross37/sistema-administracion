@@ -911,7 +911,15 @@ app.get('/proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => 
             <body>
                 <div class="container" style="max-width: 900px;">
                     ${backToDashboardLink}
-                    <div class="header" style="border-bottom: 2px solid #007bff; padding-bottom: 10px; margin-bottom: 20px;"><h1>${quote.clientname}</h1><p>Cotización #${quote.quotenumber} &bull; Asesor: ${quote.advisorname}</p></div>
+                    <div class="header" style="border-bottom: 2px solid #007bff; padding-bottom: 10px; margin-bottom: 20px;">
+    <h1>${quote.clientname}</h1>
+    <p>
+        Cotización #${quote.quotenumber} &bull; Asesor: ${quote.advisorname}
+        <a href="/ver-cotizacion-pdf/${quote.id}" target="_blank" class="btn" style="padding: 5px 10px; font-size: 12px; background-color: #6c757d; margin-left: 20px;">
+            Ver Cotización Original 📄
+        </a>
+    </p>
+</div>
                     ${quote.notas_administrativas ? `<div class="admin-notes"><strong>Notas Administrativas:</strong><br>${quote.notas_administrativas.replace(/\n/g, '<br>')}</div>` : ''}
                     <div class="summary">
                         <div class="summary-box">
