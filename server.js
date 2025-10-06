@@ -1201,7 +1201,7 @@ app.get('/recibo-pago/:paymentId/pdf', requireLogin, async (req, res) => {
         const contentWidth = doc.page.width - (pageMargin * 2);
 
         // Título del documento
-        doc.font('Helvetica-Bold').fontSize(20).text('RECIBO DE PAGO', { align: 'center', y: 180 });
+        doc.font('Helvetica-Bold').fontSize(20).text('RECIBO DE PAGO', { align: 'center', y: 250 });
         doc.moveDown(3);
 
         // Información del recibo (derecha)
