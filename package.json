@@ -7,6 +7,7 @@
     "start": "node server.js",
     "db:migrate": "node migrate.js",
     "db:migrate-advances": "node migrate-advances.js",
+    "db:migrate-ap": "node migrate-accounts-payable.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
