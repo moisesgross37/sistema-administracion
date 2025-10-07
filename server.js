@@ -578,7 +578,11 @@ app.post('/gastos-generales', requireLogin, requireAdminOrCoord, async (req, res
 });
 
 // --- RUTA PARA GENERAR EL PDF DEL RECIBO DE DESEMBOLSO ---
-const result = await client.query(
+app.get('/desembolso/:expenseId/pdf', requireLogin, requireAdminOrCoord, async (req, res) => {
+    try {
+        const { expenseId } = req.params;
+        const client = await pool.connect();
+        const result = await client.query(
             `SELECT e.*, s.name as supplier_name 
              FROM expenses e JOIN suppliers s ON e.supplier_id = s.id 
              WHERE e.id = $1`, 
@@ -618,15 +622,12 @@ const result = await client.query(
 
         doc.font('Helvetica').fontSize(10);
         
-        // --- SECCIÓN DE FIRMAS MEJORADA ---
-        const signatureY = doc.y > 650 ? 700 : doc.y + 80; // Posición vertical para las firmas
+        const signatureY = doc.y > 650 ? 700 : doc.y + 80;
 
-        // Firma de quien recibe el dinero
         doc.text('___________________________', 70, signatureY);
         doc.font('Helvetica-Bold').text(expense.supplier_name, 70, signatureY + 15);
         doc.font('Helvetica').text('Recibido Conforme (Firma)', 70, signatureY + 30);
 
-        // Firma de quien autoriza el pago
         doc.text('___________________________', 350, signatureY, { align: 'right' });
         doc.font('Helvetica-Bold').text('Autorizado por', 350, signatureY + 15, { align: 'right' });
 
@@ -636,6 +637,7 @@ const result = await client.query(
         res.status(500).send('Error al generar el recibo PDF.');
     }
 });
+
 app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
