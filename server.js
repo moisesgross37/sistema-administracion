@@ -839,6 +839,148 @@ app.post('/empleado/eliminar/:id', requireLogin, requireAdminOrCoord, async (req
     }
 });
 
+// =======================================================
+//   NUEVAS RUTAS PARA GESTIÓN DE AVANCES A EMPLEADOS
+// =======================================================
+
+// --- PÁGINA PRINCIPAL DE GESTIÓN DE AVANCES ---
+app.get('/gestionar-avances', requireLogin, requireAdminOrCoord, async (req, res) => {
+    try {
+        const client = await pool.connect();
+        const [employeesResult, advancesResult] = await Promise.all([
+            client.query('SELECT id, first_name, last_name FROM employees ORDER BY first_name ASC'),
+            client.query(`
+                SELECT a.*, e.first_name, e.last_name 
+                FROM avances_empleado a
+                JOIN employees e ON a.employee_id = e.id
+                ORDER BY a.advance_date DESC
+            `)
+        ]);
+        client.release();
+
+        const employees = employeesResult.rows;
+        const advances = advancesResult.rows;
+
+        let employeesOptionsHtml = employees.map(e => `<option value="${e.id}">${e.first_name} ${e.last_name}</option>`).join('');
+        
+        let advancesHtml = advances.map(a => `
+            <tr>
+                <td>${new Date(a.advance_date).toLocaleDateString()}</td>
+                <td>${a.first_name} ${a.last_name}</td>
+                <td>$${parseFloat(a.amount).toFixed(2)}</td>
+                <td>${a.reason || ''}</td>
+                <td style="font-weight: bold; color: ${a.status === 'pendiente' ? '#fd7e14' : '#28a745'};">
+                    ${a.status.charAt(0).toUpperCase() + a.status.slice(1)}
+                </td>
+                <td>
+                    <a href="/recibo-avance/${a.id}/pdf" target="_blank" class="btn" style="padding: 5px 10px; font-size: 14px;">Imprimir</a>
+                </td>
+            </tr>
+        `).join('') || '<tr><td colspan="6">No hay avances registrados.</td></tr>';
+
+        res.send(`
+            <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
+                <div class="container">
+                    ${backToDashboardLink}
+                    <h2>Gestionar Avances de Sueldo</h2>
+                    <div class="form-container">
+                        <h3>Registrar Nuevo Avance</h3>
+                        <form action="/gestionar-avances" method="POST">
+                            <div class="form-group"><label>Empleado:</label><select name="employee_id" required><option value="">Seleccione un empleado...</option>${employeesOptionsHtml}</select></div>
+                            <div class="form-group"><label>Fecha del Avance:</label><input type="date" name="advance_date" required></div>
+                            <div class="form-group"><label>Monto del Avance:</label><input type="number" name="amount" step="0.01" required></div>
+                            <div class="form-group"><label>Motivo / Concepto:</label><textarea name="reason" rows="2"></textarea></div>
+                            <button type="submit" class="btn">Guardar Avance</button>
+                        </form>
+                    </div>
+                    <hr style="margin: 40px 0;">
+                    <h3>Historial de Avances</h3>
+                    <table>
+                        <thead><tr><th>Fecha</th><th>Empleado</th><th>Monto</th><th>Motivo</th><th>Estado</th><th>Acciones</th></tr></thead>
+                        <tbody>${advancesHtml}</tbody>
+                    </table>
+                </div>
+            </body></html>
+        `);
+    } catch (error) {
+        console.error("Error al cargar la página de avances:", error);
+        res.status(500).send('<h1>Error al cargar la página ❌</h1>');
+    }
+});
+
+// --- RUTA PARA GUARDAR UN NUEVO AVANCE ---
+app.post('/gestionar-avances', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { employee_id, advance_date, amount, reason } = req.body;
+    if (!employee_id || !advance_date || !amount) {
+        return res.status(400).send("El empleado, la fecha y el monto son obligatorios.");
+    }
+    try {
+        const client = await pool.connect();
+        await client.query(
+            `INSERT INTO avances_empleado (employee_id, advance_date, amount, reason) VALUES ($1, $2, $3, $4)`,
+            [employee_id, advance_date, amount, reason || null]
+        );
+        client.release();
+        res.redirect('/gestionar-avances');
+    } catch (error) {
+        console.error("Error al guardar el avance:", error);
+        res.status(500).send('<h1>Error al guardar el avance ❌</h1>');
+    }
+});
+
+// --- RUTA PARA GENERAR EL PDF DEL RECIBO DE AVANCE ---
+app.get('/recibo-avance/:advanceId/pdf', requireLogin, requireAdminOrCoord, async (req, res) => {
+    try {
+        const { advanceId } = req.params;
+        const client = await pool.connect();
+        const result = await client.query(
+            `SELECT a.*, e.first_name, e.last_name, e.cedula 
+             FROM avances_empleado a 
+             JOIN employees e ON a.employee_id = e.id 
+             WHERE a.id = $1`, 
+            [advanceId]
+        );
+        client.release();
+
+        if (result.rows.length === 0) {
+            return res.status(404).send('Avance no encontrado.');
+        }
+        const advance = result.rows[0];
+
+        const doc = new PDFDocument({ size: 'A4', margin: 50 });
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename=avance-${advance.id}.pdf`);
+        doc.pipe(res);
+
+        doc.image(path.join(__dirname, 'plantillas', 'membrete.jpg'), 0, 0, { width: doc.page.width, height: doc.page.height });
+        
+        doc.y = 280;
+        doc.font('Helvetica-Bold').fontSize(18).text('RECIBO DE AVANCE DE SUELDO', { align: 'center' });
+        doc.moveDown(3);
+
+        const formattedAmount = parseFloat(advance.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const date = new Date(advance.advance_date).toLocaleDateString('es-DO', { year: 'numeric', month: 'long', day: 'numeric' });
+
+        doc.font('Helvetica').fontSize(12).lineGap(8);
+        doc.text(`Por medio de la presente, yo, ${advance.first_name} ${advance.last_name}, portador de la cédula de identidad No. ${advance.cedula || '__________________'}, reconozco haber recibido de la empresa la suma de RD$ ${formattedAmount}.`, { align: 'justify' });
+        doc.moveDown();
+        doc.text(`Este monto corresponde a un avance de mi sueldo, solicitado en fecha ${date}. Entiendo que este valor será descontado de mi próximo pago de nómina.`, { align: 'justify' });
+        doc.moveDown(8);
+
+        const signatureY = doc.y > 600 ? 650 : doc.y + 100;
+
+        doc.text('___________________________', 70, signatureY);
+        doc.font('Helvetica-Bold').text(`${advance.first_name} ${advance.last_name}`, 70, signatureY + 15);
+        doc.font('Helvetica').text('Recibido por (Firma)', 70, signatureY + 30);
+
+        doc.end();
+    } catch (error) {
+        console.error("Error al generar el PDF de avance:", error);
+        res.status(500).send('Error al generar el recibo PDF.');
+    }
+});
+
+
 app.get('/generar-nomina', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
