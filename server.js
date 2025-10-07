@@ -188,6 +188,7 @@ app.get('/', requireLogin, requireAdminOrCoord, (req, res) => {
                 <div class="module">
                     <h2>Finanzas y Contabilidad</h2>
                     <div class="dashboard">
+                        <a href="/cuentas-por-pagar" class="dashboard-card"><h3>🧾 Cuentas por Pagar</h3><p>Gestiona las facturas pendientes de tus suplidores.</p></a>
                         <a href="/cuentas-por-cobrar" class="dashboard-card"><h3>📊 Cuentas por Cobrar</h3><p>Consulta un resumen de todas las deudas pendientes.</p></a>
                         <a href="/reporte-gastos" class="dashboard-card"><h3>🧾 Reporte de Gastos</h3><p>Consulta un resumen de todos los gastos de la empresa.</p></a>
                         <a href="/gastos-generales" class="dashboard-card"><h3>💸 Registrar Gasto General</h3><p>Registra desembolsos y gastos administrativos.</p></a>
@@ -380,6 +381,113 @@ app.post('/suplidores', requireLogin, requireAdminOrCoord, async (req, res) => {
         res.status(500).send('<h1>Error al guardar el suplidor ❌</h1>');
     }
 });
+
+// =======================================================
+//   NUEVAS RUTAS PARA CUENTAS POR PAGAR
+// =======================================================
+
+// --- PÁGINA PRINCIPAL DE CUENTAS POR PAGAR ---
+app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res) => {
+    try {
+        const client = await pool.connect();
+        const [suppliersResult, invoicesResult] = await Promise.all([
+            client.query('SELECT * FROM suppliers ORDER BY name ASC'),
+            client.query(`
+                SELECT f.*, s.name as supplier_name 
+                FROM facturas_suplidores f
+                JOIN suppliers s ON f.supplier_id = s.id 
+                WHERE f.estado != 'pagada'
+                ORDER BY f.fecha_vencimiento ASC NULLS LAST, f.fecha_factura ASC
+            `)
+        ]);
+        client.release();
+
+        const suppliers = suppliersResult.rows;
+        const invoices = invoicesResult.rows;
+
+        const totalAdeudado = invoices.reduce((sum, inv) => sum + parseFloat(inv.monto_total), 0);
+        
+        let suppliersOptionsHtml = suppliers.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+        let invoicesHtml = invoices.map(inv => {
+            const hoy = new Date();
+            const fechaVencimiento = inv.fecha_vencimiento ? new Date(inv.fecha_vencimiento) : null;
+            let estiloFila = '';
+            if (fechaVencimiento && fechaVencimiento < hoy) {
+                estiloFila = 'style="background-color: #f8d7da; color: #721c24;"'; // Estilo para facturas vencidas
+            }
+
+            return `<tr ${estiloFila}>
+                <td>${inv.supplier_name}</td>
+                <td>${inv.numero_factura || 'N/A'}</td>
+                <td>${new Date(inv.fecha_factura).toLocaleDateString()}</td>
+                <td>${fechaVencimiento ? new Date(fechaVencimiento).toLocaleDateString() : 'N/A'}</td>
+                <td>$${parseFloat(inv.monto_total).toFixed(2)}</td>
+                <td>${inv.estado.charAt(0).toUpperCase() + inv.estado.slice(1)}</td>
+            </tr>`
+        }).join('') || '<tr><td colspan="6">No hay cuentas por pagar pendientes.</td></tr>';
+
+        res.send(`
+            <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
+                <div class="container">
+                    ${backToDashboardLink}
+                    <h2>Cuentas por Pagar a Suplidores</h2>
+                    <div class="summary">
+                        <div class="summary-box" style="grid-column: span 3; margin: auto;">
+                            <h3>Total Pendiente de Pago</h3>
+                            <p class="amount red">$${totalAdeudado.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                        </div>
+                    </div>
+
+                    <div class="form-container">
+                        <h3>Registrar Nueva Factura de Suplidor</h3>
+                        <form action="/cuentas-por-pagar" method="POST">
+                            <div class="form-group"><label>Suplidor:</label><select name="supplier_id" required>${suppliersOptionsHtml}</select></div>
+                            <div class="form-group"><label>Número de Factura (Opcional):</label><input type="text" name="numero_factura"></div>
+                            <div class="form-group"><label>Fecha de la Factura:</label><input type="date" name="fecha_factura" required></div>
+                            <div class="form-group"><label>Fecha de Vencimiento (Opcional):</label><input type="date" name="fecha_vencimiento"></div>
+                            <div class="form-group"><label>Monto Total:</label><input type="number" name="monto_total" step="0.01" required></div>
+                            <div class="form-group"><label>Descripción / Concepto:</label><textarea name="descripcion" rows="2" required></textarea></div>
+                            <button type="submit" class="btn">Guardar Factura</button>
+                        </form>
+                    </div>
+
+                    <hr style="margin: 40px 0;">
+                    <h3>Facturas Pendientes</h3>
+                    <table>
+                        <thead><tr><th>Suplidor</th><th># Factura</th><th>Fecha Factura</th><th>Fecha Vencimiento</th><th>Monto Total</th><th>Estado</th></tr></thead>
+                        <tbody>${invoicesHtml}</tbody>
+                    </table>
+                </div>
+            </body></html>
+        `);
+    } catch (error) {
+        console.error("Error al cargar la página de cuentas por pagar:", error);
+        res.status(500).send('<h1>Error al cargar la página ❌</h1>');
+    }
+});
+
+// --- RUTA PARA GUARDAR UNA NUEVA FACTURA DE SUPLIDOR ---
+app.post('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { supplier_id, numero_factura, fecha_factura, fecha_vencimiento, monto_total, descripcion } = req.body;
+    if (!supplier_id || !fecha_factura || !monto_total || !descripcion) {
+        return res.status(400).send("El suplidor, fecha, monto y descripción son obligatorios.");
+    }
+    try {
+        const client = await pool.connect();
+        await client.query(
+            `INSERT INTO facturas_suplidores (supplier_id, numero_factura, fecha_factura, fecha_vencimiento, monto_total, descripcion) 
+             VALUES ($1, $2, $3, $4, $5, $6)`,
+            [supplier_id, numero_factura || null, fecha_factura, fecha_vencimiento || null, monto_total, descripcion]
+        );
+        client.release();
+        res.redirect('/cuentas-por-pagar');
+    } catch (error) {
+        console.error("Error al guardar la factura de suplidor:", error);
+        res.status(500).send('<h1>Error al guardar la factura ❌</h1>');
+    }
+});
+
+
 // =======================================================
 //   NUEVAS RUTAS PARA GASTOS GENERALES / DESEMBOLSOS
 // =======================================================
