@@ -583,9 +583,10 @@ app.get('/desembolso/:expenseId/pdf', requireLogin, requireAdminOrCoord, async (
         const { expenseId } = req.params;
         const client = await pool.connect();
         const result = await client.query(
+            const result = await client.query(
             `SELECT e.*, s.name as supplier_name 
              FROM expenses e JOIN suppliers s ON e.supplier_id = s.id 
-             WHERE e.id = $1 AND e.quote_id IS NULL`, 
+             WHERE e.id = $1`, 
             [expenseId]
         );
         client.release();
@@ -1397,7 +1398,6 @@ app.get('/proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => 
             </tr>
         `).join('') || '<tr><td colspan="4">No se han realizado ajustes.</td></tr>';
 
-        // --- INICIO DE LA MODIFICACIÓN ---
         let paymentsHtml = payments.map(p => `
             <tr>
                 <td>${new Date(p.payment_date).toLocaleDateString()}</td>
@@ -1410,10 +1410,23 @@ app.get('/proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => 
                     </a>
                 </td>
             </tr>
-        `).join('') || '<tr><td colspan="5">No hay pagos registrados.</td></tr>'; // Se cambió colspan a 5
+        `).join('') || '<tr><td colspan="5">No hay pagos registrados.</td></tr>';
+        
+        // --- INICIO DE LA MODIFICACIÓN ---
+        let expensesHtml = expenses.map(e => `
+            <tr>
+                <td>${new Date(e.expense_date).toLocaleDateString()}</td>
+                <td>${e.supplier_name}</td>
+                <td>${e.description}</td>
+                <td>$${parseFloat(e.amount).toFixed(2)}</td>
+                <td>${e.type || ''}</td>
+                <td style="text-align: center;">
+                    <a href="/desembolso/${e.id}/pdf" target="_blank" class="btn" style="padding: 5px 10px; font-size: 14px;">Imprimir</a>
+                </td>
+            </tr>
+        `).join('') || '<tr><td colspan="6">No hay gastos registrados.</td></tr>'; // colspan ahora es 6
         // --- FIN DE LA MODIFICACIÓN ---
 
-        let expensesHtml = expenses.map(e => `<tr><td>${new Date(e.expense_date).toLocaleDateString()}</td><td>${e.supplier_name}</td><td>${e.description}</td><td>$${parseFloat(e.amount).toFixed(2)}</td><td>${e.type || ''}</td></tr>`).join('') || '<tr><td colspan="5">No hay gastos registrados.</td></tr>';
         let suppliersOptionsHtml = suppliers.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
 
         res.send(`
@@ -1457,7 +1470,6 @@ app.get('/proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => 
 
                     <hr style="margin: 40px 0;">
                     <h2><span style="color: #28a745;">Ingresos</span> (Abonos Realizados)</h2>
-                    
                     <table>
                         <thead>
                             <tr>
@@ -1477,7 +1489,20 @@ app.get('/proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => 
                     </div>
                     <hr style="margin: 40px 0;">
                     <h2><span style="color: #dc3545;">Egresos</span> (Gastos del Proyecto)</h2>
-                    <table><thead><tr><th>Fecha</th><th>Suplidor</th><th>Descripción</th><th>Monto</th><th>Tipo</th></tr></thead><tbody>${expensesHtml}</tbody></table>
+                    
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Fecha</th>
+                                <th>Suplidor</th>
+                                <th>Descripción</th>
+                                <th>Monto</th>
+                                <th>Tipo</th>
+                                <th>Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>${expensesHtml}</tbody>
+                    </table>
                     <button class="btn btn-toggle btn-gasto" onclick="toggleForm('expense-form-container')">Registrar Nuevo Gasto</button>
                     <div id="expense-form-container" class="expense-form" style="display: none;">
                         <h2>Nuevo Gasto</h2>
@@ -1531,7 +1556,6 @@ app.get('/proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => 
         res.status(500).send('<h1>Error al obtener los detalles del proyecto ❌</h1>');
     }
 });
-
 app.post('/proyecto/:id/nuevo-pago', requireLogin, requireAdminOrCoord, async (req, res) => {
     const quoteId = req.params.id;
     const { centerId, payment_date, amount, students_covered, comment } = req.body;
