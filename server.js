@@ -578,12 +578,7 @@ app.post('/gastos-generales', requireLogin, requireAdminOrCoord, async (req, res
 });
 
 // --- RUTA PARA GENERAR EL PDF DEL RECIBO DE DESEMBOLSO ---
-app.get('/desembolso/:expenseId/pdf', requireLogin, requireAdminOrCoord, async (req, res) => {
-    try {
-        const { expenseId } = req.params;
-        const client = await pool.connect();
-        const result = await client.query(
-            const result = await client.query(
+const result = await client.query(
             `SELECT e.*, s.name as supplier_name 
              FROM expenses e JOIN suppliers s ON e.supplier_id = s.id 
              WHERE e.id = $1`, 
