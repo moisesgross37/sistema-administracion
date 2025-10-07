@@ -529,11 +529,19 @@ app.get('/desembolso/:expenseId/pdf', requireLogin, requireAdminOrCoord, async (
         doc.font('Helvetica-Bold').fontSize(11).text('POR CONCEPTO DE:').font('Helvetica').fontSize(10).text(expense.description);
         doc.moveDown(8);
 
-        doc.text('___________________________', { align: 'left' });
-        doc.text('Recibido por', { align: 'left' });
+        doc.font('Helvetica').fontSize(10);
+        
+        // --- SECCIÓN DE FIRMAS MEJORADA ---
+        const signatureY = doc.y > 650 ? 700 : doc.y + 80; // Posición vertical para las firmas
 
-        doc.text('___________________________', { align: 'right' });
-        doc.text('Autorizado por', { align: 'right' });
+        // Firma de quien recibe el dinero
+        doc.text('___________________________', 70, signatureY);
+        doc.font('Helvetica-Bold').text(expense.supplier_name, 70, signatureY + 15);
+        doc.font('Helvetica').text('Recibido Conforme (Firma)', 70, signatureY + 30);
+
+        // Firma de quien autoriza el pago
+        doc.text('___________________________', 350, signatureY, { align: 'right' });
+        doc.font('Helvetica-Bold').text('Autorizado por', 350, signatureY + 15, { align: 'right' });
 
         doc.end();
     } catch (error) {
