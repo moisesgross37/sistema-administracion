@@ -188,36 +188,19 @@ app.get('/', requireLogin, requireAdminOrCoord, (req, res) => {
                 <div class="module">
                     <h2>Finanzas y Contabilidad</h2>
                     <div class="dashboard">
-                        <a href="/cuentas-por-cobrar" class="dashboard-card">
-                            <h3>📊 Cuentas por Cobrar</h3>
-                            <p>Consulta un resumen de todas las deudas pendientes.</p>
-                        </a>
-                        <a href="/reporte-gastos" class="dashboard-card">
-                            <h3>🧾 Reporte de Gastos</h3>
-                            <p>Consulta un resumen de todos los gastos de la empresa.</p>
-                        </a>
-                        <a href="/gastos-generales" class="dashboard-card">
-                            <h3>💸 Registrar Gasto General</h3>
-                            <p>Registra desembolsos y gastos administrativos.</p>
-                        </a>
+                        <a href="/cuentas-por-cobrar" class="dashboard-card"><h3>📊 Cuentas por Cobrar</h3><p>Consulta un resumen de todas las deudas pendientes.</p></a>
+                        <a href="/reporte-gastos" class="dashboard-card"><h3>🧾 Reporte de Gastos</h3><p>Consulta un resumen de todos los gastos de la empresa.</p></a>
+                        <a href="/gastos-generales" class="dashboard-card"><h3>💸 Registrar Gasto General</h3><p>Registra desembolsos y gastos administrativos.</p></a>
                         <a href="/suplidores" class="dashboard-card"><h3>🚚 Gestionar Suplidores</h3><p>Añade o edita la información de tus suplidores.</p></a>
                     </div>
                 </div>
                 <div class="module">
                     <h2>Nómina</h2>
                     <div class="dashboard">
-                        <a href="/empleados" class="dashboard-card">
-                            <h3>👥 Gestionar Empleados</h3>
-                            <p>Añade o edita la información de tu personal.</p>
-                        </a>
-                        <a href="/generar-nomina" class="dashboard-card">
-                            <h3>💵 Generar Nómina</h3>
-                            <p>Calcula la nómina quincenal de tu equipo.</p>
-                        </a>
-                        <a href="/historial-nomina" class="dashboard-card">
-                            <h3>📂 Historial de Nómina</h3>
-                            <p>Consulta los registros de pagos de nómina anteriores.</p>
-                        </a>
+                        <a href="/empleados" class="dashboard-card"><h3>👥 Gestionar Empleados</h3><p>Añade o edita la información de tu personal.</p></a>
+                        <a href="/gestionar-avances" class="dashboard-card"><h3>💰 Gestionar Avances</h3><p>Registra y consulta los avances de sueldo.</p></a>
+                        <a href="/generar-nomina" class="dashboard-card"><h3>💵 Generar Nómina</h3><p>Calcula la nómina quincenal de tu equipo.</p></a>
+                        <a href="/historial-nomina" class="dashboard-card"><h3>📂 Historial de Nómina</h3><p>Consulta los registros de pagos de nómina anteriores.</p></a>
                     </div>
                 </div>
             </div>
