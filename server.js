@@ -196,6 +196,10 @@ app.get('/', requireLogin, requireAdminOrCoord, (req, res) => {
                             <h3>🧾 Reporte de Gastos</h3>
                             <p>Consulta un resumen de todos los gastos de la empresa.</p>
                         </a>
+                        <a href="/gastos-generales" class="dashboard-card">
+                            <h3>💸 Registrar Gasto General</h3>
+                            <p>Registra desembolsos y gastos administrativos.</p>
+                        </a>
                         <a href="/suplidores" class="dashboard-card"><h3>🚚 Gestionar Suplidores</h3><p>Añade o edita la información de tus suplidores.</p></a>
                     </div>
                 </div>
@@ -220,7 +224,6 @@ app.get('/', requireLogin, requireAdminOrCoord, (req, res) => {
         </body></html>
     `);
 });
-
 app.get('/todos-los-centros', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
@@ -394,7 +397,150 @@ app.post('/suplidores', requireLogin, requireAdminOrCoord, async (req, res) => {
         res.status(500).send('<h1>Error al guardar el suplidor ❌</h1>');
     }
 });
+// =======================================================
+//   NUEVAS RUTAS PARA GASTOS GENERALES / DESEMBOLSOS
+// =======================================================
 
+// --- PÁGINA PARA VER Y AÑADIR GASTOS GENERALES ---
+app.get('/gastos-generales', requireLogin, requireAdminOrCoord, async (req, res) => {
+    try {
+        const client = await pool.connect();
+        const [suppliersResult, expensesResult] = await Promise.all([
+            client.query('SELECT * FROM suppliers ORDER BY name ASC'),
+            client.query(`
+                SELECT e.*, s.name as supplier_name 
+                FROM expenses e 
+                JOIN suppliers s ON e.supplier_id = s.id 
+                WHERE e.quote_id IS NULL 
+                ORDER BY e.expense_date DESC
+            `)
+        ]);
+        client.release();
+
+        const suppliers = suppliersResult.rows;
+        const expenses = expensesResult.rows;
+
+        let suppliersOptionsHtml = suppliers.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+        let expensesHtml = expenses.map(e => `
+            <tr>
+                <td>${new Date(e.expense_date).toLocaleDateString()}</td>
+                <td>${e.supplier_name}</td>
+                <td>${e.description}</td>
+                <td>${e.type || ''}</td>
+                <td>$${parseFloat(e.amount).toFixed(2)}</td>
+                <td>
+                    <a href="/desembolso/${e.id}/pdf" target="_blank" class="btn" style="padding: 5px 10px; font-size: 14px;">Imprimir</a>
+                </td>
+            </tr>
+        `).join('') || '<tr><td colspan="6">No hay gastos generales registrados.</td></tr>';
+
+        res.send(`
+            <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
+                <div class="container">
+                    ${backToDashboardLink}
+                    <h2>Gastos Generales y Administrativos</h2>
+                    <div class="form-container">
+                        <h3>Registrar Nuevo Desembolso</h3>
+                        <form action="/gastos-generales" method="POST">
+                            <div class="form-group"><label>Fecha:</label><input type="date" name="expense_date" required></div>
+                            <div class="form-group"><label>Suplidor:</label><select name="supplier_id" required><option value="">Seleccione un suplidor...</option>${suppliersOptionsHtml}</select></div>
+                            <div class="form-group"><label>Monto:</label><input type="number" name="amount" step="0.01" required></div>
+                            <div class="form-group"><label>Tipo:</label><select name="type"><option value="">Seleccionar...</option><option value="Con Valor Fiscal">Con Valor Fiscal</option><option value="Sin Valor Fiscal">Sin Valor Fiscal</option></select></div>
+                            <div class="form-group"><label>Descripción / Concepto:</label><textarea name="description" rows="2" required></textarea></div>
+                            <button type="submit" class="btn">Guardar Gasto</button>
+                        </form>
+                    </div>
+                    <hr style="margin: 40px 0;">
+                    <h3>Historial de Gastos Generales</h3>
+                    <table>
+                        <thead><tr><th>Fecha</th><th>Suplidor</th><th>Descripción</th><th>Tipo</th><th>Monto</th><th>Acciones</th></tr></thead>
+                        <tbody>${expensesHtml}</tbody>
+                    </table>
+                </div>
+            </body></html>
+        `);
+    } catch (error) {
+        console.error("Error al cargar la página de gastos generales:", error);
+        res.status(500).send('<h1>Error al cargar la página ❌</h1>');
+    }
+});
+
+// --- RUTA PARA GUARDAR UN NUEVO GASTO GENERAL ---
+app.post('/gastos-generales', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { expense_date, supplier_id, amount, description, type } = req.body;
+    if (!expense_date || !supplier_id || !amount || !description) {
+        return res.status(400).send("La fecha, suplidor, monto y descripción son obligatorios.");
+    }
+    try {
+        const client = await pool.connect();
+        await client.query(
+            `INSERT INTO expenses (expense_date, supplier_id, amount, description, type, quote_id) 
+             VALUES ($1, $2, $3, $4, $5, NULL)`,
+            [expense_date, supplier_id, amount, description, type]
+        );
+        client.release();
+        res.redirect('/gastos-generales');
+    } catch (error) {
+        console.error("Error al guardar el gasto general:", error);
+        res.status(500).send('<h1>Error al guardar el gasto ❌</h1>');
+    }
+});
+
+// --- RUTA PARA GENERAR EL PDF DEL RECIBO DE DESEMBOLSO ---
+app.get('/desembolso/:expenseId/pdf', requireLogin, requireAdminOrCoord, async (req, res) => {
+    try {
+        const { expenseId } = req.params;
+        const client = await pool.connect();
+        const result = await client.query(
+            `SELECT e.*, s.name as supplier_name 
+             FROM expenses e JOIN suppliers s ON e.supplier_id = s.id 
+             WHERE e.id = $1 AND e.quote_id IS NULL`, 
+            [expenseId]
+        );
+        client.release();
+
+        if (result.rows.length === 0) {
+            return res.status(404).send('Desembolso no encontrado.');
+        }
+        const expense = result.rows[0];
+
+        const doc = new PDFDocument({ size: 'A4', margin: 50 });
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename=desembolso-${expense.id}.pdf`);
+        doc.pipe(res);
+
+        doc.image(path.join(__dirname, 'plantillas', 'membrete.jpg'), 0, 0, { width: doc.page.width, height: doc.page.height });
+        
+        doc.y = 280; // Bajamos el contenido
+        doc.font('Helvetica-Bold').fontSize(20).text('COMPROBANTE DE DESEMBOLSO', { align: 'center' });
+        doc.moveDown(3);
+
+        doc.font('Helvetica').fontSize(11);
+        doc.text(`Fecha: ${new Date(expense.expense_date).toLocaleDateString('es-DO')}`, { align: 'right' });
+        doc.moveDown();
+
+        doc.font('Helvetica-Bold').text('PAGADO A: ').font('Helvetica').text(expense.supplier_name);
+        doc.moveDown();
+        
+        const formattedAmount = parseFloat(expense.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        doc.font('Helvetica-Bold').text('MONTO: ').font('Helvetica-Bold').fontSize(14).text(`RD$ ${formattedAmount}`);
+        doc.moveDown();
+
+        doc.font('Helvetica-Bold').fontSize(11).text('POR CONCEPTO DE:').font('Helvetica').fontSize(10).text(expense.description);
+        doc.moveDown(8);
+
+        doc.text('___________________________', { align: 'left' });
+        doc.text('Recibido por', { align: 'left' });
+
+        doc.text('___________________________', { align: 'right' });
+        doc.text('Autorizado por', { align: 'right' });
+
+        doc.end();
+    } catch (error) {
+        console.error("Error al generar el PDF de desembolso:", error);
+        res.status(500).send('Error al generar el recibo PDF.');
+    }
+});
 app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
@@ -471,19 +617,37 @@ app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, re
 app.get('/reporte-gastos', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
+        
+        // --- CONSULTA MODIFICADA CON LEFT JOIN ---
         const result = await client.query(`
-            SELECT e.*, s.name as supplier_name, q.clientname
+            SELECT 
+                e.*, 
+                s.name as supplier_name, 
+                q.clientname
             FROM expenses e
             JOIN suppliers s ON e.supplier_id = s.id
-            JOIN quotes q ON e.quote_id = q.id
+            LEFT JOIN quotes q ON e.quote_id = q.id
             ORDER BY e.expense_date DESC;
         `);
         const expenses = result.rows;
         client.release();
 
         const totalGastado = expenses.reduce((sum, expense) => sum + parseFloat(expense.amount), 0);
+        
         let expensesHtml = expenses.map(e => {
-            return `<tr><td>${new Date(e.expense_date).toLocaleDateString()}</td><td>${e.clientname}</td><td>${e.supplier_name}</td><td>${e.description}</td><td>${e.type || ''}</td><td style="font-weight: bold;">$${parseFloat(e.amount).toFixed(2)}</td></tr>`;
+            // --- LÓGICA MODIFICADA PARA MOSTRAR EL TIPO DE GASTO ---
+            const proyectoCliente = e.clientname 
+                ? e.clientname // Si tiene un cliente, lo muestra
+                : '<span style="color:#6c757d; font-style:italic;">Gasto Administrativo</span>'; // Si no, indica que es administrativo
+
+            return `<tr>
+                        <td>${new Date(e.expense_date).toLocaleDateString()}</td>
+                        <td>${proyectoCliente}</td>
+                        <td>${e.supplier_name}</td>
+                        <td>${e.description}</td>
+                        <td>${e.type || ''}</td>
+                        <td style="font-weight: bold;">$${parseFloat(e.amount).toFixed(2)}</td>
+                    </tr>`;
         }).join('');
 
         if (expenses.length === 0) {
@@ -496,12 +660,12 @@ app.get('/reporte-gastos', requireLogin, requireAdminOrCoord, async (req, res) =
                     ${backToDashboardLink}
                     <h2>Reporte General de Gastos</h2>
                     <div class="summary">
-                        <div class="summary-box" style="grid-column: span 2; margin: auto;">
+                        <div class="summary-box" style="grid-column: span 3; margin: auto;">
                             <h3>Total General Gastado</h3>
                             <p class="amount orange">$${totalGastado.toFixed(2)}</p>
                         </div>
                     </div>
-                    <table><thead><tr><th>Fecha</th><th>Proyecto (Cliente)</th><th>Suplidor</th><th>Descripción</th><th>Tipo</th><th>Monto</th></tr></thead><tbody>${expensesHtml}</tbody></table>
+                    <table><thead><tr><th>Fecha</th><th>Proyecto / Origen</th><th>Suplidor</th><th>Descripción</th><th>Tipo</th><th>Monto</th></tr></thead><tbody>${expensesHtml}</tbody></table>
                 </div>
             </body></html>`);
     } catch (error) {
@@ -509,7 +673,6 @@ app.get('/reporte-gastos', requireLogin, requireAdminOrCoord, async (req, res) =
         res.status(500).send('<h1>Error al cargar el reporte ❌</h1>');
     }
 });
-
 app.get('/empleados', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
