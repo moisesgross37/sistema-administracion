@@ -196,9 +196,10 @@ app.get('/', requireLogin, requireAdminOrCoord, (req, res) => {
                     </div>
                 </div>
                 <div class="module">
-                    <h2>Nómina</h2>
+                    <h2>Personal y Pagos</h2>
                     <div class="dashboard">
-                        <a href="/empleados" class="dashboard-card"><h3>👥 Gestionar Empleados</h3><p>Añade o edita la información de tu personal.</p></a>
+                        <a href="/gestionar-asesores" class="dashboard-card"><h3>📊 Gestionar Asesores y Comisiones</h3><p>Define asesores, al coordinador y sus tasas de comisión.</p></a>
+                        <a href="/empleados" class="dashboard-card"><h3>👥 Gestionar Empleados</h3><p>Añade o edita la información de tu personal de nómina.</p></a>
                         <a href="/gestionar-avances" class="dashboard-card"><h3>💰 Gestionar Avances</h3><p>Registra y consulta los avances de sueldo.</p></a>
                         <a href="/generar-nomina" class="dashboard-card"><h3>💵 Generar Nómina</h3><p>Calcula la nómina quincenal de tu equipo.</p></a>
                         <a href="/historial-nomina" class="dashboard-card"><h3>📂 Historial de Nómina</h3><p>Consulta los registros de pagos de nómina anteriores.</p></a>
@@ -970,6 +971,126 @@ app.get('/reporte-gastos', requireLogin, requireAdminOrCoord, async (req, res) =
         res.status(500).send('<h1>Error al cargar el reporte ❌</h1>');
     }
 });
+
+// =======================================================
+//   NUEVAS RUTAS PARA GESTIÓN DE ASESORES Y COMISIONES
+// =======================================================
+
+app.get('/gestionar-asesores', requireLogin, requireAdminOrCoord, async (req, res) => {
+    try {
+        const client = await pool.connect();
+        const [advisorsResult, settingsResult] = await Promise.all([
+            client.query('SELECT * FROM advisors ORDER BY name ASC'),
+            client.query(`SELECT value FROM app_settings WHERE key = 'coordinator_override_rate'`)
+        ]);
+        client.release();
+
+        const advisors = advisorsResult.rows;
+        const coordinatorRate = settingsResult.rows.length > 0 ? parseFloat(settingsResult.rows[0].value) * 100 : 0;
+
+        let advisorsHtml = advisors.map(a => `
+            <tr>
+                <td>${a.name} ${a.is_coordinator ? '⭐' : ''}</td>
+                <td>${(parseFloat(a.commission_rate) * 100).toFixed(2)}%</td>
+                <td>${a.is_coordinator ? 'Sí' : 'No'}</td>
+                <td><button class="btn" disabled style="background-color: #ffc107; color: #212529; padding: 5px 10px; font-size: 14px;">Editar</button></td>
+            </tr>
+        `).join('') || '<tr><td colspan="4">No hay asesores registrados.</td></tr>';
+
+        res.send(`
+            <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
+                <div class="container">
+                    ${backToDashboardLink}
+                    <h2>Gestionar Asesores y Comisiones</h2>
+                    
+                    <div class="form-container">
+                        <h3>Añadir Nuevo Asesor</h3>
+                        <form action="/gestionar-asesores" method="POST">
+                            <div class="form-group"><label>Nombre Completo del Asesor:</label><input type="text" name="name" required></div>
+                            <div class="form-group"><label>Tasa de Comisión de Venta (%):</label><input type="number" name="commission_rate" step="0.01" placeholder="Ej: 8 para 8%" required></div>
+                            <div class="form-group"><input type="checkbox" name="is_coordinator" id="is_coordinator" value="true" style="width: auto; margin-right: 10px;"><label for="is_coordinator" style="display: inline;">Marcar como Coordinador(a)</label></div>
+                            <button type="submit" class="btn">Guardar Asesor</button>
+                        </form>
+                    </div>
+
+                    <div class="form-container" style="margin-top: 20px;">
+                        <h3>Configuración General</h3>
+                        <form action="/update-settings" method="POST">
+                             <div class="form-group">
+                                <label>Tasa de Comisión del Coordinador (%):</label>
+                                <input type="number" name="coordinator_override_rate" step="0.01" value="${coordinatorRate.toFixed(2)}" required>
+                                <input type="hidden" name="key" value="coordinator_override_rate">
+                             </div>
+                             <button type="submit" class="btn">Actualizar Tasa</button>
+                        </form>
+                    </div>
+
+                    <hr style="margin: 40px 0;">
+                    <h3>Lista de Asesores</h3>
+                    <table>
+                        <thead><tr><th>Nombre</th><th>Comisión de Venta</th><th>Es Coordinador(a)</th><th>Acciones</th></tr></thead>
+                        <tbody>${advisorsHtml}</tbody>
+                    </table>
+                </div>
+            </body></html>
+        `);
+    } catch (error) {
+        console.error("Error al cargar la página de asesores:", error);
+        res.status(500).send('<h1>Error al cargar la página ❌</h1>');
+    }
+});
+
+app.post('/gestionar-asesores', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { name, commission_rate, is_coordinator } = req.body;
+    if (!name || !commission_rate) {
+        return res.status(400).send("El nombre y la tasa de comisión son obligatorios.");
+    }
+
+    const rateAsDecimal = parseFloat(commission_rate) / 100;
+    const isCoordinatorBool = is_coordinator === 'true';
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        // Si se marca este nuevo asesor como coordinador, nos aseguramos de que sea el único.
+        if (isCoordinatorBool) {
+            await client.query('UPDATE advisors SET is_coordinator = false');
+        }
+        await client.query(
+            `INSERT INTO advisors (name, commission_rate, is_coordinator) VALUES ($1, $2, $3)`,
+            [name, rateAsDecimal, isCoordinatorBool]
+        );
+        await client.query('COMMIT');
+        res.redirect('/gestionar-asesores');
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error("Error al guardar el asesor:", error);
+        if (error.code === '23505') { // Error de valor único duplicado
+             return res.status(409).send('<h1>Error: Ya existe un asesor con ese nombre.</h1>');
+        }
+        res.status(500).send('<h1>Error al guardar el asesor ❌</h1>');
+    } finally {
+        client.release();
+    }
+});
+
+app.post('/update-settings', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { key, value } = req.body;
+    const rateAsDecimal = parseFloat(value) / 100;
+    
+    try {
+        await pool.query(
+            `INSERT INTO app_settings (key, value) VALUES ($1, $2)
+             ON CONFLICT (key) DO UPDATE SET value = $2`,
+            [key, rateAsDecimal]
+        );
+        res.redirect('/gestionar-asesores');
+    } catch (error) {
+        console.error("Error al actualizar la configuración:", error);
+        res.status(500).send('<h1>Error al actualizar la configuración ❌</h1>');
+    }
+});
+
 app.get('/empleados', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
@@ -1756,17 +1877,73 @@ app.get('/proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => 
 app.post('/proyecto/:id/nuevo-pago', requireLogin, requireAdminOrCoord, async (req, res) => {
     const quoteId = req.params.id;
     const { centerId, payment_date, amount, students_covered, comment } = req.body;
+    
+    const client = await pool.connect();
     try {
-        const client = await pool.connect();
-        await client.query(`INSERT INTO payments (quote_id, payment_date, amount, students_covered, comment) VALUES ($1, $2, $3, $4, $5)`, [quoteId, payment_date, amount, students_covered || null, comment]);
-        client.release();
+        await client.query('BEGIN');
+
+        // 1. Guardar el abono del cliente
+        const paymentResult = await client.query(
+            `INSERT INTO payments (quote_id, payment_date, amount, students_covered, comment) 
+             VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+            [quoteId, payment_date, amount, students_covered || null, comment]
+        );
+        const newPaymentId = paymentResult.rows[0].id;
+
+        // --- INICIO DE LA LÓGICA DE COMISIONES ---
+
+        // 2. Obtener la información necesaria: nombre del asesor de la cotización
+        const quoteResult = await client.query('SELECT advisorname FROM quotes WHERE id = $1', [quoteId]);
+        const advisorName = quoteResult.rows[0].advisorname;
+
+        // 3. Buscar al asesor en nuestra nueva tabla de asesores
+        const advisorResult = await client.query('SELECT * FROM advisors WHERE name = $1', [advisorName]);
+
+        if (advisorResult.rows.length > 0) {
+            const advisor = advisorResult.rows[0];
+            const baseAmount = parseFloat(amount);
+            
+            // 4. Calcular y guardar la comisión de venta del asesor
+            const advisorCommissionRate = parseFloat(advisor.commission_rate);
+            const advisorCommissionAmount = baseAmount * advisorCommissionRate;
+
+            await client.query(
+                `INSERT INTO commissions (payment_id, advisor_id, commission_type, base_amount, commission_rate, commission_amount)
+                 VALUES ($1, $2, 'venta', $3, $4, $5)`,
+                [newPaymentId, advisor.id, baseAmount, advisorCommissionRate, advisorCommissionAmount]
+            );
+            
+            // 5. Si el vendedor NO es el coordinador, calcular la comisión del coordinador
+            if (!advisor.is_coordinator) {
+                const coordinatorRateResult = await client.query(`SELECT value FROM app_settings WHERE key = 'coordinator_override_rate'`);
+                const coordinatorResult = await client.query(`SELECT * FROM advisors WHERE is_coordinator = true LIMIT 1`);
+
+                if (coordinatorRateResult.rows.length > 0 && coordinatorResult.rows.length > 0) {
+                    const coordinator = coordinatorResult.rows[0];
+                    const coordinatorCommissionRate = parseFloat(coordinatorRateResult.rows[0].value);
+                    const coordinatorCommissionAmount = baseAmount * coordinatorCommissionRate;
+
+                    await client.query(
+                        `INSERT INTO commissions (payment_id, advisor_id, commission_type, base_amount, commission_rate, commission_amount)
+                         VALUES ($1, $2, 'coordinador', $3, $4, $5)`,
+                        [newPaymentId, coordinator.id, baseAmount, coordinatorCommissionRate, coordinatorCommissionAmount]
+                    );
+                }
+            }
+        }
+        // --- FIN DE LA LÓGICA DE COMISIONES ---
+
+        await client.query('COMMIT');
         res.redirect(`/proyecto/${centerId}`);
+
     } catch (error) {
-        console.error("Error al guardar el pago:", error);
+        await client.query('ROLLBACK');
+        console.error("Error al guardar el pago y procesar comisiones:", error);
         res.status(500).send('<h1>Error al guardar el pago ❌</h1>');
+    } finally {
+        client.release();
     }
 });
-
 app.post('/proyecto/:id/nuevo-gasto', requireLogin, requireAdminOrCoord, async (req, res) => {
     const quoteId = req.params.id;
     const { centerId, expense_date, supplier_id, amount, description, type } = req.body;
