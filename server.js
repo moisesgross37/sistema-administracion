@@ -198,7 +198,8 @@ app.get('/', requireLogin, requireAdminOrCoord, (req, res) => {
                 <div class="module">
                     <h2>Personal y Pagos</h2>
                     <div class="dashboard">
-                        <a href="/gestionar-asesores" class="dashboard-card"><h3>📊 Gestionar Asesores y Comisiones</h3><p>Define asesores, al coordinador y sus tasas de comisión.</p></a>
+                        <a href="/gestionar-asesores" class="dashboard-card"><h3>📊 Gestionar Asesores</h3><p>Define asesores, al coordinador y sus tasas de comisión.</p></a>
+                        <a href="/pagar-comisiones" class="dashboard-card"><h3>💵 Pagar Comisiones</h3><p>Revisa y marca como pagadas las comisiones pendientes.</p></a>
                         <a href="/empleados" class="dashboard-card"><h3>👥 Gestionar Empleados</h3><p>Añade o edita la información de tu personal de nómina.</p></a>
                         <a href="/gestionar-avances" class="dashboard-card"><h3>💰 Gestionar Avances</h3><p>Registra y consulta los avances de sueldo.</p></a>
                         <a href="/generar-nomina" class="dashboard-card"><h3>💵 Generar Nómina</h3><p>Calcula la nómina quincenal de tu equipo.</p></a>
@@ -1159,6 +1160,134 @@ app.get('/empleados', requireLogin, requireAdminOrCoord, async (req, res) => {
     } catch (error) {
         console.error("Error al obtener empleados:", error);
         res.status(500).send('<h1>Error al cargar la página de empleados ❌</h1>');
+    }
+});
+
+// =======================================================
+//   NUEVAS RUTAS PARA VER Y PAGAR COMISIONES
+// =======================================================
+
+app.get('/pagar-comisiones', requireLogin, requireAdminOrCoord, async (req, res) => {
+    try {
+        const client = await pool.connect();
+        const [advisorsResult, commissionsResult] = await Promise.all([
+            client.query('SELECT * FROM advisors ORDER BY name ASC'),
+            client.query(`
+                SELECT c.*, a.name as advisor_name, q.clientname 
+                FROM commissions c
+                JOIN advisors a ON c.advisor_id = a.id
+                JOIN payments p ON c.payment_id = p.id
+                JOIN quotes q ON p.quote_id = q.id
+                WHERE c.status = 'pendiente' 
+                ORDER BY a.name, c.created_at ASC
+            `)
+        ]);
+        client.release();
+
+        const advisors = advisorsResult.rows;
+        const commissions = commissionsResult.rows;
+
+        const totalPendiente = commissions.reduce((sum, c) => sum + parseFloat(c.commission_amount), 0);
+
+        let advisorsOptionsHtml = advisors.map(a => `<option value="${a.id}">${a.name}</option>`).join('');
+
+        let commissionsHtml = commissions.map(c => `
+            <tr data-advisor-id="${c.advisor_id}">
+                <td><input type="checkbox" name="commission_ids" value="${c.id}" class="commission-checkbox"></td>
+                <td>${new Date(c.created_at).toLocaleDateString()}</td>
+                <td>${c.advisor_name}</td>
+                <td>${c.clientname}</td>
+                <td>Abono ID #${c.payment_id}</td>
+                <td>${c.commission_type === 'venta' ? 'Venta Directa' : 'Coordinación'}</td>
+                <td style="font-weight: bold;">$${parseFloat(c.commission_amount).toFixed(2)}</td>
+            </tr>
+        `).join('') || '<tr><td colspan="7">¡Felicidades! No hay comisiones pendientes de pago.</td></tr>';
+
+        res.send(`
+            <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
+                <div class="container">
+                    ${backToDashboardLink}
+                    <h2>Pagar Comisiones Pendientes</h2>
+                    <div class="summary">
+                        <div class="summary-box" style="grid-column: span 3; margin: auto;">
+                            <h3>Total Pendiente por Pagar</h3>
+                            <p class="amount red">$${totalPendiente.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                        </div>
+                    </div>
+
+                    <form action="/pagar-comisiones" method="POST">
+                        <div class="form-container" style="display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <label for="advisor-filter" style="font-weight: bold; margin-right: 10px;">Filtrar por Asesor:</label>
+                                <select id="advisor-filter" onchange="filterCommissions()">
+                                    <option value="all">Todos los Asesores</option>
+                                    ${advisorsOptionsHtml}
+                                </select>
+                            </div>
+                            <button type="submit" class="btn btn-activar">Pagar Comisiones Seleccionadas</button>
+                        </div>
+
+                        <hr style="margin: 20px 0;">
+                        <h3>Comisiones Pendientes</h3>
+                        <table id="commissions-table">
+                            <thead><tr><th><input type="checkbox" onclick="toggleAll(this)"></th><th>Fecha</th><th>Asesor</th><th>Cliente</th><th>Origen</th><th>Tipo</th><th>Monto Comisión</th></tr></thead>
+                            <tbody>${commissionsHtml}</tbody>
+                        </table>
+                    </form>
+                </div>
+                <script>
+                    function toggleAll(source) {
+                        const checkboxes = document.querySelectorAll('.commission-checkbox');
+                        for (let i = 0; i < checkboxes.length; i++) {
+                            if (checkboxes[i].closest('tr').style.display !== 'none') {
+                                checkboxes[i].checked = source.checked;
+                            }
+                        }
+                    }
+                    function filterCommissions() {
+                        const filter = document.getElementById('advisor-filter').value;
+                        const table = document.getElementById('commissions-table');
+                        const rows = table.getElementsByTagName('tr');
+                        for (let i = 1; i < rows.length; i++) { // Empezar en 1 para saltar el encabezado
+                            const advisorId = rows[i].getAttribute('data-advisor-id');
+                            if (filter === 'all' || advisorId === filter) {
+                                rows[i].style.display = '';
+                            } else {
+                                rows[i].style.display = 'none';
+                            }
+                        }
+                    }
+                </script>
+            </body></html>
+        `);
+    } catch (error) {
+        console.error("Error al cargar la página de comisiones:", error);
+        res.status(500).send('<h1>Error al cargar la página ❌</h1>');
+    }
+});
+
+app.post('/pagar-comisiones', requireLogin, requireAdminOrCoord, async (req, res) => {
+    let { commission_ids } = req.body;
+    if (!commission_ids) {
+        return res.redirect('/pagar-comisiones');
+    }
+
+    // Si solo se selecciona un checkbox, req.body.commission_ids será un string. Lo convertimos a array.
+    if (!Array.isArray(commission_ids)) {
+        commission_ids = [commission_ids];
+    }
+    
+    try {
+        const client = await pool.connect();
+        await client.query(
+            `UPDATE commissions SET status = 'pagada', paid_at = NOW() WHERE id = ANY($1::int[])`,
+            [commission_ids]
+        );
+        client.release();
+        res.redirect('/pagar-comisiones');
+    } catch (error) {
+        console.error("Error al marcar comisiones como pagadas:", error);
+        res.status(500).send('<h1>Error al procesar el pago de comisiones ❌</h1>');
     }
 });
 
