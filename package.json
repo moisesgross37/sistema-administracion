@@ -9,6 +9,7 @@
     "db:migrate-advances": "node migrate-advances.js",
     "db:migrate-ap": "node migrate-accounts-payable.js",
     "db:migrate-commissions": "node migrate-commissions.js",
+    "db:migrate-pc": "node migrate-petty-cash.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
