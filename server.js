@@ -188,6 +188,7 @@ app.get('/', requireLogin, requireAdminOrCoord, (req, res) => {
                 <div class="module">
                     <h2>Finanzas y Contabilidad</h2>
                     <div class="dashboard">
+                        <a href="/caja-chica" class="dashboard-card"><h3>💰 Caja Chica</h3><p>Gestiona el fondo, gastos y cierres de caja chica.</p></a>
                         <a href="/cuentas-por-pagar" class="dashboard-card"><h3>🧾 Cuentas por Pagar</h3><p>Gestiona las facturas pendientes de tus suplidores.</p></a>
                         <a href="/cuentas-por-cobrar" class="dashboard-card"><h3>📊 Cuentas por Cobrar</h3><p>Consulta un resumen de todas las deudas pendientes.</p></a>
                         <a href="/reporte-gastos" class="dashboard-card"><h3>🧾 Reporte de Gastos</h3><p>Consulta un resumen de todos los gastos de la empresa.</p></a>
@@ -1059,6 +1060,150 @@ app.get('/gastos-generales', requireLogin, requireAdminOrCoord, async (req, res)
 });
 
 // --- RUTA PARA GUARDAR UN NUEVO GASTO GENERAL ---
+
+// =======================================================
+//   NUEVAS RUTAS PARA CAJA CHICA
+// =======================================================
+app.get('/caja-chica', requireLogin, requireAdminOrCoord, async (req, res) => {
+    try {
+        const client = await pool.connect();
+        const activeCycleResult = await client.query("SELECT * FROM caja_chica_ciclos WHERE estado = 'abierto' LIMIT 1");
+        
+        if (activeCycleResult.rows.length > 0) {
+            // --- VISTA CUANDO HAY UN CICLO ABIERTO ---
+            const activeCycle = activeCycleResult.rows[0];
+            const [suppliersResult, expensesResult] = await Promise.all([
+                client.query('SELECT * FROM suppliers ORDER BY name ASC'),
+                client.query(`
+                    SELECT e.*, s.name as supplier_name 
+                    FROM expenses e
+                    JOIN suppliers s ON e.supplier_id = s.id
+                    WHERE e.caja_chica_ciclo_id = $1 
+                    ORDER BY e.expense_date DESC`, 
+                    [activeCycle.id]
+                )
+            ]);
+            
+            const suppliers = suppliersResult.rows;
+            const expenses = expensesResult.rows;
+            const totalGastado = expenses.reduce((sum, exp) => sum + parseFloat(exp.amount), 0);
+            const balanceActual = parseFloat(activeCycle.fondo_inicial) - totalGastado;
+            
+            let suppliersOptionsHtml = suppliers.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+            let expensesHtml = expenses.map(e => `
+                <tr>
+                    <td>${new Date(e.expense_date).toLocaleDateString()}</td>
+                    <td>${e.supplier_name}</td>
+                    <td>${e.description}</td>
+                    <td>$${parseFloat(e.amount).toFixed(2)}</td>
+                </tr>
+            `).join('') || '<tr><td colspan="4">No hay gastos registrados en este ciclo.</td></tr>';
+
+            res.send(`
+                <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
+                    <div class="container">
+                        ${backToDashboardLink}
+                        <h2>Gestión de Caja Chica (Ciclo Abierto)</h2>
+                        <div class="summary">
+                            <div class="summary-box"><h3>Fondo Inicial</h3><p class="amount">$${parseFloat(activeCycle.fondo_inicial).toFixed(2)}</p></div>
+                            <div class="summary-box"><h3>Total Gastado</h3><p class="amount orange">$${totalGastado.toFixed(2)}</p></div>
+                            <div class="summary-box"><h3>Balance Restante</h3><p class="amount green">$${balanceActual.toFixed(2)}</p></div>
+                        </div>
+                        <div class="form-container">
+                            <h3>Registrar Gasto de Caja Chica</h3>
+                            <form action="/caja-chica/nuevo-gasto" method="POST">
+                                <input type="hidden" name="cycleId" value="${activeCycle.id}">
+                                <div class="form-group"><label>Fecha:</label><input type="date" name="expense_date" required></div>
+                                <div class="form-group"><label>Suplidor:</label><select name="supplier_id" required>${suppliersOptionsHtml}</select></div>
+                                <div class="form-group"><label>Monto:</label><input type="number" name="amount" step="0.01" required></div>
+                                <div class="form-group"><label>Descripción / Concepto:</label><textarea name="description" rows="2" required></textarea></div>
+                                <button type="submit" class="btn">Guardar Gasto</button>
+                            </form>
+                        </div>
+                        <hr style="margin: 40px 0;">
+                        <h3>Gastos de este Ciclo</h3>
+                        <table>
+                            <thead><tr><th>Fecha</th><th>Suplidor</th><th>Descripción</th><th>Monto</th></tr></thead>
+                            <tbody>${expensesHtml}</tbody>
+                        </table>
+                    </div>
+                </body></html>
+            `);
+
+        } else {
+            // --- VISTA CUANDO NO HAY CICLOS ABIERTOS ---
+            const closedCyclesResult = await client.query("SELECT * FROM caja_chica_ciclos WHERE estado = 'cerrado' ORDER BY fecha_inicio DESC");
+            // Aquí mostraremos el historial de ciclos cerrados en el futuro. Por ahora, solo el formulario para abrir uno.
+            
+            res.send(`
+                <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
+                    <div class="container">
+                        ${backToDashboardLink}
+                        <h2>Gestión de Caja Chica</h2>
+                        <div class="form-container">
+                            <h3>No hay un ciclo de caja chica activo.</h3>
+                            <p>Para empezar a registrar gastos, primero debes abrir un nuevo ciclo con un fondo inicial.</p>
+                            <form action="/caja-chica/abrir-ciclo" method="POST">
+                                <div class="form-group">
+                                    <label for="fondo_inicial">Monto del Fondo Inicial:</label>
+                                    <input type="number" id="fondo_inicial" name="fondo_inicial" step="0.01" required>
+                                </div>
+                                <button type="submit" class="btn">Abrir Nuevo Ciclo</button>
+                            </form>
+                        </div>
+                    </div>
+                </body></html>
+            `);
+        }
+        client.release();
+    } catch (error) {
+        console.error("Error al cargar la página de caja chica:", error);
+        res.status(500).send('<h1>Error al cargar la página ❌</h1>');
+    }
+});
+
+// --- RUTA PARA ABRIR UN NUEVO CICLO DE CAJA CHICA ---
+app.post('/caja-chica/abrir-ciclo', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { fondo_inicial } = req.body;
+    if (!fondo_inicial || parseFloat(fondo_inicial) <= 0) {
+        return res.status(400).send("El fondo inicial debe ser un número mayor a cero.");
+    }
+    try {
+        const client = await pool.connect();
+        await client.query(
+            `INSERT INTO caja_chica_ciclos (fecha_inicio, fondo_inicial, estado) VALUES (NOW(), $1, 'abierto')`,
+            [fondo_inicial]
+        );
+        client.release();
+        res.redirect('/caja-chica');
+    } catch (error) {
+        console.error("Error al abrir ciclo de caja chica:", error);
+        res.status(500).send('<h1>Error al abrir el ciclo ❌</h1>');
+    }
+});
+
+// --- RUTA PARA REGISTRAR UN NUEVO GASTO EN EL CICLO ACTIVO ---
+app.post('/caja-chica/nuevo-gasto', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { cycleId, expense_date, supplier_id, amount, description } = req.body;
+    if (!cycleId || !expense_date || !supplier_id || !amount || !description) {
+        return res.status(400).send("Todos los campos son obligatorios.");
+    }
+    try {
+        const client = await pool.connect();
+        // Insertamos el gasto y lo vinculamos al ID del ciclo de caja chica
+        await client.query(
+            `INSERT INTO expenses (expense_date, supplier_id, amount, description, type, caja_chica_ciclo_id) 
+             VALUES ($1, $2, $3, $4, 'Sin Valor Fiscal', $5)`,
+            [expense_date, supplier_id, amount, description, cycleId]
+        );
+        client.release();
+        res.redirect('/caja-chica');
+    } catch (error) {
+        console.error("Error al registrar gasto de caja chica:", error);
+        res.status(500).send('<h1>Error al registrar el gasto ❌</h1>');
+    }
+});
+
 app.post('/gastos-generales', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { expense_date, supplier_id, amount, description, type } = req.body;
     if (!expense_date || !supplier_id || !amount || !description) {
