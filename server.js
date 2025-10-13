@@ -420,9 +420,9 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
             const hoy = new Date();
             hoy.setHours(0,0,0,0);
             const fechaVencimiento = inv.fecha_vencimiento ? new Date(inv.fecha_vencimiento) : null;
-            let estiloFila = '';
+            let estiloFila = 'style="cursor: pointer;" onclick="window.location.href=\'/factura-suplidor/' + inv.id + '\';"';
             if (fechaVencimiento && fechaVencimiento < hoy) {
-                estiloFila = 'style="background-color: #f8d7da; color: #721c24;"'; // Estilo para facturas vencidas
+                estiloFila = 'style="background-color: #f8d7da; color: #721c24; cursor: pointer;" onclick="window.location.href=\'/factura-suplidor/' + inv.id + '\';"';
             }
             const balance = parseFloat(inv.monto_total) - parseFloat(inv.total_pagado);
 
@@ -476,7 +476,6 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
         res.status(500).send('<h1>Error al cargar la página ❌</h1>');
     }
 });
-
 // --- RUTA PARA GUARDAR UNA NUEVA FACTURA DE SUPLIDOR ---
 app.post('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { supplier_id, numero_factura, fecha_factura, fecha_vencimiento, monto_total, descripcion } = req.body;
@@ -497,7 +496,194 @@ app.post('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, re
         res.status(500).send('<h1>Error al guardar la factura ❌</h1>');
     }
 });
+// =======================================================
+//   NUEVAS RUTAS PARA DETALLES Y PAGOS DE FACTURAS A SUPLIDORES
+// =======================================================
 
+// --- PÁGINA DE DETALLE DE UNA FACTURA ESPECÍFICA ---
+app.get('/factura-suplidor/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { id } = req.params;
+    try {
+        const client = await pool.connect();
+        const invoiceResult = await client.query(
+            `SELECT f.*, s.name as supplier_name 
+             FROM facturas_suplidores f
+             JOIN suppliers s ON f.supplier_id = s.id 
+             WHERE f.id = $1`, [id]);
+        
+        const paymentsResult = await client.query(
+            `SELECT * FROM pagos_a_suplidores WHERE factura_id = $1 ORDER BY payment_date DESC`, [id]);
+        client.release();
+
+        if (invoiceResult.rows.length === 0) {
+            return res.status(404).send('Factura no encontrada.');
+        }
+
+        const invoice = invoiceResult.rows[0];
+        const payments = paymentsResult.rows;
+
+        const totalPagado = payments.reduce((sum, p) => sum + parseFloat(p.amount_paid), 0);
+        const balancePendiente = parseFloat(invoice.monto_total) - totalPagado;
+
+        let paymentsHtml = payments.map(p => `
+            <tr>
+                <td>${new Date(p.payment_date).toLocaleDateString()}</td>
+                <td>$${parseFloat(p.amount_paid).toFixed(2)}</td>
+                <td>${p.payment_method || 'N/A'}</td>
+                <td style="text-align:center;">
+                    <a href="/recibo-pago-suplidor/${p.id}/pdf" target="_blank" class="btn" style="padding: 5px 10px; font-size: 14px;">Imprimir</a>
+                </td>
+            </tr>
+        `).join('') || '<tr><td colspan="4">No se han registrado pagos para esta factura.</td></tr>';
+
+        res.send(`
+            <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
+                <div class="container">
+                    <a href="/cuentas-por-pagar" class="back-link">↩️ Volver a Cuentas por Pagar</a>
+                    <h2>Detalle de Factura: ${invoice.numero_factura || `ID ${invoice.id}`}</h2>
+                    <p><strong>Suplidor:</strong> ${invoice.supplier_name}</p>
+                    
+                    <div class="summary">
+                        <div class="summary-box"><h3>Monto Total</h3><p class="amount">$${parseFloat(invoice.monto_total).toFixed(2)}</p></div>
+                        <div class="summary-box"><h3>Total Pagado</h3><p class="amount green">$${totalPagado.toFixed(2)}</p></div>
+                        <div class="summary-box"><h3>Balance Pendiente</h3><p class="amount red">$${balancePendiente.toFixed(2)}</p></div>
+                    </div>
+
+                    ${balancePendiente > 0 ? `
+                    <div class="form-container">
+                        <h3>Registrar Nuevo Abono / Pago</h3>
+                        <form action="/factura-suplidor/${id}/registrar-pago" method="POST">
+                            <div class="form-group"><label>Fecha del Pago:</label><input type="date" name="payment_date" required></div>
+                            <div class="form-group"><label>Monto Pagado:</label><input type="number" name="amount_paid" step="0.01" max="${balancePendiente.toFixed(2)}" required></div>
+                            <div class="form-group"><label>Método de Pago (Opcional):</label><input type="text" name="payment_method" placeholder="Ej: Transferencia, Efectivo..."></div>
+                            <div class="form-group"><label>Notas (Opcional):</label><textarea name="notes" rows="2"></textarea></div>
+                            <button type="submit" class="btn">Guardar Pago</button>
+                        </form>
+                    </div>` : '<h3 style="text-align:center; color: #28a745;">Esta factura ha sido saldada.</h3>'}
+
+                    <hr style="margin: 40px 0;">
+                    <h3>Historial de Pagos Realizados</h3>
+                    <table>
+                        <thead><tr><th>Fecha de Pago</th><th>Monto</th><th>Método</th><th>Acciones</th></tr></thead>
+                        <tbody>${paymentsHtml}</tbody>
+                    </table>
+                </div>
+            </body></html>
+        `);
+    } catch (error) {
+        console.error("Error al cargar detalle de factura:", error);
+        res.status(500).send('<h1>Error al cargar la página ❌</h1>');
+    }
+});
+
+// --- RUTA PARA GUARDAR UN PAGO A UNA FACTURA ---
+app.post('/factura-suplidor/:facturaId/registrar-pago', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { facturaId } = req.params;
+    const { payment_date, amount_paid, payment_method, notes } = req.body;
+    
+    if (!payment_date || !amount_paid) {
+        return res.status(400).send("La fecha y el monto son obligatorios.");
+    }
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        await client.query(
+            `INSERT INTO pagos_a_suplidores (factura_id, payment_date, amount_paid, payment_method, notes) 
+             VALUES ($1, $2, $3, $4, $5)`,
+            [facturaId, payment_date, amount_paid, payment_method || null, notes || null]
+        );
+
+        const totalsResult = await client.query(
+            `SELECT 
+                f.monto_total,
+                COALESCE(SUM(p.amount_paid), 0) as total_pagado
+             FROM facturas_suplidores f
+             LEFT JOIN pagos_a_suplidores p ON f.id = p.factura_id
+             WHERE f.id = $1
+             GROUP BY f.monto_total`, [facturaId]
+        );
+
+        const montoTotal = parseFloat(totalsResult.rows[0].monto_total);
+        const totalPagado = parseFloat(totalsResult.rows[0].total_pagado);
+        const nuevoEstado = totalPagado >= montoTotal ? 'pagada' : 'pagada parcialmente';
+
+        await client.query(
+            `UPDATE facturas_suplidores SET estado = $1 WHERE id = $2`,
+            [nuevoEstado, facturaId]
+        );
+
+        await client.query('COMMIT');
+        res.redirect(`/factura-suplidor/${facturaId}`);
+
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error("Error al registrar el pago:", error);
+        res.status(500).send('<h1>Error al registrar el pago ❌</h1>');
+    } finally {
+        client.release();
+    }
+});
+
+// --- RUTA PARA GENERAR EL PDF DEL RECIBO DE PAGO A SUPLIDOR ---
+app.get('/recibo-pago-suplidor/:pagoId/pdf', requireLogin, requireAdminOrCoord, async (req, res) => {
+    try {
+        const { pagoId } = req.params;
+        const client = await pool.connect();
+        const result = await client.query(`
+            SELECT p.*, f.numero_factura, f.descripcion, s.name as supplier_name 
+            FROM pagos_a_suplidores p
+            JOIN facturas_suplidores f ON p.factura_id = f.id
+            JOIN suppliers s ON f.supplier_id = s.id
+            WHERE p.id = $1`, [pagoId]);
+        client.release();
+
+        if (result.rows.length === 0) {
+            return res.status(404).send('Pago no encontrado.');
+        }
+        const pago = result.rows[0];
+
+        const doc = new PDFDocument({ size: 'A4', margin: 50 });
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename=pago-suplidor-${pago.id}.pdf`);
+        doc.pipe(res);
+
+        doc.image(path.join(__dirname, 'plantillas', 'membrete.jpg'), 0, 0, { width: doc.page.width, height: doc.page.height });
+        
+        doc.y = 280;
+        doc.font('Helvetica-Bold').fontSize(20).text('COMPROBANTE DE PAGO A SUPLIDOR', { align: 'center' });
+        doc.moveDown(3);
+
+        doc.font('Helvetica').fontSize(11);
+        doc.text(`Fecha de Pago: ${new Date(pago.payment_date).toLocaleDateString('es-DO')}`, { align: 'right' });
+        doc.moveDown();
+
+        doc.font('Helvetica-Bold').text('PAGADO A: ').font('Helvetica').text(pago.supplier_name);
+        doc.moveDown();
+        
+        const formattedAmount = parseFloat(pago.amount_paid).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        doc.font('Helvetica-Bold').text('MONTO PAGADO: ').font('Helvetica-Bold').fontSize(14).text(`RD$ ${formattedAmount}`);
+        doc.moveDown();
+
+        doc.font('Helvetica-Bold').fontSize(11).text('EN CONCEPTO DE:').font('Helvetica').fontSize(10).text(`Abono a factura #${pago.numero_factura || pago.factura_id} (${pago.descripcion})`);
+        doc.moveDown(8);
+
+        doc.font('Helvetica').fontSize(10);
+        const signatureY = doc.y > 650 ? 700 : doc.y + 80;
+        doc.text('___________________________', 70, signatureY);
+        doc.font('Helvetica-Bold').text(pago.supplier_name, 70, signatureY + 15);
+        doc.font('Helvetica').text('Recibido Conforme (Firma)', 70, signatureY + 30);
+
+        doc.text('___________________________', 350, signatureY, { align: 'right' });
+        doc.font('Helvetica-Bold').text('Autorizado por', 350, signatureY + 15, { align: 'right' });
+
+        doc.end();
+    } catch (error) {
+        console.error("Error al generar el PDF de pago a suplidor:", error);
+        res.status(500).send('Error al generar el recibo PDF.');
+    }
+});
 // =======================================================
 //   NUEVAS RUTAS PARA CUENTAS POR PAGAR
 // =======================================================
