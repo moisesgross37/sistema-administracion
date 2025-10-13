@@ -1064,6 +1064,10 @@ app.get('/gastos-generales', requireLogin, requireAdminOrCoord, async (req, res)
 // =======================================================
 //   NUEVAS RUTAS PARA CAJA CHICA
 // =======================================================
+// =======================================================
+//   NUEVAS RUTAS PARA CAJA CHICA (VERSIÓN COMPLETA)
+// =======================================================
+
 app.get('/caja-chica', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
@@ -1109,6 +1113,14 @@ app.get('/caja-chica', requireLogin, requireAdminOrCoord, async (req, res) => {
                             <div class="summary-box"><h3>Total Gastado</h3><p class="amount orange">$${totalGastado.toFixed(2)}</p></div>
                             <div class="summary-box"><h3>Balance Restante</h3><p class="amount green">$${balanceActual.toFixed(2)}</p></div>
                         </div>
+                        <div style="text-align: center; margin-bottom: 20px;">
+                            <form action="/caja-chica/cerrar-ciclo" method="POST" onsubmit="return confirm('¿Estás seguro de que deseas cerrar este ciclo de caja? Esta acción no se puede deshacer.');">
+                                <input type="hidden" name="cycleId" value="${activeCycle.id}">
+                                <input type="hidden" name="total_gastado" value="${totalGastado}">
+                                <input type="hidden" name="balance_final" value="${balanceActual}">
+                                <button type="submit" class="btn" style="background-color: #dc3545;">Cerrar Ciclo y Generar Reporte</button>
+                            </form>
+                        </div>
                         <div class="form-container">
                             <h3>Registrar Gasto de Caja Chica</h3>
                             <form action="/caja-chica/nuevo-gasto" method="POST">
@@ -1133,8 +1145,17 @@ app.get('/caja-chica', requireLogin, requireAdminOrCoord, async (req, res) => {
         } else {
             // --- VISTA CUANDO NO HAY CICLOS ABIERTOS ---
             const closedCyclesResult = await client.query("SELECT * FROM caja_chica_ciclos WHERE estado = 'cerrado' ORDER BY fecha_inicio DESC");
-            // Aquí mostraremos el historial de ciclos cerrados en el futuro. Por ahora, solo el formulario para abrir uno.
-            
+            const closedCycles = closedCyclesResult.rows;
+            let closedCyclesHtml = closedCycles.map(c => `
+                <tr>
+                    <td>${new Date(c.fecha_inicio).toLocaleDateString()}</td>
+                    <td>${new Date(c.fecha_cierre).toLocaleDateString()}</td>
+                    <td>$${parseFloat(c.fondo_inicial).toFixed(2)}</td>
+                    <td>$${parseFloat(c.total_gastado).toFixed(2)}</td>
+                    <td><a href="/caja-chica/reporte/${c.id}/pdf" target="_blank" class="btn" style="padding: 5px 10px; font-size: 14px;">Ver Reporte</a></td>
+                </tr>
+            `).join('') || '<tr><td colspan="5">No hay ciclos de caja cerrados.</td></tr>';
+
             res.send(`
                 <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
                     <div class="container">
@@ -1151,6 +1172,12 @@ app.get('/caja-chica', requireLogin, requireAdminOrCoord, async (req, res) => {
                                 <button type="submit" class="btn">Abrir Nuevo Ciclo</button>
                             </form>
                         </div>
+                        <hr style="margin: 40px 0;">
+                        <h3>Historial de Ciclos Cerrados</h3>
+                        <table>
+                            <thead><tr><th>Fecha de Inicio</th><th>Fecha de Cierre</th><th>Fondo Inicial</th><th>Total Gastado</th><th>Acciones</th></tr></thead>
+                            <tbody>${closedCyclesHtml}</tbody>
+                        </table>
                     </div>
                 </body></html>
             `);
@@ -1162,7 +1189,6 @@ app.get('/caja-chica', requireLogin, requireAdminOrCoord, async (req, res) => {
     }
 });
 
-// --- RUTA PARA ABRIR UN NUEVO CICLO DE CAJA CHICA ---
 app.post('/caja-chica/abrir-ciclo', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { fondo_inicial } = req.body;
     if (!fondo_inicial || parseFloat(fondo_inicial) <= 0) {
@@ -1182,7 +1208,6 @@ app.post('/caja-chica/abrir-ciclo', requireLogin, requireAdminOrCoord, async (re
     }
 });
 
-// --- RUTA PARA REGISTRAR UN NUEVO GASTO EN EL CICLO ACTIVO ---
 app.post('/caja-chica/nuevo-gasto', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { cycleId, expense_date, supplier_id, amount, description } = req.body;
     if (!cycleId || !expense_date || !supplier_id || !amount || !description) {
@@ -1190,7 +1215,6 @@ app.post('/caja-chica/nuevo-gasto', requireLogin, requireAdminOrCoord, async (re
     }
     try {
         const client = await pool.connect();
-        // Insertamos el gasto y lo vinculamos al ID del ciclo de caja chica
         await client.query(
             `INSERT INTO expenses (expense_date, supplier_id, amount, description, type, caja_chica_ciclo_id) 
              VALUES ($1, $2, $3, $4, 'Sin Valor Fiscal', $5)`,
@@ -1204,6 +1228,84 @@ app.post('/caja-chica/nuevo-gasto', requireLogin, requireAdminOrCoord, async (re
     }
 });
 
+// --- RUTA PARA CERRAR EL CICLO ---
+app.post('/caja-chica/cerrar-ciclo', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { cycleId, total_gastado, balance_final } = req.body;
+    try {
+        const client = await pool.connect();
+        await client.query(
+            `UPDATE caja_chica_ciclos 
+             SET fecha_cierre = NOW(), estado = 'cerrado', total_gastado = $1, balance_final = $2 
+             WHERE id = $3`,
+            [total_gastado, balance_final, cycleId]
+        );
+        client.release();
+        res.redirect('/caja-chica');
+    } catch (error) {
+        console.error("Error al cerrar el ciclo de caja chica:", error);
+        res.status(500).send('<h1>Error al cerrar el ciclo ❌</h1>');
+    }
+});
+
+// --- RUTA PARA GENERAR EL REPORTE PDF DEL CIERRE ---
+app.get('/caja-chica/reporte/:cycleId/pdf', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { cycleId } = req.params;
+    try {
+        const client = await pool.connect();
+        const cycleResult = await client.query("SELECT * FROM caja_chica_ciclos WHERE id = $1 AND estado = 'cerrado'", [cycleId]);
+        if (cycleResult.rows.length === 0) {
+            client.release();
+            return res.status(404).send('Ciclo de caja no encontrado o no está cerrado.');
+        }
+        const cycle = cycleResult.rows[0];
+
+        const expensesResult = await client.query(`
+            SELECT e.*, s.name as supplier_name 
+            FROM expenses e 
+            JOIN suppliers s ON e.supplier_id = s.id 
+            WHERE e.caja_chica_ciclo_id = $1 
+            ORDER BY e.expense_date ASC`, [cycleId]
+        );
+        client.release();
+        const expenses = expensesResult.rows;
+        
+        const doc = new PDFDocument({ size: 'A4', margin: 50 });
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename=reporte-caja-chica-${cycle.id}.pdf`);
+        doc.pipe(res);
+        
+        doc.image(path.join(__dirname, 'plantillas', 'membrete.jpg'), 0, 0, { width: doc.page.width, height: doc.page.height });
+        
+        doc.y = 250;
+        doc.font('Helvetica-Bold').fontSize(18).text('REPORTE DE CIERRE DE CAJA CHICA', { align: 'center' });
+        doc.moveDown(2);
+
+        doc.font('Helvetica').fontSize(11);
+        doc.text(`Período del ${new Date(cycle.fecha_inicio).toLocaleDateString()} al ${new Date(cycle.fecha_cierre).toLocaleDateString()}`);
+        doc.moveDown(2);
+
+        doc.font('Helvetica-Bold').text('FONDO INICIAL:', { continued: true }).font('Helvetica').text(` $${parseFloat(cycle.fondo_inicial).toFixed(2)}`);
+        doc.font('Helvetica-Bold').text('TOTAL GASTADO:', { continued: true }).font('Helvetica').text(` $${parseFloat(cycle.total_gastado).toFixed(2)}`);
+        doc.font('Helvetica-Bold').text('BALANCE FINAL:', { continued: true }).font('Helvetica').text(` $${parseFloat(cycle.balance_final).toFixed(2)}`);
+        doc.moveDown(2);
+
+        doc.font('Helvetica-Bold').fontSize(14).text('Detalle de Gastos');
+        doc.moveTo(doc.x, doc.y).lineTo(doc.page.width - 50, doc.y).stroke();
+        doc.moveDown();
+
+        expenses.forEach(e => {
+            doc.font('Helvetica').fontSize(10);
+            doc.text(`${new Date(e.expense_date).toLocaleDateString()} - ${e.supplier_name} - ${e.description}`, { continued: true, width: 450 });
+            doc.text(`$${parseFloat(e.amount).toFixed(2)}`, { align: 'right' });
+            doc.moveDown(0.5);
+        });
+
+        doc.end();
+    } catch (error) {
+        console.error("Error al generar el reporte de caja chica:", error);
+        res.status(500).send('<h1>Error al generar el reporte ❌</h1>');
+    }
+});
 app.post('/gastos-generales', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { expense_date, supplier_id, amount, description, type } = req.body;
     if (!expense_date || !supplier_id || !amount || !description) {
@@ -1362,15 +1464,16 @@ app.get('/reporte-gastos', requireLogin, requireAdminOrCoord, async (req, res) =
     try {
         const client = await pool.connect();
         
-        // --- CONSULTA MODIFICADA CON LEFT JOIN ---
         const result = await client.query(`
             SELECT 
                 e.*, 
                 s.name as supplier_name, 
-                q.clientname
+                q.clientname,
+                cc.id as ciclo_id
             FROM expenses e
             JOIN suppliers s ON e.supplier_id = s.id
             LEFT JOIN quotes q ON e.quote_id = q.id
+            LEFT JOIN caja_chica_ciclos cc ON e.caja_chica_ciclo_id = cc.id
             ORDER BY e.expense_date DESC;
         `);
         const expenses = result.rows;
@@ -1379,23 +1482,24 @@ app.get('/reporte-gastos', requireLogin, requireAdminOrCoord, async (req, res) =
         const totalGastado = expenses.reduce((sum, expense) => sum + parseFloat(expense.amount), 0);
         
         let expensesHtml = expenses.map(e => {
-            // --- LÓGICA MODIFICADA PARA MOSTRAR EL TIPO DE GASTO ---
-            const proyectoCliente = e.clientname 
-                ? e.clientname // Si tiene un cliente, lo muestra
-                : '<span style="color:#6c757d; font-style:italic;">Gasto Administrativo</span>'; // Si no, indica que es administrativo
+            let origenGasto = '<span style="color:#6c757d; font-style:italic;">Gasto General</span>';
+            if (e.clientname) {
+                origenGasto = `Proyecto: ${e.clientname}`;
+            } else if (e.ciclo_id) {
+                origenGasto = `Caja Chica (Ciclo #${e.ciclo_id})`;
+            }
 
             return `<tr>
                         <td>${new Date(e.expense_date).toLocaleDateString()}</td>
-                        <td>${proyectoCliente}</td>
+                        <td>${origenGasto}</td>
                         <td>${e.supplier_name}</td>
                         <td>${e.description}</td>
-                        <td>${e.type || ''}</td>
-                        <td style="font-weight: bold;">$${parseFloat(e.amount).toFixed(2)}</td>
+                        <td>$${parseFloat(e.amount).toFixed(2)}</td>
                     </tr>`;
         }).join('');
 
         if (expenses.length === 0) {
-            expensesHtml = '<tr><td colspan="6">No hay gastos registrados en el sistema.</td></tr>';
+            expensesHtml = '<tr><td colspan="5">No hay gastos registrados en el sistema.</td></tr>';
         }
 
         res.send(`
@@ -1409,7 +1513,7 @@ app.get('/reporte-gastos', requireLogin, requireAdminOrCoord, async (req, res) =
                             <p class="amount orange">$${totalGastado.toFixed(2)}</p>
                         </div>
                     </div>
-                    <table><thead><tr><th>Fecha</th><th>Proyecto / Origen</th><th>Suplidor</th><th>Descripción</th><th>Tipo</th><th>Monto</th></tr></thead><tbody>${expensesHtml}</tbody></table>
+                    <table><thead><tr><th>Fecha</th><th>Origen del Gasto</th><th>Suplidor</th><th>Descripción</th><th>Monto</th></tr></thead><tbody>${expensesHtml}</tbody></table>
                 </div>
             </body></html>`);
     } catch (error) {
@@ -1417,7 +1521,6 @@ app.get('/reporte-gastos', requireLogin, requireAdminOrCoord, async (req, res) =
         res.status(500).send('<h1>Error al cargar el reporte ❌</h1>');
     }
 });
-
 // =======================================================
 //   NUEVAS RUTAS PARA GESTIÓN DE ASESORES Y COMISIONES
 // =======================================================
