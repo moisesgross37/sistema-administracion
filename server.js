@@ -2497,7 +2497,23 @@ app.get('/recibo-avance/:advanceId/pdf', requireLogin, requireAdminOrCoord, asyn
 app.get('/generar-nomina', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
-        const result = await client.query('SELECT id, first_name, last_name, base_salary, payment_frequency FROM employees ORDER BY first_name, last_name ASC');
+        // Modificamos la consulta para que:
+        // 1. Solo traiga empleados que participan en nómina.
+        // 2. Traiga la suma de todos sus avances pendientes.
+        const result = await client.query(`
+            SELECT 
+                e.id, e.first_name, e.last_name, e.base_salary, e.payment_frequency,
+                COALESCE(a.total_avances, 0) as total_avances_pendientes
+            FROM employees e
+            LEFT JOIN (
+                SELECT employee_id, SUM(amount) as total_avances
+                FROM avances_empleado
+                WHERE status = 'pendiente'
+                GROUP BY employee_id
+            ) a ON e.id = a.employee_id
+            WHERE e.participa_en_nomina = TRUE
+            ORDER BY e.first_name, e.last_name ASC
+        `);
         const employees = result.rows;
         client.release();
 
@@ -2509,20 +2525,27 @@ app.get('/generar-nomina', requireLogin, requireAdminOrCoord, async (req, res) =
                 salaryForPeriod /= 2;
             }
 
+            // Calculamos el descuento y el pago neto inicial
+            const initialDeductions = parseFloat(e.total_avances_pendientes || 0);
+            const initialNetPay = salaryForPeriod + 0 - initialDeductions; // 0 para bonos iniciales
+
             return `
                 <tr data-employee-id="${e.id}">
                     <td>${e.first_name} ${e.last_name}</td>
                     <td data-base-salary="${salaryForPeriod.toFixed(2)}">$${salaryForPeriod.toFixed(2)}</td>
                     <td><input type="number" name="bonuses_${e.id}" class="payroll-input" step="0.01" value="0"></td>
-                    <td><input type="number" name="deductions_${e.id}" class="payroll-input" step="0.01" value="0"></td>
-                    <td class="net-pay" style="font-weight: bold;">$${salaryForPeriod.toFixed(2)}</td>
+                    
+                    <td><input type="number" name="deductions_${e.id}" class="payroll-input" step="0.01" value="${initialDeductions.toFixed(2)}"></td>
+                    
+                    <td class="net-pay" style="font-weight: bold;">$${initialNetPay.toFixed(2)}</td>
+                    
                     <td><textarea name="notes_${e.id}" rows="1" style="width: 100%;"></textarea></td>
                 </tr>
             `;
         }).join('');
 
         if (employees.length === 0) {
-            employeesRowsHtml = '<tr><td colspan="6">No hay empleados registrados. Primero añada empleados en "Gestionar Empleados".</td></tr>';
+            employeesRowsHtml = '<tr><td colspan="6">No hay empleados registrados o ninguno participa en la nómina.</td></tr>';
         }
 
         res.send(`
@@ -2586,38 +2609,47 @@ app.post('/guardar-nomina', requireLogin, requireAdminOrCoord, async (req, res) 
     try {
         await client.query('BEGIN');
 
-        // Obtenemos también la frecuencia de pago para el cálculo correcto
-        const employeesResult = await client.query('SELECT id, base_salary, payment_frequency FROM employees');
+        // Obtenemos solo los empleados que participan en nómina
+        const employeesResult = await client.query('SELECT id, base_salary, payment_frequency FROM employees WHERE participa_en_nomina = TRUE');
         const employees = employeesResult.rows;
 
         for (const employee of employees) {
             const employeeId = employee.id;
             
-            // --- INICIO DE LA CORRECCIÓN ---
             const monthlySalary = parseFloat(employee.base_salary || 0);
             let salaryForPeriod = monthlySalary;
-
-            // Si es quincenal, usamos la mitad del salario para los cálculos y para guardarlo
             if (employee.payment_frequency === 'quincenal') {
                 salaryForPeriod /= 2;
             }
-            // --- FIN DE LA CORRECCIÓN ---
 
             const bonuses = parseFloat(req.body[`bonuses_${employeeId}`] || 0);
             const deductions = parseFloat(req.body[`deductions_${employeeId}`] || 0);
             const notes = req.body[`notes_${employeeId}`] || '';
-            
             const netPay = salaryForPeriod + bonuses - deductions;
 
-            await client.query(
+            // 1. Insertamos el registro de nómina y obtenemos su nuevo ID
+            const payrollInsertResult = await client.query(
                 `INSERT INTO payroll_records (employee_id, pay_date, base_salary_paid, bonuses, deductions, net_pay, notes)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-                [employeeId, pay_date, salaryForPeriod, bonuses, deductions, netPay, notes] // Guardamos el salario del período, no el mensual
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)
+                 RETURNING id`, // Devolvemos el ID del registro creado
+                [employeeId, pay_date, salaryForPeriod, bonuses, deductions, netPay, notes]
             );
+
+            const newPayrollRecordId = payrollInsertResult.rows[0].id;
+
+            // 2. Si hubo descuentos, actualizamos los avances pendientes de este empleado
+            if (deductions > 0) {
+                await client.query(
+                    `UPDATE avances_empleado 
+                     SET status = 'pagado', payroll_record_id = $1 
+                     WHERE employee_id = $2 AND status = 'pendiente'`,
+                    [newPayrollRecordId, employeeId]
+                );
+            }
         }
 
         await client.query('COMMIT');
-        res.redirect('/historial-nomina'); // Redirigimos al historial para ver el resultado
+        res.redirect('/historial-nomina');
 
     } catch (error) {
         await client.query('ROLLBACK');
