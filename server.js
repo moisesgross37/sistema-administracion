@@ -1896,26 +1896,75 @@ app.post('/pagar-comisiones', requireLogin, requireAdminOrCoord, async (req, res
     if (!commission_ids) {
         return res.redirect('/pagar-comisiones');
     }
-
-    // Si solo se selecciona un checkbox, req.body.commission_ids será un string. Lo convertimos a array.
     if (!Array.isArray(commission_ids)) {
         commission_ids = [commission_ids];
     }
     
+    // Convertimos los IDs a números enteros para la consulta SQL
+    const commissionIdsInt = commission_ids.map(id => parseInt(id));
+
+    const client = await pool.connect();
     try {
-        const client = await pool.connect();
+        await client.query('BEGIN');
+
+        // 1. Obtenemos los detalles de las comisiones que se van a pagar
+        const commissionsToPayResult = await client.query(`
+            SELECT c.*, a.name as advisor_name, p.quote_id 
+            FROM commissions c
+            JOIN advisors a ON c.advisor_id = a.id
+            JOIN payments p ON c.payment_id = p.id
+            WHERE c.id = ANY($1::int[]) AND c.status = 'pendiente'`, 
+            [commissionIdsInt]
+        );
+        const commissionsToPay = commissionsToPayResult.rows;
+
+        if (commissionsToPay.length === 0) {
+            // Si por alguna razón no se encontraron comisiones pendientes con esos IDs
+            await client.query('ROLLBACK');
+            return res.status(404).send('No se encontraron comisiones pendientes válidas para pagar.');
+        }
+
+        // 2. Marcamos las comisiones como pagadas
         await client.query(
             `UPDATE commissions SET status = 'pagada', paid_at = NOW() WHERE id = ANY($1::int[])`,
-            [commission_ids]
+            [commissionIdsInt]
         );
-        client.release();
+
+        // 3. Registramos CADA comisión pagada como un GASTO del proyecto correspondiente
+        for (const commission of commissionsToPay) {
+            const expenseDescription = `Pago comisión ${commission.commission_type} a ${commission.advisor_name} por abono ID #${commission.payment_id}`;
+            const expenseAmount = parseFloat(commission.commission_amount);
+            const quoteId = commission.quote_id;
+
+            // Buscamos un suplidor llamado "Comisiones Internas" o similar. Si no existe, lo creamos.
+            let supplierResult = await client.query('SELECT id FROM suppliers WHERE name = $1', ['Comisiones Internas']);
+            let supplierId;
+            if (supplierResult.rows.length === 0) {
+                const newSupplier = await client.query('INSERT INTO suppliers (name) VALUES ($1) RETURNING id', ['Comisiones Internas']);
+                supplierId = newSupplier.rows[0].id;
+            } else {
+                supplierId = supplierResult.rows[0].id;
+            }
+
+            // Insertamos el gasto asociado al proyecto (quote_id)
+            await client.query(
+                `INSERT INTO expenses (expense_date, supplier_id, amount, description, type, quote_id, caja_chica_ciclo_id) 
+                 VALUES (NOW(), $1, $2, $3, 'Sin Valor Fiscal', $4, NULL)`,
+                [supplierId, expenseAmount, expenseDescription, quoteId]
+            );
+        }
+
+        await client.query('COMMIT');
         res.redirect('/pagar-comisiones');
+
     } catch (error) {
-        console.error("Error al marcar comisiones como pagadas:", error);
+        await client.query('ROLLBACK');
+        console.error("Error al procesar pago de comisiones y registrar gastos:", error);
         res.status(500).send('<h1>Error al procesar el pago de comisiones ❌</h1>');
+    } finally {
+        client.release();
     }
 });
-
 app.post('/empleados', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { first_name, last_name, cedula, hire_date, base_salary, payment_frequency, birth_date, address } = req.body;
 
