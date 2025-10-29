@@ -333,15 +333,20 @@ app.get('/ver-cotizacion-pdf/:quoteId', requireLogin, async (req, res) => {
     try {
         const { quoteId } = req.params;
         const gestionApiUrl = `https://be-gestion.onrender.com/api/quote-requests/${quoteId}/pdf`;
+
         const response = await axios.get(gestionApiUrl, {
             headers: {
-                'X-API-Key': 'MI_LLAVE_SECRETA_12345'
+                // --- CORRECCIÓN APLICADA AQUÍ ---
+                'X-API-Key': 'ProyectoConfeccion2025'
             },
             responseType: 'stream'
         });
+        
         res.setHeader('Content-Type', 'application/pdf');
         response.data.pipe(res);
+
     } catch (error) {
+        // Esta línea es la que nos dio el error 401
         console.error("Error en el proxy de PDF:", error.message);
         res.status(500).send("Error al obtener el documento de la cotización.");
     }
