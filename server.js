@@ -201,7 +201,8 @@ app.get('/', requireLogin, requireAdminOrCoord, (req, res) => {
                     <div class="dashboard">
                         <a href="/gestionar-asesores" class="dashboard-card"><h3>📊 Gestionar Asesores</h3><p>Define asesores, al coordinador y sus tasas de comisión.</p></a>
                         <a href="/pagar-comisiones" class="dashboard-card"><h3>💵 Pagar Comisiones</h3><p>Revisa y marca como pagadas las comisiones pendientes.</p></a>
-                        <a href="/empleados" class="dashboard-card"><h3>👥 Gestionar Empleados</h3><p>Añade o edita la información de tu personal de nómina.</p></a>
+                        <a href="/empleados" class="dashboard-card"><h3>👥 Gestionar Empleados</h3><p>Añade o edita la información de tu personal.</p></a>
+                        <a href="/gestionar-prestamos" class="dashboard-card"><h3>🏦 Gestionar Préstamos</h3><p>Registra y consulta préstamos a colaboradores.</p></a> 
                         <a href="/gestionar-avances" class="dashboard-card"><h3>💰 Gestionar Avances</h3><p>Registra y consulta los avances de sueldo.</p></a>
                         <a href="/generar-nomina" class="dashboard-card"><h3>💵 Generar Nómina</h3><p>Calcula la nómina quincenal de tu equipo.</p></a>
                         <a href="/historial-nomina" class="dashboard-card"><h3>📂 Historial de Nómina</h3><p>Consulta los registros de pagos de nómina anteriores.</p></a>
@@ -2137,7 +2138,98 @@ app.get('/gestionar-avances', requireLogin, requireAdminOrCoord, async (req, res
         res.status(500).send('<h1>Error al cargar la página ❌</h1>');
     }
 });
+// =======================================================
+//   NUEVAS RUTAS PARA GESTIÓN DE PRÉSTAMOS
+// =======================================================
 
+// --- PÁGINA PRINCIPAL DE GESTIÓN DE PRÉSTAMOS ---
+app.get('/gestionar-prestamos', requireLogin, requireAdminOrCoord, async (req, res) => {
+    try {
+        const client = await pool.connect();
+        // Obtenemos todos los empleados (para el selector) y los préstamos activos con su total pagado
+        const [employeesResult, loansResult] = await Promise.all([
+            client.query('SELECT id, first_name, last_name FROM employees ORDER BY first_name ASC'),
+            client.query(`
+                SELECT l.*, e.first_name, e.last_name, 
+                       COALESCE(lp.total_pagado, 0) as total_pagado
+                FROM loans l
+                JOIN employees e ON l.employee_id = e.id
+                LEFT JOIN (
+                    SELECT loan_id, SUM(amount_paid) as total_pagado 
+                    FROM loan_payments 
+                    GROUP BY loan_id
+                ) lp ON l.id = lp.loan_id
+                WHERE l.status = 'activo'
+                ORDER BY l.loan_date DESC
+            `)
+        ]);
+        client.release();
+
+        const employees = employeesResult.rows;
+        const loans = loansResult.rows;
+
+        let employeesOptionsHtml = employees.map(e => `<option value="${e.id}">${e.first_name} ${e.last_name}</option>`).join('');
+        
+        let loansHtml = loans.map(l => {
+            const balancePendiente = parseFloat(l.loan_amount) - parseFloat(l.total_pagado);
+            return `<tr style="cursor: pointer;" onclick="window.location.href='/prestamo/${l.id}';">
+                <td>${new Date(l.loan_date).toLocaleDateString()}</td>
+                <td>${l.first_name} ${l.last_name}</td>
+                <td>$${parseFloat(l.loan_amount).toFixed(2)}</td>
+                <td style="font-weight: bold; color: #dc3545;">$${balancePendiente.toFixed(2)}</td>
+                <td>${l.reason || ''}</td>
+            </tr>`
+        }).join('') || '<tr><td colspan="5">No hay préstamos activos registrados.</td></tr>';
+
+        res.send(`
+            <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
+                <div class="container">
+                    ${backToDashboardLink}
+                    <h2>Gestionar Préstamos a Colaboradores</h2>
+                    <div class="form-container">
+                        <h3>Registrar Nuevo Préstamo</h3>
+                        <form action="/gestionar-prestamos" method="POST">
+                            <div class="form-group"><label>Colaborador:</label><select name="employee_id" required><option value="">Seleccione...</option>${employeesOptionsHtml}</select></div>
+                            <div class="form-group"><label>Fecha del Préstamo:</label><input type="date" name="loan_date" required></div>
+                            <div class="form-group"><label>Monto del Préstamo:</label><input type="number" name="loan_amount" step="0.01" required></div>
+                            <div class="form-group"><label>Motivo / Concepto (Opcional):</label><textarea name="reason" rows="2"></textarea></div>
+                            <button type="submit" class="btn">Guardar Préstamo</button>
+                        </form>
+                    </div>
+                    <hr style="margin: 40px 0;">
+                    <h3>Préstamos Activos (Pendientes de Pago)</h3>
+                    <table>
+                        <thead><tr><th>Fecha Préstamo</th><th>Colaborador</th><th>Monto Original</th><th>Balance Pendiente</th><th>Motivo</th></tr></thead>
+                        <tbody>${loansHtml}</tbody>
+                    </table>
+                </div>
+            </body></html>
+        `);
+    } catch (error) {
+        console.error("Error al cargar la página de préstamos:", error);
+        res.status(500).send('<h1>Error al cargar la página ❌</h1>');
+    }
+});
+
+// --- RUTA PARA GUARDAR UN NUEVO PRÉSTAMO ---
+app.post('/gestionar-prestamos', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { employee_id, loan_date, loan_amount, reason } = req.body;
+    if (!employee_id || !loan_date || !loan_amount) {
+        return res.status(400).send("El colaborador, la fecha y el monto son obligatorios.");
+    }
+    try {
+        const client = await pool.connect();
+        await client.query(
+            `INSERT INTO loans (employee_id, loan_date, loan_amount, reason) VALUES ($1, $2, $3, $4)`,
+            [employee_id, loan_date, loan_amount, reason || null]
+        );
+        client.release();
+        res.redirect('/gestionar-prestamos');
+    } catch (error) {
+        console.error("Error al guardar el préstamo:", error);
+        res.status(500).send('<h1>Error al guardar el préstamo ❌</h1>');
+    }
+});
 // --- RUTA PARA GUARDAR UN NUEVO AVANCE ---
 app.post('/gestionar-avances', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { employee_id, advance_date, amount, reason } = req.body;
