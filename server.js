@@ -2249,7 +2249,198 @@ app.post('/gestionar-avances', requireLogin, requireAdminOrCoord, async (req, re
         res.status(500).send('<h1>Error al guardar el avance ❌</h1>');
     }
 });
+// =======================================================
+//   NUEVAS RUTAS PARA DETALLES Y PAGOS DE PRÉSTAMOS
+// =======================================================
 
+// --- PÁGINA DE DETALLE DE UN PRÉSTAMO ESPECÍFICO ---
+app.get('/prestamo/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { id } = req.params;
+    try {
+        const client = await pool.connect();
+        const loanResult = await client.query(
+            `SELECT l.*, e.first_name, e.last_name 
+             FROM loans l
+             JOIN employees e ON l.employee_id = e.id 
+             WHERE l.id = $1`, [id]);
+        
+        const paymentsResult = await client.query(
+            `SELECT * FROM loan_payments WHERE loan_id = $1 ORDER BY payment_date DESC`, [id]);
+        client.release();
+
+        if (loanResult.rows.length === 0) {
+            return res.status(404).send('Préstamo no encontrado.');
+        }
+
+        const loan = loanResult.rows[0];
+        const payments = paymentsResult.rows;
+
+        const totalPagado = payments.reduce((sum, p) => sum + parseFloat(p.amount_paid), 0);
+        const balancePendiente = parseFloat(loan.loan_amount) - totalPagado;
+
+        let paymentsHtml = payments.map(p => `
+            <tr>
+                <td>${new Date(p.payment_date).toLocaleDateString()}</td>
+                <td>$${parseFloat(p.amount_paid).toFixed(2)}</td>
+                <td>${p.payment_method || 'N/A'}</td>
+                <td>
+                    <a href="/recibo-pago-prestamo/${p.id}/pdf" target="_blank" class="btn" style="padding: 5px 10px; font-size: 14px;">Imprimir</a>
+                </td>
+            </tr>
+        `).join('') || '<tr><td colspan="4">No se han registrado pagos para este préstamo.</td></tr>';
+
+        res.send(`
+            <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
+                <div class="container">
+                    <a href="/gestionar-prestamos" class="back-link">↩️ Volver a Préstamos</a>
+                    <h2>Préstamo a: ${loan.first_name} ${loan.last_name}</h2>
+                    <p><strong>Fecha del Préstamo:</strong> ${new Date(loan.loan_date).toLocaleDateString()}</p>
+                    <p><strong>Motivo:</strong> ${loan.reason || 'No especificado'}</p>
+                    
+                    <div class="summary">
+                        <div class="summary-box"><h3>Monto Original</h3><p class="amount">$${parseFloat(loan.loan_amount).toFixed(2)}</p></div>
+                        <div class="summary-box"><h3>Total Pagado</h3><p class="amount green">$${totalPagado.toFixed(2)}</p></div>
+                        <div class="summary-box"><h3>Balance Pendiente</h3><p class="amount red">$${balancePendiente.toFixed(2)}</p></div>
+                    </div>
+
+                    ${balancePendiente > 0 ? `
+                    <div class="form-container">
+                        <h3>Registrar Nuevo Abono / Pago</h3>
+                        <form action="/prestamo/${id}/registrar-pago" method="POST">
+                            <div class="form-group"><label>Fecha del Pago:</label><input type="date" name="payment_date" required></div>
+                            <div class="form-group"><label>Monto Pagado:</label><input type="number" name="amount_paid" step="0.01" max="${balancePendiente.toFixed(2)}" required></div>
+                            <div class="form-group">
+                                <label>Método de Pago:</label>
+                                <select name="payment_method">
+                                    <option value="Efectivo">Efectivo</option>
+                                    <option value="Transferencia">Transferencia</option>
+                                    <option value="Descuento Nómina">Descuento Nómina</option>
+                                    <option value="Otro">Otro</option>
+                                </select>
+                            </div>
+                            <div class="form-group"><label>Notas (Opcional):</label><textarea name="notes" rows="2"></textarea></div>
+                            <button type="submit" class="btn">Guardar Pago</button>
+                        </form>
+                    </div>` : '<h3 style="text-align:center; color: #28a745;">Este préstamo ha sido saldado.</h3>'}
+
+                    <hr style="margin: 40px 0;">
+                    <h3>Historial de Pagos Realizados</h3>
+                    <table>
+                        <thead><tr><th>Fecha de Pago</th><th>Monto</th><th>Método</th><th>Acciones</th></tr></thead>
+                        <tbody>${paymentsHtml}</tbody>
+                    </table>
+                </div>
+            </body></html>
+        `);
+    } catch (error) {
+        console.error("Error al cargar detalle de préstamo:", error);
+        res.status(500).send('<h1>Error al cargar la página ❌</h1>');
+    }
+});
+
+// --- RUTA PARA GUARDAR UN PAGO A UN PRÉSTAMO ---
+app.post('/prestamo/:loanId/registrar-pago', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { loanId } = req.params;
+    const { payment_date, amount_paid, payment_method, notes } = req.body;
+    
+    if (!payment_date || !amount_paid) {
+        return res.status(400).send("La fecha y el monto son obligatorios.");
+    }
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        // 1. Insertar el nuevo pago
+        await client.query(
+            `INSERT INTO loan_payments (loan_id, payment_date, amount_paid, payment_method, notes) 
+             VALUES ($1, $2, $3, $4, $5)`,
+            [loanId, payment_date, amount_paid, payment_method || null, notes || null]
+        );
+
+        // 2. Recalcular el total pagado y el balance
+        const totalsResult = await client.query(
+            `SELECT 
+                l.loan_amount,
+                COALESCE(SUM(p.amount_paid), 0) as total_pagado
+             FROM loans l
+             LEFT JOIN loan_payments p ON l.id = p.loan_id
+             WHERE l.id = $1
+             GROUP BY l.loan_amount`, [loanId]
+        );
+
+        const montoTotal = parseFloat(totalsResult.rows[0].loan_amount);
+        const totalPagado = parseFloat(totalsResult.rows[0].total_pagado);
+        const nuevoEstado = totalPagado >= montoTotal ? 'pagado' : 'activo';
+
+        // 3. Actualizar el estado del préstamo si ya se saldó
+        await client.query(
+            `UPDATE loans SET status = $1 WHERE id = $2`,
+            [nuevoEstado, loanId]
+        );
+
+        await client.query('COMMIT');
+        res.redirect(`/prestamo/${loanId}`);
+
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error("Error al registrar el pago del préstamo:", error);
+        res.status(500).send('<h1>Error al registrar el pago ❌</h1>');
+    } finally {
+        client.release();
+    }
+});
+
+// --- RUTA PARA GENERAR EL PDF DEL RECIBO DE PAGO DE PRÉSTAMO ---
+app.get('/recibo-pago-prestamo/:pagoId/pdf', requireLogin, requireAdminOrCoord, async (req, res) => {
+    try {
+        const { pagoId } = req.params;
+        const client = await pool.connect();
+        const result = await client.query(`
+            SELECT p.*, l.loan_amount, e.first_name, e.last_name, e.cedula
+            FROM loan_payments p
+            JOIN loans l ON p.loan_id = l.id
+            JOIN employees e ON l.employee_id = e.id
+            WHERE p.id = $1`, [pagoId]);
+        client.release();
+
+        if (result.rows.length === 0) {
+            return res.status(404).send('Pago de préstamo no encontrado.');
+        }
+        const pago = result.rows[0];
+
+        const doc = new PDFDocument({ size: 'A4', margin: 50 });
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename=recibo-prestamo-${pago.id}.pdf`);
+        doc.pipe(res);
+
+        doc.image(path.join(__dirname, 'plantillas', 'membrete.jpg'), 0, 0, { width: doc.page.width, height: doc.page.height });
+        
+        doc.y = 280;
+        doc.font('Helvetica-Bold').fontSize(18).text('RECIBO DE ABONO A PRÉSTAMO', { align: 'center' });
+        doc.moveDown(3);
+
+        const formattedAmount = parseFloat(pago.amount_paid).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const date = new Date(pago.payment_date).toLocaleDateString('es-DO', { year: 'numeric', month: 'long', day: 'numeric' });
+
+        doc.font('Helvetica').fontSize(12).lineGap(8);
+        doc.text(`Por medio de la presente, yo, ${pago.first_name} ${pago.last_name}, portador de la cédula de identidad No. ${pago.cedula || '__________________'}, reconozco haber realizado un abono de RD$ ${formattedAmount}.`, { align: 'justify' });
+        doc.moveDown();
+        doc.text(`Este abono se aplica al préstamo #00${pago.loan_id} con fecha de ${date}, por concepto de ${pago.payment_method}.`, { align: 'justify' });
+        doc.moveDown(8);
+
+        const signatureY = doc.y > 600 ? 650 : doc.y + 100;
+
+        doc.text('___________________________', 70, signatureY);
+        doc.font('Helvetica-Bold').text(`${pago.first_name} ${pago.last_name}`, 70, signatureY + 15);
+        doc.font('Helvetica').text('Recibido por (Firma)', 70, signatureY + 30);
+
+        doc.end();
+    } catch (error) {
+        console.error("Error al generar el PDF de pago de préstamo:", error);
+        res.status(500).send('Error al generar el recibo PDF.');
+    }
+});
 // --- RUTA PARA GENERAR EL PDF DEL RECIBO DE AVANCE ---
 app.get('/recibo-avance/:advanceId/pdf', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
