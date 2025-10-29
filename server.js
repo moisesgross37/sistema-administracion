@@ -1547,7 +1547,9 @@ app.get('/gestionar-asesores', requireLogin, requireAdminOrCoord, async (req, re
                 <td>${a.name} ${a.is_coordinator ? '⭐' : ''}</td>
                 <td>${(parseFloat(a.commission_rate) * 100).toFixed(2)}%</td>
                 <td>${a.is_coordinator ? 'Sí' : 'No'}</td>
-                <td><button class="btn" disabled style="background-color: #ffc107; color: #212529; padding: 5px 10px; font-size: 14px;">Editar</button></td>
+                <td>
+                    <a href="/asesor/editar/${a.id}" class="btn" style="background-color: #ffc107; color: #212529; padding: 5px 10px; font-size: 14px;">Editar</a>
+                </td>
             </tr>
         `).join('') || '<tr><td colspan="4">No hay asesores registrados.</td></tr>';
 
@@ -1594,6 +1596,76 @@ app.get('/gestionar-asesores', requireLogin, requireAdminOrCoord, async (req, re
     }
 });
 
+// --- RUTA PARA MOSTRAR EL FORMULARIO DE EDICIÓN DE UN ASESOR ---
+app.get('/asesor/editar/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { id } = req.params;
+    try {
+        const client = await pool.connect();
+        const advisorResult = await client.query('SELECT * FROM advisors WHERE id = $1', [id]);
+        client.release();
+
+        if (advisorResult.rows.length === 0) {
+            return res.status(404).send('Asesor no encontrado.');
+        }
+        const advisor = advisorResult.rows[0];
+        const commissionRatePercent = (parseFloat(advisor.commission_rate) * 100).toFixed(2);
+
+        res.send(`
+            <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
+                <div class="container">
+                    <a href="/gestionar-asesores" class="back-link">↩️ Volver a Gestionar Asesores</a>
+                    <h2>Editando Asesor: ${advisor.name}</h2>
+                    <div class="form-container">
+                        <form action="/asesor/editar/${id}" method="POST">
+                            <div class="form-group"><label>Nombre Completo del Asesor:</label><input type="text" name="name" value="${advisor.name}" required></div>
+                            <div class="form-group"><label>Tasa de Comisión de Venta (%):</label><input type="number" name="commission_rate" step="0.01" value="${commissionRatePercent}" required></div>
+                            <div class="form-group"><input type="checkbox" name="is_coordinator" id="is_coordinator" value="true" ${advisor.is_coordinator ? 'checked' : ''} style="width: auto; margin-right: 10px;"><label for="is_coordinator" style="display: inline;">Marcar como Coordinador(a)</label></div>
+                            <button type="submit" class="btn">Actualizar Asesor</button>
+                        </form>
+                    </div>
+                </div>
+            </body></html>
+        `);
+    } catch (error) {
+        console.error("Error al cargar la página de edición de asesor:", error);
+        res.status(500).send('<h1>Error al cargar la página ❌</h1>');
+    }
+});
+// --- RUTA PARA GUARDAR LOS CAMBIOS AL EDITAR UN ASESOR ---
+app.post('/asesor/editar/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { id } = req.params;
+    const { name, commission_rate, is_coordinator } = req.body;
+    if (!name || !commission_rate) {
+        return res.status(400).send("El nombre y la tasa de comisión son obligatorios.");
+    }
+
+    const rateAsDecimal = parseFloat(commission_rate) / 100;
+    const isCoordinatorBool = is_coordinator === 'true';
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        // Si se marca este asesor como coordinador, nos aseguramos de que sea el único.
+        if (isCoordinatorBool) {
+            await client.query('UPDATE advisors SET is_coordinator = false WHERE id != $1', [id]);
+        }
+        await client.query(
+            `UPDATE advisors SET name = $1, commission_rate = $2, is_coordinator = $3 WHERE id = $4`,
+            [name, rateAsDecimal, isCoordinatorBool, id]
+        );
+        await client.query('COMMIT');
+        res.redirect('/gestionar-asesores');
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error("Error al actualizar el asesor:", error);
+        if (error.code === '23505') { // Error de valor único duplicado
+             return res.status(409).send('<h1>Error: Ya existe otro asesor con ese nombre.</h1>');
+        }
+        res.status(500).send('<h1>Error al actualizar el asesor ❌</h1>');
+    } finally {
+        client.release();
+    }
+});
 app.post('/gestionar-asesores', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { name, commission_rate, is_coordinator } = req.body;
     if (!name || !commission_rate) {
