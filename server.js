@@ -2765,6 +2765,18 @@ app.get('/recibo-nomina/:recordId/pdf', requireLogin, requireAdminOrCoord, async
         doc.font('Helvetica').text('Descuentos / Avances', 90, doc.y + 20).text(`$${parseFloat(record.deductions).toFixed(2)}`, 400, doc.y, { align: 'right' });
         doc.moveDown(2);
 
+        // --- INICIO DE LA MODIFICACIÓN ---
+        // Añadimos la sección de Notas si existen
+        if (record.notes && record.notes.trim() !== '') {
+            doc.font('Helvetica-Bold').text('NOTAS:', 70, doc.y);
+            doc.font('Helvetica').fontSize(10).text(record.notes, 90, doc.y + 15, {
+                width: doc.page.width - 160, // Ancho del texto
+                align: 'left'
+            });
+            doc.moveDown(2); // Espacio extra
+        }
+        // --- FIN DE LA MODIFICACIÓN ---
+
         doc.moveTo(70, doc.y).lineTo(doc.page.width - 70, doc.y).stroke();
         doc.moveDown();
 
@@ -2782,7 +2794,6 @@ app.get('/recibo-nomina/:recordId/pdf', requireLogin, requireAdminOrCoord, async
         res.status(500).send('Error al generar el recibo PDF.');
     }
 });
-
 
 app.get('/proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
     const centerId = req.params.id;
