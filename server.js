@@ -500,7 +500,59 @@ app.post('/suplidores', requireLogin, requireAdminOrCoord, async (req, res) => {
         res.status(500).send('<h1>Error al guardar el suplidor ❌</h1>');
     }
 });
+app.get('/proyectos-descartados', requireLogin, requireAdminOrCoord, async (req, res) => {
+    try {
+        const client = await pool.connect();
+        // Traemos solo los que están marcados como descartados
+        const result = await client.query(
+            `SELECT * FROM quotes 
+             WHERE is_discarded IS TRUE 
+             ORDER BY createdat DESC`
+        );
+        const quotes = result.rows;
+        client.release();
 
+        let quotesHtml = quotes.map(quote => `
+            <tr>
+                <td style="font-weight: bold;"># ${quote.quotenumber}</td>
+                <td>${quote.clientname}</td>
+                <td><span class="advisor-badge">${quote.advisorname}</span></td>
+                <td style="text-align: center;">
+                    <form action="/restaurar-cotizacion/${quote.id}" method="POST">
+                        <button type="submit" class="btn" style="background-color: var(--info); color: white;">
+                            Restaurar al Puente ↩️
+                        </button>
+                    </form>
+                </td>
+            </tr>
+        `).join('') || '<tr><td colspan="4" style="text-align: center; padding: 40px; color: var(--gray);">No hay proyectos en el historial de descartados.</td></tr>';
+
+        res.send(`
+            <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
+                <div class="container">
+                    <a href="/proyectos-por-activar" class="back-link">↩️ Volver a Proyectos por Activar</a>
+                    <h2>Historial de Proyectos Descartados (Pasivos)</h2>
+                    <p style="color: var(--gray); margin-bottom: 20px;">Aquí puedes ver y restaurar las cotizaciones que fueron ocultadas del puente principal.</p>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th># ID</th>
+                                <th>Cliente / Institución</th>
+                                <th>Asesor</th>
+                                <th>Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${quotesHtml}
+                        </tbody>
+                    </table>
+                </div>
+            </body></html>`);
+    } catch (error) {
+        console.error("Error en /proyectos-descartados:", error);
+        res.status(500).send('<h1>Error al cargar el historial ❌</h1>');
+    }
+});
 // =======================================================
 //   NUEVAS RUTAS PARA CUENTAS POR PAGAR
 // =======================================================
