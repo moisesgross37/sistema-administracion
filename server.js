@@ -107,7 +107,18 @@ app.post('/logout', (req, res) => {
         res.redirect('/login');
     });
 });
-
+app.post('/descartar-cotizacion/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { id } = req.params;
+    try {
+        const client = await pool.connect();
+        await client.query('UPDATE quotes SET is_discarded = TRUE WHERE id = $1', [id]);
+        client.release();
+        res.redirect('/proyectos-por-activar');
+    } catch (error) {
+        console.error("Error al descartar cotización:", error);
+        res.status(500).send('Error al procesar la solicitud.');
+    }
+});
 // =======================================================
 // ============== ESTILOS Y MENÚS DE NAVEGACIÓN ==============
 // =======================================================
