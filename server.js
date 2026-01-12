@@ -404,7 +404,12 @@ app.get('/proyectos-por-activar', requireLogin, requireAdminOrCoord, async (req,
             <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
                 <div class="container">
                     ${backToDashboardLink}
-                    <h2>Proyectos Formalizados por Activar</h2>
+                   <div class="header-with-button" style="display: flex; justify-content: space-between; align-items: center;">
+    <h2>Proyectos Formalizados por Activar</h2>
+    <a href="/proyectos-descartados" class="btn" style="background-color: var(--gray); color: white; font-size: 13px;">
+        Ver Descartados 🗑️
+    </a>
+</div>
                     <table>
                         <thead>
                             <tr>
@@ -551,6 +556,18 @@ app.get('/proyectos-descartados', requireLogin, requireAdminOrCoord, async (req,
     } catch (error) {
         console.error("Error en /proyectos-descartados:", error);
         res.status(500).send('<h1>Error al cargar el historial ❌</h1>');
+    }
+});
+app.post('/restaurar-cotizacion/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { id } = req.params;
+    try {
+        const client = await pool.connect();
+        await client.query('UPDATE quotes SET is_discarded = FALSE WHERE id = $1', [id]);
+        client.release();
+        res.redirect('/proyectos-descartados');
+    } catch (error) {
+        console.error("Error al restaurar cotización:", error);
+        res.status(500).send('Error al procesar la solicitud.');
     }
 });
 // =======================================================
