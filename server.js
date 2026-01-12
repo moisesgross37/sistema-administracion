@@ -352,39 +352,42 @@ app.get('/clientes', requireLogin, requireAdminOrCoord, async (req, res) => {
 app.get('/proyectos-por-activar', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
+        // SELECT SIMPLE: Trae todo lo formalizado que no esté oculto/descartado
         const result = await client.query(
-            `SELECT q.* FROM quotes q
-             INNER JOIN centers c ON q.clientname = c.name 
-             WHERE q.status = 'formalizada' 
-             ORDER BY q.createdat ASC`
+            `SELECT * FROM quotes 
+             WHERE status = 'formalizada' 
+             AND (is_discarded IS FALSE OR is_discarded IS NULL)
+             ORDER BY createdat ASC`
         );
         const quotes = result.rows;
         client.release();
 
         let quotesHtml = quotes.map(quote => `
             <tr>
-                <td>${quote.quotenumber}</td>
+                <td style="font-weight: bold; color: var(--primary);"># ${quote.quotenumber}</td>
                 <td style="text-align: center;">
-                    <a href="/ver-cotizacion-pdf/${quote.id}" target="_blank" class="btn" style="padding: 5px 10px; font-size: 14px; background-color: #6c757d;">
+                    <a href="/ver-cotizacion-pdf/${quote.id}" target="_blank" class="btn" style="padding: 5px 10px; font-size: 13px; background-color: var(--gray); color: white;">
                         Ver PDF 📄
                     </a>
                 </td>
-                <td>${quote.clientname}</td>
-                <td>${quote.advisorname}</td>
+                <td style="font-weight: 600;">${quote.clientname}</td>
+                <td><span class="advisor-badge">${quote.advisorname}</span></td>
                 <td>
-                    <textarea name="notas_administrativas" rows="3" placeholder="Añadir notas internas..." form="form-activar-${quote.id}" style="width: 100%; box-sizing: border-box;"></textarea>
+                    <textarea name="notas_administrativas" rows="2" placeholder="Notas internas..." form="form-activar-${quote.id}"></textarea>
                 </td>
-                <td style="text-align: center; vertical-align: middle;">
-                    <form id="form-activar-${quote.id}" action="/activar-proyecto/${quote.id}" method="POST">
-                        <button type="submit" class="btn btn-activar">Activar Proyecto</button>
-                    </form>
+                <td style="text-align: center;">
+                    <div style="display: flex; gap: 8px; justify-content: center;">
+                        <form id="form-activar-${quote.id}" action="/activar-proyecto/${quote.id}" method="POST">
+                            <button type="submit" class="btn btn-activar">Activar</button>
+                        </form>
+                        
+                        <form action="/descartar-cotizacion/${quote.id}" method="POST" onsubmit="return confirm('¿Seguro que deseas ocultar esta cotización?');">
+                            <button type="submit" class="btn btn-discard" title="Ocultar">✖</button>
+                        </form>
+                    </div>
                 </td>
             </tr>
-        `).join('');
-
-        if (quotes.length === 0) {
-            quotesHtml = '<tr><td colspan="6">No hay proyectos pendientes de activación.</td></tr>';
-        }
+        `).join('') || '<tr><td colspan="6" style="text-align: center; padding: 40px; color: var(--gray);">No hay proyectos pendientes.</td></tr>';
 
         res.send(`
             <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
@@ -394,11 +397,11 @@ app.get('/proyectos-por-activar', requireLogin, requireAdminOrCoord, async (req,
                     <table>
                         <thead>
                             <tr>
-                                <th># Cotización</th>
+                                <th># ID</th>
                                 <th>Cotización</th>
-                                <th>Cliente</th>
+                                <th>Cliente / Institución</th>
                                 <th>Asesor</th>
-                                <th>Notas Internas</th>
+                                <th>Notas Administrativas</th>
                                 <th>Acciones</th>
                             </tr>
                         </thead>
@@ -413,7 +416,6 @@ app.get('/proyectos-por-activar', requireLogin, requireAdminOrCoord, async (req,
         res.status(500).send('<h1>Error al cargar la página ❌</h1>');
     }
 });
-
 app.post('/activar-proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
     const quoteId = req.params.id;
     const { notas_administrativas } = req.body;
