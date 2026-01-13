@@ -3203,21 +3203,23 @@ app.get('/proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => 
 
 app.get('/proyecto-detalle/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
     const quoteId = req.params.id;
-    let client; // Declaramos el cliente fuera para poder liberarlo al final
+    let client; 
     try {
-        client = await pool.connect(); // Pedimos la conexión
+        client = await pool.connect(); 
         
+        // 1. Buscamos el proyecto por su ID único de cotización
         const quoteResult = await client.query(
             `SELECT * FROM quotes WHERE id = $1 AND status = 'activa'`,
             [quoteId]
         );
         
         if (quoteResult.rows.length === 0) {
-            return res.status(404).send('<h1>Proyecto no encontrado</h1><a href="/clientes">Volver</a>');
+            return res.status(404).send('<h1>Proyecto no encontrado</h1><a href="/clientes">Volver a la lista</a>');
         }
         
         const quote = quoteResult.rows[0];
 
+        // 2. Traemos todos los datos relacionados en paralelo
         const [paymentsResult, expensesResult, suppliersResult, adjustmentsResult] = await Promise.all([
             client.query(`SELECT * FROM payments WHERE quote_id = $1 ORDER BY payment_date DESC`, [quote.id]),
             client.query(`SELECT e.*, s.name as supplier_name FROM expenses e JOIN suppliers s ON e.supplier_id = s.id WHERE e.quote_id = $1 ORDER BY e.expense_date DESC`, [quote.id]),
@@ -3225,10 +3227,85 @@ app.get('/proyecto-detalle/:id', requireLogin, requireAdminOrCoord, async (req, 
             client.query(`SELECT * FROM ajustes_cotizacion WHERE quote_id = $1 ORDER BY fecha_ajuste ASC`, [quote.id])
         ]);
 
-        // ... Aquí va tu lógica de cálculos (montoOriginal, totalAbonado, etc.) ...
-        // (Mantén el mismo código de HTML que ya tenías)
+        const payments = paymentsResult.rows;
+        const expenses = expensesResult.rows;
+        const suppliers = suppliersResult.rows;
+        
+        // 3. Lógica de cálculos financieros
+        const montoOriginal = parseFloat(quote.preciofinalporestudiante || 0) * parseFloat(quote.estudiantesparafacturar || 0);
+        const totalAjustes = adjustmentsResult.rows.reduce((sum, adj) => sum + parseFloat(adj.monto_ajuste), 0);
+        const totalVenta = montoOriginal + totalAjustes;
+        const totalAbonado = payments.reduce((sum, payment) => sum + parseFloat(payment.amount), 0);
+        const totalGastado = expenses.reduce((sum, expense) => sum + parseFloat(expense.amount), 0);
+        const rentabilidad = totalAbonado - totalGastado;
 
-        res.send(`... tu HTML ...`);
+        // 4. Generación de las filas de las tablas
+        let adjustmentsHtml = adjustmentsResult.rows.map(adj => `
+            <tr>
+                <td>${new Date(adj.fecha_ajuste).toLocaleString('es-DO')}</td>
+                <td style="color: ${adj.monto_ajuste >= 0 ? 'green' : 'red'}; font-weight: bold;">
+                    ${adj.monto_ajuste >= 0 ? '+' : ''}$${parseFloat(adj.monto_ajuste).toFixed(2)}
+                </td>
+                <td>${adj.motivo}</td>
+                <td>${adj.ajustado_por}</td>
+            </tr>
+        `).join('') || '<tr><td colspan="4">No se han realizado ajustes.</td></tr>';
+
+        let paymentsHtml = payments.map(p => `
+            <tr>
+                <td>${new Date(p.payment_date).toLocaleDateString()}</td>
+                <td>$${parseFloat(p.amount).toFixed(2)}</td>
+                <td>${p.students_covered || 'N/A'}</td>
+                <td>${p.comment || ''}</td>
+                <td style="text-align: center;">
+                    <a href="/recibo-pago/${p.id}/pdf" target="_blank" class="btn" style="padding: 5px 10px; font-size: 12px; background-color: #17a2b8;">Recibo</a>
+                </td>
+            </tr>
+        `).join('') || '<tr><td colspan="5">No hay pagos registrados.</td></tr>';
+
+        let expensesHtml = expenses.map(e => `
+            <tr>
+                <td>${new Date(e.expense_date).toLocaleDateString()}</td>
+                <td>${e.supplier_name}</td>
+                <td>${e.description}</td>
+                <td>$${parseFloat(e.amount).toFixed(2)}</td>
+                <td>${e.type || ''}</td>
+                <td style="text-align: center;">
+                    <a href="/desembolso/${e.id}/pdf" target="_blank" class="btn" style="padding: 5px 10px; font-size: 14px;">Imprimir</a>
+                </td>
+            </tr>
+        `).join('') || '<tr><td colspan="6">No hay gastos registrados.</td></tr>';
+
+        let suppliersOptionsHtml = suppliers.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+
+        // 5. Envío de la página completa con el diseño profesional
+        res.send(`
+            <!DOCTYPE html><html lang="es">
+            <head>${commonHtmlHead.replace('<title>Panel de Administración</title>', `<title>Proyecto ${quote.clientname}</title>`)}</head>
+            <body>
+                <div class="container">
+                    ${backToDashboardLink}
+                    <div class="header" style="border-bottom: 2px solid var(--primary); padding-bottom: 10px; margin-bottom: 20px;">
+                        <h1>${quote.clientname}</h1>
+                        <p>Cotización #${quote.quotenumber} &bull; Asesor: ${quote.advisorname}</p>
+                    </div>
+                    
+                    <div class="summary">
+                        <div class="summary-box"><h3>Monto Total Venta</h3><p class="amount">$${totalVenta.toFixed(2)}</p></div>
+                        <div class="summary-box"><h3>Total Abonado</h3><p class="amount green">$${totalAbonado.toFixed(2)}</p></div>
+                        <div class="summary-box"><h3>Total Gastado</h3><p class="amount orange">$${totalGastado.toFixed(2)}</p></div>
+                        <div class="summary-box"><h3>Rentabilidad</h3><p class="amount blue">$${rentabilidad.toFixed(2)}</p></div>
+                    </div>
+
+                    <hr style="margin: 40px 0;">
+                    <h2>Ingresos (Abonos Realizados)</h2>
+                    <table><thead><tr><th>Fecha</th><th>Monto</th><th>Estudiantes</th><th>Comentario</th><th>Acciones</th></tr></thead><tbody>${paymentsHtml}</tbody></table>
+                    
+                    <hr style="margin: 40px 0;">
+                    <h2>Egresos (Gastos del Proyecto)</h2>
+                    <table><thead><tr><th>Fecha</th><th>Suplidor</th><th>Descripción</th><th>Monto</th><th>Tipo</th><th>Acciones</th></tr></thead><tbody>${expensesHtml}</tbody></table>
+                </div>
+            </body></html>`);
 
     } catch (error) {
         console.error("Error crítico en detalle de proyecto:", error);
@@ -3236,11 +3313,10 @@ app.get('/proyecto-detalle/:id', requireLogin, requireAdminOrCoord, async (req, 
             res.status(500).send('<h1>Error al cargar el proyecto ❌</h1>');
         }
     } finally {
-        // EL PASO MÁS IMPORTANTE:
-        // Si se abrió una conexión, la cerramos pase lo que pase.
-        if (client) client.release(); 
+        if (client) client.release(); // LIBERAMOS LA CONEXIÓN SIEMPRE
     }
-});app.post('/proyecto/:id/nuevo-pago', requireLogin, requireAdminOrCoord, async (req, res) => {
+});
+app.post('/proyecto/:id/nuevo-pago', requireLogin, requireAdminOrCoord, async (req, res) => {
     const quoteId = req.params.id;
     const { centerId, payment_date, amount, students_covered, comment } = req.body;
     
