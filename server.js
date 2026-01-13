@@ -343,20 +343,38 @@ app.get('/todos-los-centros', requireLogin, requireAdminOrCoord, async (req, res
 app.get('/clientes', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
-        const result = await client.query(`SELECT DISTINCT c.* FROM centers c INNER JOIN quotes q ON c.name = q.clientname WHERE q.status = 'activa'`);
-        const clients = result.rows;
+        // Buscamos directamente las cotizaciones que YA activaste ('activa')
+        // Sin el INNER JOIN para que Tomas y Lilian aparezcan de inmediato
+        const result = await client.query(`
+            SELECT id, clientname, advisorname, quotenumber 
+            FROM quotes 
+            WHERE status = 'activa' 
+            ORDER BY clientname ASC
+        `);
+        const projects = result.rows;
         client.release();
-        let clientsHtml = clients.map(client => `<tr><td>${client.id}</td><td><a href="/proyecto/${client.id}">${client.name}</a></td><td>${client.contactname || 'No especificado'}</td><td>${client.contactnumber || 'No especificado'}</td></tr>`).join('');
-        res.send(`
-            <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
-                <div class="container">
-                    ${backToDashboardLink}
-                    <h2>Lista de Clientes con Proyectos Activos</h2>
-                    <table><thead><tr><th>ID</th><th>Nombre del Cliente</th><th>Contacto</th><th>Teléfono</th></tr></thead><tbody>${clientsHtml}</tbody></table>
-                </div>
-            </body></html>`);
+
+        let projectsHtml = projects.map(proj => `
+            <tr>
+                <td style="font-weight: bold; color: var(--primary);"># ${proj.quotenumber}</td>
+                <td>
+                    <a href="/proyecto-detalle/${proj.id}" style="text-decoration: none; font-weight: 600; color: var(--primary);">
+                        ${proj.clientname}
+                    </a>
+                </td>
+                <td><span class="advisor-badge">${proj.advisorname || 'No asignado'}</span></td>
+                <td style="text-align: center;">
+                    <a href="/proyecto-detalle/${proj.id}" class="btn" style="padding: 5px 12px; font-size: 13px;">
+                        Ver Proyecto 📂
+                    </a>
+                </td>
+            </tr>
+        `).join('') || '<tr><td colspan="4" style="text-align: center; padding: 40px;">No hay proyectos activos.</td></tr>';
+
+        res.send(`<!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body><div class="container">${backToDashboardLink}<h2>Proyectos y Centros Activos</h2><table><thead><tr><th>ID Cotización</th><th>Nombre del Cliente / Proyecto</th><th>Asesor</th><th>Acciones</th></tr></thead><tbody>${projectsHtml}</tbody></table></div></body></html>`);
     } catch (error) {
-        res.status(500).send('<h1>Error al obtener la lista de clientes ❌</h1>');
+        console.error("Error en /clientes:", error);
+        res.status(500).send('<h1>Error al obtener la lista ❌</h1>');
     }
 });
 
@@ -3180,6 +3198,31 @@ app.get('/proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => 
     } catch (error) {
         console.error("Error al obtener detalle del proyecto:", error);
         res.status(500).send('<h1>Error al obtener los detalles del proyecto ❌</h1>');
+    }
+});
+
+app.get('/proyecto-detalle/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const quoteId = req.params.id;
+    try {
+        const client = await pool.connect();
+        // Buscamos por el ID de la cotización, que es único y seguro
+        const quoteResult = await client.query(
+            `SELECT * FROM quotes WHERE id = $1 AND status = 'activa'`,
+            [quoteId]
+        );
+        
+        if (quoteResult.rows.length === 0) {
+            client.release();
+            return res.status(404).send('<h1>Proyecto no encontrado</h1>');
+        }
+        
+        const quote = quoteResult.rows[0];
+        // Aquí sigue el resto de tu código de detalle (pagos, gastos, etc.)
+        // que ya me habías pasado anteriormente.
+        client.release();
+    } catch (error) {
+        console.error("Error:", error);
+        res.status(500).send('Error');
     }
 });
 app.post('/proyecto/:id/nuevo-pago', requireLogin, requireAdminOrCoord, async (req, res) => {
