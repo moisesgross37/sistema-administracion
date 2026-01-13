@@ -3203,29 +3203,44 @@ app.get('/proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => 
 
 app.get('/proyecto-detalle/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
     const quoteId = req.params.id;
+    let client; // Declaramos el cliente fuera para poder liberarlo al final
     try {
-        const client = await pool.connect();
-        // Buscamos por el ID de la cotización, que es único y seguro
+        client = await pool.connect(); // Pedimos la conexión
+        
         const quoteResult = await client.query(
             `SELECT * FROM quotes WHERE id = $1 AND status = 'activa'`,
             [quoteId]
         );
         
         if (quoteResult.rows.length === 0) {
-            client.release();
-            return res.status(404).send('<h1>Proyecto no encontrado</h1>');
+            return res.status(404).send('<h1>Proyecto no encontrado</h1><a href="/clientes">Volver</a>');
         }
         
         const quote = quoteResult.rows[0];
-        // Aquí sigue el resto de tu código de detalle (pagos, gastos, etc.)
-        // que ya me habías pasado anteriormente.
-        client.release();
+
+        const [paymentsResult, expensesResult, suppliersResult, adjustmentsResult] = await Promise.all([
+            client.query(`SELECT * FROM payments WHERE quote_id = $1 ORDER BY payment_date DESC`, [quote.id]),
+            client.query(`SELECT e.*, s.name as supplier_name FROM expenses e JOIN suppliers s ON e.supplier_id = s.id WHERE e.quote_id = $1 ORDER BY e.expense_date DESC`, [quote.id]),
+            client.query('SELECT * FROM suppliers ORDER BY name ASC'),
+            client.query(`SELECT * FROM ajustes_cotizacion WHERE quote_id = $1 ORDER BY fecha_ajuste ASC`, [quote.id])
+        ]);
+
+        // ... Aquí va tu lógica de cálculos (montoOriginal, totalAbonado, etc.) ...
+        // (Mantén el mismo código de HTML que ya tenías)
+
+        res.send(`... tu HTML ...`);
+
     } catch (error) {
-        console.error("Error:", error);
-        res.status(500).send('Error');
+        console.error("Error crítico en detalle de proyecto:", error);
+        if (!res.headersSent) {
+            res.status(500).send('<h1>Error al cargar el proyecto ❌</h1>');
+        }
+    } finally {
+        // EL PASO MÁS IMPORTANTE:
+        // Si se abrió una conexión, la cerramos pase lo que pase.
+        if (client) client.release(); 
     }
-});
-app.post('/proyecto/:id/nuevo-pago', requireLogin, requireAdminOrCoord, async (req, res) => {
+});app.post('/proyecto/:id/nuevo-pago', requireLogin, requireAdminOrCoord, async (req, res) => {
     const quoteId = req.params.id;
     const { centerId, payment_date, amount, students_covered, comment } = req.body;
     
