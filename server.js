@@ -3623,16 +3623,9 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
     try {
         client = await pool.connect();
         
-        // 1. Probamos las consultas una por una para saber cuál falla
-        let employees;
-        try {
-            const employeesRes = await client.query("SELECT * FROM employees ORDER BY name ASC");
-            // Filtramos en JavaScript por si la columna tiene otro nombre en SQL
-            employees = employeesRes.rows.filter(e => e.participa_en_nomina === true || e.participa_nomina === true);
-        } catch (err) {
-            console.error("Error en tabla employees:", err.message);
-            throw new Error("No se pudo leer la tabla de empleados. Verifica si la columna 'participa_en_nomina' existe.");
-        }
+        // 1. Obtención de datos
+        const employeesRes = await client.query("SELECT * FROM employees ORDER BY name ASC");
+        const employees = employeesRes.rows.filter(e => e.participa_en_nomina === true);
 
         const quotesRes = await client.query("SELECT id, clientname FROM quotes WHERE status = 'activa' ORDER BY clientname ASC");
         const activeProjects = quotesRes.rows;
@@ -3693,19 +3686,19 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
                         if (noExtrasMsg) noExtrasMsg.remove();
                         const div = document.createElement('div');
                         div.className = 'extra-row';
-                        div.innerHTML = \`<select class="extra-project"><option value="">Centro...</option>\${projectOptionsHtml}</select>
-                            <input type="text" class="extra-desc" placeholder="Fotos, etc.">
-                            <input type="number" class="extra-amount" placeholder="0.00" step="0.01">
-                            <div class="btn-delete" onclick="this.parentElement.remove()">×</div>\`;
+                        div.innerHTML = '<select class="extra-project"><option value="">Centro...</option>' + projectOptionsHtml + '</select>' +
+                            '<input type="text" class="extra-desc" placeholder="Fotos, etc.">' +
+                            '<input type="number" class="extra-amount" placeholder="0.00" step="0.01">' +
+                            '<div class="btn-delete" onclick="this.parentElement.remove()">×</div>';
                         container.appendChild(div);
                     }
-                    function procesarNomina() { alert("Función en construcción."); }
+                    function procesarNomina() { alert("Función de guardado en construcción."); }
                 </script>
             </body></html>`);
 
     } catch (e) {
-        console.error("Error crítico en Super Nómina:", e.message);
-        res.status(500).send(\`<h1>Error de Servidor ❌</h1><p>\${e.message}</p><a href="/dashboard">Volver</a>\`);
+        console.error("Error crítico:", e.message);
+        res.status(500).send('<h1>Error de Servidor</h1><p>' + e.message + '</p>');
     } finally {
         if (client) client.release();
     }
