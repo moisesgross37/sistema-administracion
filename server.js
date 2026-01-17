@@ -3623,16 +3623,20 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
     try {
         client = await pool.connect();
         
-        // Buscamos empleados y proyectos activos al mismo tiempo
-        const [employeesRes, quotesRes] = await Promise.all([
-            client.query("SELECT * FROM employees WHERE participa_en_nomina = true ORDER BY name ASC"),
-            client.query("SELECT id, clientname FROM quotes WHERE status = 'activa' ORDER BY clientname ASC")
-        ]);
+        // 1. Probamos las consultas una por una para saber cuál falla
+        let employees;
+        try {
+            const employeesRes = await client.query("SELECT * FROM employees ORDER BY name ASC");
+            // Filtramos en JavaScript por si la columna tiene otro nombre en SQL
+            employees = employeesRes.rows.filter(e => e.participa_en_nomina === true || e.participa_nomina === true);
+        } catch (err) {
+            console.error("Error en tabla employees:", err.message);
+            throw new Error("No se pudo leer la tabla de empleados. Verifica si la columna 'participa_en_nomina' existe.");
+        }
 
-        const employees = employeesRes.rows;
+        const quotesRes = await client.query("SELECT id, clientname FROM quotes WHERE status = 'activa' ORDER BY clientname ASC");
         const activeProjects = quotesRes.rows;
 
-        // Generamos las opciones de proyectos para los menús desplegables
         const projectOptions = activeProjects.map(p => `<option value="${p.id}">${p.clientname}</option>`).join('');
 
         let employeesRows = employees.map(emp => {
@@ -3653,19 +3657,17 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
         res.send(`
             <!DOCTYPE html><html lang="es">
             <head>
-                ${commonHtmlHead.replace('<title>Panel de Administración</title>', '<title>Super Nómina Unificada</title>')}
+                ${commonHtmlHead.replace('<title>Panel de Administración</title>', '<title>Super Nómina</title>')}
                 <style>
                     .extra-row { display: grid; grid-template-columns: 1fr 1fr 80px 30px; gap: 5px; margin-bottom: 5px; background: #f8f9fa; padding: 5px; border-radius: 4px; border: 1px solid #eee; }
-                    .extra-row select, .extra-row input { padding: 4px; font-size: 11px; border: 1px solid #ccc; border-radius: 3px; }
-                    .btn-delete { color: #dc3545; cursor: pointer; font-weight: bold; text-align: center; line-height: 25px; }
+                    .extra-row select, .extra-row input { padding: 4px; font-size: 11px; }
+                    .btn-delete { color: #dc3545; cursor: pointer; font-weight: bold; text-align: center; }
                 </style>
             </head>
             <body>
                 <div class="container" style="max-width: 1100px;">
                     ${backToDashboardLink}
                     <h1>Super Nómina Quincenal</h1>
-                    <p>Gestiona todos los pagos y actividades en una sola ventana.</p>
-                    
                     <table>
                         <thead>
                             <tr>
@@ -3677,44 +3679,33 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
                         </thead>
                         <tbody>${employeesRows}</tbody>
                     </table>
-
                     <div style="margin-top: 30px; text-align: right;">
                         <button class="btn" style="background-color: #28a745; color: white; padding: 15px 30px;" onclick="procesarNomina()">
                             💾 Procesar Nómina y Generar Recibos
                         </button>
                     </div>
                 </div>
-
                 <script>
                     const projectOptionsHtml = '${projectOptions}';
-
                     function addExtraRow(empId) {
                         const container = document.getElementById('extras-container-' + empId);
                         const noExtrasMsg = container.querySelector('.no-extras-msg');
                         if (noExtrasMsg) noExtrasMsg.remove();
-
                         const div = document.createElement('div');
                         div.className = 'extra-row';
-                        div.innerHTML = \`
-                            <select class="extra-project"><option value="">Elegir Centro...</option>\${projectOptionsHtml}</select>
-                            <input type="text" class="extra-desc" placeholder="Ej: Fotos, Colaboración...">
+                        div.innerHTML = \`<select class="extra-project"><option value="">Centro...</option>\${projectOptionsHtml}</select>
+                            <input type="text" class="extra-desc" placeholder="Fotos, etc.">
                             <input type="number" class="extra-amount" placeholder="0.00" step="0.01">
-                            <div class="btn-delete" onclick="this.parentElement.remove()">×</div>
-                        \`;
+                            <div class="btn-delete" onclick="this.parentElement.remove()">×</div>\`;
                         container.appendChild(div);
                     }
-
-                    async function procesarNomina() {
-                        if(!confirm("¿Deseas procesar la nómina quincenal con estos datos?")) return;
-                        
-                        // Aquí recolectaremos los datos para enviarlos al servidor
-                        alert("Función de guardado en construcción. ¡Ya casi está!");
-                    }
+                    function procesarNomina() { alert("Función en construcción."); }
                 </script>
             </body></html>`);
 
     } catch (e) {
-        res.status(500).send("Error");
+        console.error("Error crítico en Super Nómina:", e.message);
+        res.status(500).send(\`<h1>Error de Servidor ❌</h1><p>\${e.message}</p><a href="/dashboard">Volver</a>\`);
     } finally {
         if (client) client.release();
     }
