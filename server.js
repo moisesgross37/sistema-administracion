@@ -3618,7 +3618,107 @@ app.get('/recibo-pago/:paymentId/pdf', requireLogin, async (req, res) => {
         res.status(500).send('Error al generar el recibo.');
     }
 });
+app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => {
+    let client;
+    try {
+        client = await pool.connect();
+        
+        // Buscamos empleados y proyectos activos al mismo tiempo
+        const [employeesRes, quotesRes] = await Promise.all([
+            client.query("SELECT * FROM employees WHERE participa_en_nomina = true ORDER BY name ASC"),
+            client.query("SELECT id, clientname FROM quotes WHERE status = 'activa' ORDER BY clientname ASC")
+        ]);
 
+        const employees = employeesRes.rows;
+        const activeProjects = quotesRes.rows;
+
+        // Generamos las opciones de proyectos para los menús desplegables
+        const projectOptions = activeProjects.map(p => `<option value="${p.id}">${p.clientname}</option>`).join('');
+
+        let employeesRows = employees.map(emp => {
+            const sueldoQuincenal = (parseFloat(emp.salary || 0) / 2).toFixed(2);
+            return `
+            <tr data-employee-id="${emp.id}">
+                <td style="font-weight:bold;">${emp.name}</td>
+                <td>$${sueldoQuincenal}</td>
+                <td id="extras-container-${emp.id}">
+                    <div class="no-extras-msg" style="color:gray; font-size:12px;">Sin extras registrados</div>
+                </td>
+                <td style="text-align:right;">
+                    <button class="btn btn-activar" style="padding:5px 10px; font-size:12px;" onclick="addExtraRow(${emp.id})">+ Actividad</button>
+                </td>
+            </tr>`;
+        }).join('');
+
+        res.send(`
+            <!DOCTYPE html><html lang="es">
+            <head>
+                ${commonHtmlHead.replace('<title>Panel de Administración</title>', '<title>Super Nómina Unificada</title>')}
+                <style>
+                    .extra-row { display: grid; grid-template-columns: 1fr 1fr 80px 30px; gap: 5px; margin-bottom: 5px; background: #f8f9fa; padding: 5px; border-radius: 4px; border: 1px solid #eee; }
+                    .extra-row select, .extra-row input { padding: 4px; font-size: 11px; border: 1px solid #ccc; border-radius: 3px; }
+                    .btn-delete { color: #dc3545; cursor: pointer; font-weight: bold; text-align: center; line-height: 25px; }
+                </style>
+            </head>
+            <body>
+                <div class="container" style="max-width: 1100px;">
+                    ${backToDashboardLink}
+                    <h1>Super Nómina Quincenal</h1>
+                    <p>Gestiona todos los pagos y actividades en una sola ventana.</p>
+                    
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Empleado</th>
+                                <th>Sueldo Base (1/2)</th>
+                                <th style="width: 50%;">Actividades / Extras (Centro - Detalle - Monto)</th>
+                                <th>Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>${employeesRows}</tbody>
+                    </table>
+
+                    <div style="margin-top: 30px; text-align: right;">
+                        <button class="btn" style="background-color: #28a745; color: white; padding: 15px 30px;" onclick="procesarNomina()">
+                            💾 Procesar Nómina y Generar Recibos
+                        </button>
+                    </div>
+                </div>
+
+                <script>
+                    const projectOptionsHtml = '${projectOptions}';
+
+                    function addExtraRow(empId) {
+                        const container = document.getElementById('extras-container-' + empId);
+                        const noExtrasMsg = container.querySelector('.no-extras-msg');
+                        if (noExtrasMsg) noExtrasMsg.remove();
+
+                        const div = document.createElement('div');
+                        div.className = 'extra-row';
+                        div.innerHTML = \`
+                            <select class="extra-project"><option value="">Elegir Centro...</option>\${projectOptionsHtml}</select>
+                            <input type="text" class="extra-desc" placeholder="Ej: Fotos, Colaboración...">
+                            <input type="number" class="extra-amount" placeholder="0.00" step="0.01">
+                            <div class="btn-delete" onclick="this.parentElement.remove()">×</div>
+                        \`;
+                        container.appendChild(div);
+                    }
+
+                    async function procesarNomina() {
+                        if(!confirm("¿Deseas procesar la nómina quincenal con estos datos?")) return;
+                        
+                        // Aquí recolectaremos los datos para enviarlos al servidor
+                        alert("Función de guardado en construcción. ¡Ya casi está!");
+                    }
+                </script>
+            </body></html>`);
+
+    } catch (e) {
+        res.status(500).send("Error");
+    } finally {
+        if (client) client.release();
+    }
+});
 app.listen(PORT, () => {
     console.log(`✅ Servidor de Administración corriendo en http://localhost:${PORT}`);
 });
