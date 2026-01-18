@@ -3660,32 +3660,9 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
             <head>
                 ${commonHtmlHead.replace('<title>Panel de Administración</title>', '<title>Super Nómina</title>')}
                 <style>
-                    .extra-row { 
-                        display: grid; 
-                        grid-template-columns: 140px 1.8fr 1.8fr 110px 30px; 
-                        gap: 10px; 
-                        margin-bottom: 8px; 
-                        background: #fdfdfd; 
-                        padding: 10px; 
-                        border-radius: 8px; 
-                        border: 1px solid #eaeaea; 
-                        align-items: center;
-                        box-shadow: 0 2px 4px rgba(0,0,0,0.02);
-                    }
-                    .extra-row input, .extra-row select { 
-                        padding: 8px; 
-                        font-size: 13px; 
-                        border: 1px solid #ddd; 
-                        border-radius: 5px; 
-                        width: 100%;
-                    }
-                    .btn-delete { 
-                        color: #ff4d4d; 
-                        cursor: pointer; 
-                        font-size: 22px; 
-                        font-weight: bold;
-                        text-align: center;
-                    }
+                    .extra-row { display: grid; grid-template-columns: 140px 1.8fr 1.8fr 110px 30px; gap: 10px; margin-bottom: 8px; background: #fdfdfd; padding: 10px; border-radius: 8px; border: 1px solid #eaeaea; align-items: center; }
+                    .extra-row input, .extra-row select { padding: 8px; font-size: 13px; border: 1px solid #ddd; border-radius: 5px; width: 100%; }
+                    .btn-delete { color: #ff4d4d; cursor: pointer; font-size: 22px; font-weight: bold; text-align: center; }
                 </style>
             </head>
             <body>
@@ -3694,12 +3671,7 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
                     <h1>Super Nómina Quincenal</h1>
                     <table id="nomina-table">
                         <thead>
-                            <tr>
-                                <th>Colaborador</th>
-                                <th>Sueldo Base (1/2)</th>
-                                <th style="width: 60%;">Detalle Actividades (Fecha - Centro - Descripción - Monto)</th>
-                                <th>Acción</th>
-                            </tr>
+                            <tr><th>Colaborador</th><th>Sueldo Base (1/2)</th><th>Detalle Actividades (Fecha - Centro - Descripción - Monto)</th><th>Acción</th></tr>
                         </thead>
                         <tbody>${employeesRows}</tbody>
                     </table>
@@ -3716,7 +3688,6 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
                         const container = document.getElementById('extras-container-' + empId);
                         const noExtrasMsg = container.querySelector('.no-extras-msg');
                         if (noExtrasMsg) noExtrasMsg.remove();
-
                         const div = document.createElement('div');
                         div.className = 'extra-row';
                         div.innerHTML = '<input type="date" class="extra-date">' +
@@ -3726,13 +3697,11 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
                             '<div class="btn-delete" onclick="this.parentElement.remove()">×</div>';
                         container.appendChild(div);
                     }
-                    
-                    // Nota: Asegúrate de que la función procesarNomina() recoja el .extra-date
 
                     async function procesarNomina() {
                         const rows = document.querySelectorAll('.employee-row');
                         const payload = [];
-                        let resumenTexto = "RESUMEN DE QUINCENA:\n\n";
+                        let resumenTexto = "RESUMEN DE QUINCENA:\\n\\n";
                         let hayDatos = false;
 
                         rows.forEach(row => {
@@ -3745,14 +3714,8 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
                             row.querySelectorAll('.extra-row').forEach(ex => {
                                 const fecha = ex.querySelector('.extra-date').value;
                                 const monto = parseFloat(ex.querySelector('.extra-amount').value) || 0;
-                                
                                 if (monto > 0) {
-                                    extras.push({
-                                        date: fecha,
-                                        quote_id: ex.querySelector('.extra-project').value,
-                                        desc: ex.querySelector('.extra-desc').value,
-                                        amount: monto
-                                    });
+                                    extras.push({ date: fecha, quote_id: ex.querySelector('.extra-project').value, desc: ex.querySelector('.extra-desc').value, amount: monto });
                                     totalExtrasEmp += monto;
                                     hayDatos = true;
                                 }
@@ -3760,15 +3723,12 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
 
                             if (extras.length > 0 || sueldoBase > 0) {
                                 payload.push({ employee_id: empId, salary: sueldoBase, extras: extras });
-                                resumenTexto += `- ${nombreEmp}: $${sueldoBase} (Base) + $${totalExtrasEmp.toFixed(2)} (Extras) = $${(sueldoBase + totalExtrasEmp).toFixed(2)}\n`;
+                                resumenTexto += "- " + nombreEmp + ": $" + sueldoBase + " (Base) + $" + totalExtrasEmp.toFixed(2) + " (Extras) = $" + (sueldoBase + totalExtrasEmp).toFixed(2) + "\\n";
                             }
                         });
 
-                        if (!hayDatos && payload.length === 0) return alert("No has ingresado ninguna actividad para procesar.");
-
-                        const confirmar = confirm(resumenTexto + "\n¿Deseas guardar estos pagos y afectar la rentabilidad de los centros?");
-                        
-                        if (confirmar) {
+                        if (!hayDatos && payload.length === 0) return alert("No has ingresado ninguna actividad.");
+                        if (confirm(resumenTexto + "\\n¿Deseas guardar estos pagos?")) {
                             try {
                                 const res = await fetch('/procesar-super-nomina', {
                                     method: 'POST',
@@ -3776,25 +3736,14 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
                                     body: JSON.stringify({ nomina: payload })
                                 });
                                 const result = await res.json();
-                                if (result.success) {
-                                    alert("¡Nómina procesada con éxito y gastos aplicados a los centros!");
-                                    window.location.href = "/dashboard";
-                                } else {
-                                    alert("Error: " + result.message);
-                                }
-                            } catch (e) {
-                                alert("Error de conexión con el servidor.");
-                            }
+                                if (result.success) { alert("¡Nómina procesada!"); window.location.href = "/dashboard"; }
+                                else { alert("Error: " + result.message); }
+                            } catch (e) { alert("Error de conexión"); }
                         }
                     }
                 </script>
             </body></html>`);
-    } catch (e) { 
-        console.error(e);
-        res.status(500).send("Error en el servidor: " + e.message); 
-    } finally { 
-        if (client) client.release(); 
-    }
+    } catch (e) { res.status(500).send("Error: " + e.message); } finally { if (client) client.release(); }
 });
 app.post('/procesar-super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { nomina } = req.body;
