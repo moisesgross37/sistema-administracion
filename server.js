@@ -276,15 +276,12 @@ const dashboardHeader = (user) => `
 `;
 
 const backToDashboardLink = `<a href="/" class="back-link">🏠 Volver al Panel Principal</a>`;
-// =======================================================
-// ============== RUTAS DE LA APLICACIÓN ==============
-// =======================================================
-
 app.get('/', requireLogin, requireAdminOrCoord, (req, res) => {
     res.send(`
         <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
             <div class="container">
                 ${dashboardHeader(req.session.user)}
+                
                 <div class="module" style="margin-top: 40px;">
                     <h2>Proyectos y Clientes</h2>
                     <div class="dashboard">
@@ -293,6 +290,7 @@ app.get('/', requireLogin, requireAdminOrCoord, (req, res) => {
                         <a href="/todos-los-centros" class="dashboard-card"><h3>🏢 Directorio de Centros</h3><p>Consulta la lista completa de centros.</p></a>
                     </div>
                 </div>
+
                 <div class="module">
                     <h2>Finanzas y Contabilidad</h2>
                     <div class="dashboard">
@@ -304,16 +302,26 @@ app.get('/', requireLogin, requireAdminOrCoord, (req, res) => {
                         <a href="/suplidores" class="dashboard-card"><h3>🚚 Gestionar Suplidores</h3><p>Añade o edita la información de tus suplidores.</p></a>
                     </div>
                 </div>
+
                 <div class="module">
                     <h2>Personal y Pagos</h2>
                     <div class="dashboard">
-                        <a href="/gestionar-asesores" class="dashboard-card"><h3>📊 Gestionar Asesores</h3><p>Define asesores, al coordinador y sus tasas de comisión.</p></a>
-                        <a href="/pagar-comisiones" class="dashboard-card"><h3>💵 Pagar Comisiones</h3><p>Revisa y marca como pagadas las comisiones pendientes.</p></a>
-                        <a href="/empleados" class="dashboard-card"><h3>👥 Gestionar Empleados</h3><p>Añade o edita la información de tu personal.</p></a>
-                        <a href="/gestionar-prestamos" class="dashboard-card"><h3>🏦 Gestionar Préstamos</h3><p>Registra y consulta préstamos a colaboradores.</p></a> 
-                        <a href="/gestionar-avances" class="dashboard-card"><h3>💰 Gestionar Avances</h3><p>Registra y consulta los avances de sueldo.</p></a>
-                        <a href="/generar-nomina" class="dashboard-card"><h3>💵 Generar Nómina</h3><p>Calcula la nómina quincenal de tu equipo.</p></a>
-                        <a href="/historial-nomina" class="dashboard-card"><h3>📂 Historial de Nómina</h3><p>Consulta los registros de pagos de nómina anteriores.</p></a>
+                        <a href="/super-nomina" class="dashboard-card" style="border-top: 5px solid #28a745;">
+                            <h3>💰 Control de Nómina</h3>
+                            <p><b>Ventana Única:</b> Gestiona sueldos, avances y bonos por centro en un solo lugar.</p>
+                        </a>
+                        <a href="/pagar-comisiones" class="dashboard-card">
+                            <h3>💵 Pago de Comisiones</h3>
+                            <p>Revisa y paga las comisiones pendientes de asesores y ventas.</p>
+                        </a>
+                        <a href="/empleados" class="dashboard-card">
+                            <h3>👥 Gestión de Equipo</h3>
+                            <p>Configura datos de empleados, asesores y parámetros de pago.</p>
+                        </a>
+                        <a href="/historial-nomina" class="dashboard-card">
+                            <h3>📂 Historial de Pagos</h3>
+                            <p>Consulta registros de nóminas anteriores y recibos generados.</p>
+                        </a>
                     </div>
                 </div>
             </div>
