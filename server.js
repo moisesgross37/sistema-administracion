@@ -2956,13 +2956,44 @@ app.get('/ver-detalle-nomina/:payroll_id', requireLogin, requireAdminOrCoord, as
                 <div class="container">
                     <a href="/historial-nomina" style="text-decoration:none; color:#007bff;">← Volver al Archivo</a>
                     <h1 style="margin-top:20px;">Detalle de Pagos: Lote #${payroll_id}</h1>
+                    
                     <table style="background:white; margin-top:30px;">
                         <thead>
                             <tr><th>Colaborador</th><th style="text-align:center;">Acciones</th></tr>
                         </thead>
                         <tbody>${filas}</tbody>
                     </table>
+
+                    <div style="margin-top: 80px; border-top: 2px solid #ff4d4d; padding-top: 20px; background: #fff5f5; padding: 25px; border-radius: 12px; border: 1px dashed #ff4d4d;">
+                        <h4 style="color: #ff4d4d; margin-top: 0;">⚠️ Zona de Peligro</h4>
+                        <p style="font-size: 14px; color: #666; margin-bottom: 20px;">
+                            Si detectas un error masivo en este lote, puedes anularlo. 
+                            <b>Esta acción eliminará:</b> los recibos de esta quincena, los gastos generados en los proyectos y los abonos a préstamos realizados en esta sesión.
+                        </p>
+                        <button class="btn" style="background: #ff4d4d; color: white; padding: 12px 25px; font-weight: bold; border-radius: 6px; cursor: pointer; border: none;" onclick="anularLote(${payroll_id})">
+                            Anular Nómina Completa
+                        </button>
+                    </div>
                 </div>
+
+                <script>
+                    async function anularLote(id) {
+                        if(!confirm("¿ESTÁS TOTALMENTE SEGURO? Esta acción es irreversible y borrará todos los registros de esta quincena en la contabilidad y proyectos.")) return;
+                        
+                        try {
+                            const res = await fetch('/anular-nomina/' + id, { method: 'POST' });
+                            const result = await res.json();
+                            if(result.success) {
+                                alert(result.message);
+                                window.location.href = "/historial-nomina";
+                            } else {
+                                alert("Error: " + result.message);
+                            }
+                        } catch(e) {
+                            alert("Error de conexión al intentar anular el lote.");
+                        }
+                    }
+                </script>
             </body></html>`);
     } catch (e) { res.status(500).send(e.message); } finally { if (client) client.release(); }
 });
@@ -4047,6 +4078,39 @@ app.get('/imprimir-desembolso/:id', requireLogin, requireAdminOrCoord, async (re
                 </div>
             </body></html>`);
     } catch (e) { res.status(500).send(e.message); }
+});
+app.post('/anular-nomina/:payroll_id', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { payroll_id } = req.params;
+    let client;
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN');
+
+        // 1. Eliminar abonos a préstamos realizados en este lote
+        // Buscamos los pagos que tengan la nota de este batch ID
+        await client.query(
+            "DELETE FROM loan_payments WHERE notes LIKE $1", 
+            [`%ID: ${payroll_id}%`]
+        );
+
+        // 2. Eliminar los gastos creados en los proyectos (Centros)
+        // Buscamos los gastos cuya descripción contenga el ID o el formato de nómina
+        await client.query(
+            "DELETE FROM expenses WHERE type IN ('Nómina Interna', 'Gasto Administrativo') AND expense_date = (SELECT payment_date FROM payroll_extras WHERE payroll_id = $1 LIMIT 1)",
+            [payroll_id]
+        );
+
+        // 3. Eliminar el detalle de los extras de nómina
+        await client.query("DELETE FROM payroll_extras WHERE payroll_id = $1", [payroll_id]);
+
+        await client.query('COMMIT');
+        res.json({ success: true, message: "Lote de nómina anulado completamente." });
+    } catch (e) {
+        if (client) await client.query('ROLLBACK');
+        res.status(500).json({ success: false, message: e.message });
+    } finally {
+        if (client) client.release();
+    }
 });
 app.listen(PORT, () => {
     console.log(`✅ Servidor de Administración corriendo en http://localhost:${PORT}`);
