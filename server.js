@@ -4258,44 +4258,79 @@ app.get('/reporte-suplidor-pdf/:id', requireLogin, requireAdminOrCoord, async (r
     try {
         client = await pool.connect();
         const supplierRes = await client.query("SELECT name FROM suppliers WHERE id = $1", [supplierId]);
+        
+        // Buscamos facturas pendientes
         const invoicesRes = await client.query(`
             SELECT * FROM expenses 
-            WHERE supplier_id = $1 AND status != 'pagado'
+            WHERE supplier_id = $1 AND status != 'Pagada' 
             ORDER BY expense_date ASC`, [supplierId]);
         
+        // Buscamos TODOS los abonos hechos a este suplidor
+        const historyRes = await client.query(`
+            SELECT ph.*, e.description as factura_desc 
+            FROM payment_history ph
+            JOIN expenses e ON ph.expense_id = e.id
+            WHERE e.supplier_id = $1
+            ORDER BY ph.payment_date DESC`, [supplierId]);
+        
         const invoices = invoicesRes.rows;
-        const totalDeuda = invoices.reduce((sum, i) => sum + parseFloat(i.amount), 0);
-        client.release();
+        const history = historyRes.rows;
+        const totalPendiente = invoices.reduce((sum, i) => sum + (parseFloat(i.amount) - parseFloat(i.paid_amount || 0)), 0);
 
         const doc = new PDFDocument({ size: 'A4', margin: 50 });
         res.setHeader('Content-Type', 'application/pdf');
         doc.pipe(res);
 
-        doc.fontSize(16).text('ESTADO DE CUENTA - CUENTAS POR PAGAR', { align: 'center' });
+        // Encabezado
+        doc.font('Helvetica-Bold').fontSize(16).text('ESTADO DE CUENTA Y CONCILIACIÓN', { align: 'center' });
         doc.fontSize(12).text(`Suplidor: ${supplierRes.rows[0].name}`, { align: 'center' });
+        doc.fontSize(10).font('Helvetica').text(`Generado: ${new Date().toLocaleString()}`, { align: 'center' });
+        doc.moveDown(2);
+
+        // SECCIÓN 1: FACTURAS PENDIENTES
+        doc.font('Helvetica-Bold').fontSize(12).text('1. FACTURAS PENDIENTES DE PAGO', { underline: true });
+        doc.moveDown(0.5);
+        doc.fontSize(10);
+        doc.text('FECHA', 50, doc.y, { width: 70 });
+        doc.text('CONCEPTO', 120, doc.y, { width: 230 });
+        doc.text('PENDIENTE', 450, doc.y, { align: 'right' });
+        doc.moveTo(50, doc.y + 12).lineTo(550, doc.y + 12).stroke();
         doc.moveDown();
 
-        doc.fontSize(10).font('Helvetica-Bold');
-        doc.text('FECHA', 50, doc.y);
-        doc.text('FACTURA', 120, doc.y);
-        doc.text('DESCRIPCIÓN', 200, doc.y);
-        doc.text('MONTO', 450, doc.y, { align: 'right' });
+        invoices.forEach(i => {
+            const bal = parseFloat(i.amount) - parseFloat(i.paid_amount || 0);
+            doc.text(new Date(i.expense_date).toLocaleDateString(), 50, doc.y);
+            doc.text(i.description || 'N/A', 120, doc.y, { width: 220 });
+            doc.text(`RD$ ${bal.toFixed(2)}`, 450, doc.y, { align: 'right' });
+            doc.moveDown();
+        });
+
+        // SECCIÓN 2: HISTORIAL DE PAGOS REALIZADOS (La gran mejora)
+        doc.moveDown(2);
+        doc.font('Helvetica-Bold').fontSize(12).text('2. HISTORIAL DE ABONOS RECIBIDOS', { underline: true });
+        doc.moveDown(0.5);
+        doc.fontSize(10);
+        doc.text('FECHA PAGO', 50, doc.y, { width: 90 });
+        doc.text('MÉTODO', 150, doc.y, { width: 100 });
+        doc.text('MONTO ABONADO', 450, doc.y, { align: 'right' });
         doc.moveTo(50, doc.y + 12).lineTo(550, doc.y + 12).stroke();
         doc.moveDown();
 
         doc.font('Helvetica');
-        invoices.forEach(i => {
-            doc.text(new Date(i.expense_date).toLocaleDateString(), 50, doc.y);
-            doc.text(i.invoice_number || 'N/A', 120, doc.y);
-            doc.text(i.description || 'Sin concepto', 200, doc.y, { width: 230 });
-            doc.text(`$${parseFloat(i.amount).toFixed(2)}`, 450, doc.y, { align: 'right' });
-            doc.moveDown(1.5);
+        history.forEach(h => {
+            doc.text(new Date(h.payment_date).toLocaleDateString(), 50, doc.y);
+            doc.text(h.payment_method || 'Efectivo', 150, doc.y);
+            doc.text(`RD$ ${parseFloat(h.amount_paid).toFixed(2)}`, 450, doc.y, { align: 'right' });
+            doc.moveDown();
         });
 
-        doc.moveDown();
-        doc.fontSize(13).font('Helvetica-Bold').text(`DEUDA TOTAL PENDIENTE: RD$ ${totalDeuda.toFixed(2)}`, { align: 'right' });
+        // TOTAL FINAL
+        doc.moveDown(2);
+        doc.font('Helvetica-Bold').fontSize(14).fillColor('#c53030')
+           .text(`DEUDA TOTAL A LA FECHA: RD$ ${totalPendiente.toFixed(2)}`, { align: 'right' });
+
         doc.end();
-    } catch (e) { res.status(500).send(e.message); }
+    } catch (e) { res.status(500).send(e.message); } finally { if (client) client.release(); }
 });
 app.post('/cuentas-por-pagar/abonar', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { expenseId, paymentAmount, paymentMethod } = req.body;
