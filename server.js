@@ -3683,18 +3683,22 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
                 </div>
                 <script>
                     const projectOptionsHtml = '${projectOptions}';
-                    function addExtraRow(empId) {
-                        const container = document.getElementById('extras-container-' + empId);
-                        const noExtrasMsg = container.querySelector('.no-extras-msg');
-                        if (noExtrasMsg) noExtrasMsg.remove();
-                        const div = document.createElement('div');
-                        div.className = 'extra-row';
-                        div.innerHTML = '<select class="extra-project"><option value="">-- Centro --</option>' + projectOptionsHtml + '</select>' +
-                            '<input type="text" class="extra-desc" placeholder="¿Qué hizo?">' +
-                            '<input type="number" class="extra-amount" value="0" step="0.01">' +
-                            '<div class="btn-delete" onclick="this.parentElement.remove()">×</div>';
-                        container.appendChild(div);
-                    }
+                    // Busca esta función dentro del script al final del app.get('/super-nomina')
+function addExtraRow(empId) {
+    const container = document.getElementById('extras-container-' + empId);
+    const noExtrasMsg = container.querySelector('.no-extras-msg');
+    if (noExtrasMsg) noExtrasMsg.remove();
+
+    const div = document.createElement('div');
+    div.className = 'extra-row';
+    // Se añade el input de tipo DATE al inicio de la fila
+    div.innerHTML = '<input type="date" class="extra-date" style="width:120px;">' +
+        '<select class="extra-project"><option value="">-- Centro --</option>' + projectOptionsHtml + '</select>' +
+        '<input type="text" class="extra-desc" placeholder="¿Qué hizo? (Asistencia, Montaje...)">' +
+        '<input type="number" class="extra-amount" value="0" step="0.01">' +
+        '<div class="btn-delete" onclick="this.parentElement.remove()">×</div>';
+    container.appendChild(div);
+}
 
                     async function procesarNomina() {
                         if(!confirm("¿Deseas guardar esta nómina y afectar la rentabilidad de los centros?")) return;
@@ -3734,37 +3738,36 @@ app.post('/procesar-super-nomina', requireLogin, requireAdminOrCoord, async (req
     let client;
     try {
         client = await pool.connect();
-        await client.query('BEGIN'); // Iniciamos transacción de seguridad
+        await client.query('BEGIN');
 
         for (const entry of nomina) {
-            // Procesamos los extras vinculados a centros
             for (const extra of entry.extras) {
                 const montoExtra = parseFloat(extra.amount);
+                // Usamos la fecha capturada o la fecha actual si se dejó vacía
+                const fechaActividad = extra.date || new Date().toISOString().split('T')[0];
                 
                 if (extra.quote_id && montoExtra > 0) {
-                    // 1. Guardar el detalle para el recibo futuro
+                    // 1. Guardar con FECHA específica para el recibo tipo Excel
                     await client.query(
-                        `INSERT INTO payroll_extras (employee_id, quote_id, amount, description) 
-                         VALUES ($1, $2, $3, $4)`,
-                        [entry.employee_id, extra.quote_id, montoExtra, extra.desc]
+                        `INSERT INTO payroll_extras (employee_id, quote_id, amount, description, payment_date) 
+                         VALUES ($1, $2, $3, $4, $5)`,
+                        [entry.employee_id, extra.quote_id, montoExtra, extra.desc, fechaActividad]
                     );
                     
-                    // 2. Crear gasto automático en el proyecto (Rentabilidad)
-                    // Usamos una descripción clara para que sepas de dónde viene el gasto
+                    // 2. Gasto automático en el proyecto
                     await client.query(
                         `INSERT INTO expenses (quote_id, amount, description, expense_date, supplier_id, type) 
-                         VALUES ($1, $2, $3, CURRENT_DATE, (SELECT id FROM suppliers LIMIT 1), 'Nómina Interna')`,
-                        [extra.quote_id, montoExtra, `Nómina: ${extra.desc}`]
+                         VALUES ($1, $2, $3, $4, (SELECT id FROM suppliers LIMIT 1), 'Nómina Interna')`,
+                        [extra.quote_id, montoExtra, `Nómina (${fechaActividad}): ${extra.desc}`, fechaActividad]
                     );
                 }
             }
         }
 
-        await client.query('COMMIT'); // Guardado permanente
+        await client.query('COMMIT');
         res.json({ success: true });
     } catch (e) {
-        if (client) await client.query('ROLLBACK'); // Cancelar todo en caso de error
-        console.error("Error al procesar nómina:", e.message);
+        if (client) await client.query('ROLLBACK');
         res.status(500).json({ success: false, message: e.message });
     } finally {
         if (client) client.release();
