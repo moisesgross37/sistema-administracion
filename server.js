@@ -554,7 +554,7 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
     try {
         client = await pool.connect();
 
-        // 1. Resumen de Deuda Total por Suplidor (Para las tarjetas de arriba)
+        // 1. Resumen de Deuda Total por Suplidor
         const summaryRes = await client.query(`
             SELECT s.id, s.name, SUM(e.amount) as total_deuda
             FROM expenses e
@@ -563,38 +563,37 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
             GROUP BY s.id, s.name
             ORDER BY total_deuda DESC`);
 
-        // 2. Filtro dinámico para la tabla principal
+        // 2. Filtro dinámico para la tabla
         let queryText = `
             SELECT e.*, s.name as supplier_name 
             FROM expenses e 
             JOIN suppliers s ON e.supplier_id = s.id 
             WHERE e.status != 'Pagada'`;
+        
         const params = [];
-
         if (supplierId) {
             params.push(supplierId);
-            queryText += \` AND e.supplier_id = $\${params.length}\`;
+            queryText += ` AND e.supplier_id = $${params.length}`;
         }
 
         const invoicesRes = await client.query(queryText + " ORDER BY e.expense_date DESC", params);
         const suppliersRes = await client.query("SELECT id, name FROM suppliers ORDER BY name ASC");
 
-        // Generación de Tarjetas de Suplidores
         const summaryCards = summaryRes.rows.map(s => `
             <div class="summary-box" style="border-top: 4px solid var(--primary); min-width: 220px; text-align:center;">
-                <small style="color:gray;">\${s.name}</small>
-                <div style="font-weight:bold; font-size:1.2rem; margin:10px 0;">RD$ \${parseFloat(s.total_deuda).toFixed(2)}</div>
-                <a href="/reporte-suplidor-pdf/\${s.id}" target="_blank" class="btn" style="padding:4px 8px; font-size:10px; background:#eef2ff; color:var(--primary);">🖨️ Estado de Cuenta PDF</a>
+                <small style="color:gray;">${s.name}</small>
+                <div style="font-weight:bold; font-size:1.2rem; margin:10px 0;">RD$ ${parseFloat(s.total_deuda).toFixed(2)}</div>
+                <a href="/reporte-suplidor-pdf/${s.id}" target="_blank" class="btn" style="padding:4px 8px; font-size:10px; background:#eef2ff; color:var(--primary);">🖨️ Estado de Cuenta PDF</a>
             </div>`).join('');
 
-        res.send(\`
-            <!DOCTYPE html><html lang="es"><head>\${commonHtmlHead}</head><body>
+        res.send(`
+            <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
                 <div class="container" style="max-width: 1300px;">
-                    <div style="margin-bottom: 20px;">\${backToDashboardLink}</div>
+                    <div style="margin-bottom: 20px;">${backToDashboardLink}</div>
                     <h1>Cuentas por Pagar a Suplidores</h1>
 
                     <div style="display: flex; gap: 15px; overflow-x: auto; padding-bottom: 15px; margin-bottom: 30px;">
-                        \${summaryCards || '<p>No hay deudas pendientes actualmente.</p>'}
+                        ${summaryCards || '<p>No hay deudas pendientes actualmente.</p>'}
                     </div>
 
                     <div style="display: grid; grid-template-columns: 350px 1fr; gap: 30px;">
@@ -603,7 +602,10 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
                             <form action="/cuentas-por-pagar" method="POST">
                                 <div class="form-group">
                                     <label>Suplidor:</label>
-                                    <select name="supplier_id" required><option value="">Seleccione...</option>\${suppliersRes.rows.map(s=>\`<option value="\${s.id}">\${s.name}</option>\`).join('')}</select>
+                                    <select name="supplier_id" required>
+                                        <option value="">Seleccione...</option>
+                                        ${suppliersRes.rows.map(s => `<option value="${s.id}">${s.name}</option>`).join('')}
+                                    </select>
                                 </div>
                                 <div class="form-group"><label>Monto Total:</label><input type="number" name="amount" step="0.01" required></div>
                                 <div class="form-group"><label>Fecha Factura:</label><input type="date" name="expense_date" required></div>
@@ -617,25 +619,25 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
                                 <h3 style="margin:0;">Detalle de Facturas Pendientes</h3>
                                 <select id="filter-supplier" onchange="window.location.href='/cuentas-por-pagar?supplierId='+this.value">
                                     <option value="">-- Filtrar por Suplidor --</option>
-                                    \${suppliersRes.rows.map(s=>\`<option value="\${s.id}" \${supplierId == s.id ? 'selected' : ''}>\${s.name}</option>\`).join('')}
+                                    ${suppliersRes.rows.map(s => `<option value="${s.id}" ${supplierId == s.id ? 'selected' : ''}>${s.name}</option>`).join('')}
                                 </select>
                             </div>
                             <table class="modern-table">
                                 <thead><tr><th>Fecha</th><th>Factura</th><th>Monto</th><th>Estado</th></tr></thead>
                                 <tbody>
-                                    \${invoicesRes.rows.map(i => \`
+                                    ${invoicesRes.rows.map(i => `
                                         <tr>
-                                            <td>\${new Date(i.expense_date).toLocaleDateString()}</td>
-                                            <td><b>\${i.supplier_name}</b><br><small>\${i.description || 'Sin concepto'}</small></td>
-                                            <td style="font-weight:bold; text-align:right;">RD$ \${parseFloat(i.amount).toFixed(2)}</td>
-                                            <td><span class="badge" style="background:#fff5f5; color:#c53030; padding:4px 8px; border-radius:10px; font-size:11px;">\${i.status}</span></td>
-                                        </tr>\`).join('')}
+                                            <td>${new Date(i.expense_date).toLocaleDateString()}</td>
+                                            <td><b>${i.supplier_name}</b><br><small>${i.description || 'Sin concepto'}</small></td>
+                                            <td style="font-weight:bold; text-align:right;">RD$ ${parseFloat(i.amount).toFixed(2)}</td>
+                                            <td><span class="badge" style="background:#fff5f5; color:#c53030; padding:4px 8px; border-radius:10px; font-size:11px;">${i.status || 'Pendiente'}</span></td>
+                                        </tr>`).join('')}
                                 </tbody>
                             </table>
                         </div>
                     </div>
                 </div>
-            </body></html>\`);
+            </body></html>`);
     } catch (e) { res.status(500).send(e.message); } finally { if (client) client.release(); }
 });
 // --- RUTA PARA GUARDAR UNA NUEVA FACTURA DE SUPLIDOR ---
