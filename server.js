@@ -1217,136 +1217,135 @@ app.get('/gastos-generales', requireLogin, requireAdminOrCoord, async (req, res)
     }
 });
 
-// --- RUTA PARA GUARDAR UN NUEVO GASTO GENERAL ---
-
-// =======================================================
-//   NUEVAS RUTAS PARA CAJA CHICA
-// =======================================================
-// =======================================================
-//   NUEVAS RUTAS PARA CAJA CHICA (VERSIÓN COMPLETA)
-// =======================================================
 
 app.get('/caja-chica', requireLogin, requireAdminOrCoord, async (req, res) => {
+    let client;
     try {
-        const client = await pool.connect();
-        const activeCycleResult = await client.query("SELECT * FROM caja_chica_ciclos WHERE estado = 'abierto' LIMIT 1");
+        client = await pool.connect();
         
-        if (activeCycleResult.rows.length > 0) {
-            // --- VISTA CUANDO HAY UN CICLO ABIERTO ---
-            const activeCycle = activeCycleResult.rows[0];
-            const [suppliersResult, expensesResult] = await Promise.all([
-                client.query('SELECT * FROM suppliers ORDER BY name ASC'),
-                client.query(`
-                    SELECT e.*, s.name as supplier_name 
-                    FROM expenses e
-                    JOIN suppliers s ON e.supplier_id = s.id
-                    WHERE e.caja_chica_ciclo_id = $1 
-                    ORDER BY e.expense_date DESC`, 
-                    [activeCycle.id]
-                )
-            ]);
-            
-            const suppliers = suppliersResult.rows;
-            const expenses = expensesResult.rows;
-            const totalGastado = expenses.reduce((sum, exp) => sum + parseFloat(exp.amount), 0);
-            const balanceActual = parseFloat(activeCycle.fondo_inicial) - totalGastado;
-            
-            let suppliersOptionsHtml = suppliers.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
-            let expensesHtml = expenses.map(e => `
-                <tr>
-                    <td>${new Date(e.expense_date).toLocaleDateString()}</td>
-                    <td>${e.supplier_name}</td>
-                    <td>${e.description}</td>
-                    <td>$${parseFloat(e.amount).toFixed(2)}</td>
-                </tr>
-            `).join('') || '<tr><td colspan="4">No hay gastos registrados en este ciclo.</td></tr>';
+        // 1. Buscamos si hay un ciclo abierto
+        const activeCycleResult = await client.query("SELECT * FROM caja_chica_ciclos WHERE estado = 'abierto' LIMIT 1");
+        const cycle = activeCycleResult.rows[0];
 
-            res.send(`
-                <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
-                    <div class="container">
-                        ${backToDashboardLink}
-                        <h2>Gestión de Caja Chica (Ciclo Abierto)</h2>
-                        <div class="summary">
-                            <div class="summary-box"><h3>Fondo Inicial</h3><p class="amount">$${parseFloat(activeCycle.fondo_inicial).toFixed(2)}</p></div>
-                            <div class="summary-box"><h3>Total Gastado</h3><p class="amount orange">$${totalGastado.toFixed(2)}</p></div>
-                            <div class="summary-box"><h3>Balance Restante</h3><p class="amount green">$${balanceActual.toFixed(2)}</p></div>
-                        </div>
-                        <div style="text-align: center; margin-bottom: 20px;">
-                            <form action="/caja-chica/cerrar-ciclo" method="POST" onsubmit="return confirm('¿Estás seguro de que deseas cerrar este ciclo de caja? Esta acción no se puede deshacer.');">
-                                <input type="hidden" name="cycleId" value="${activeCycle.id}">
-                                <input type="hidden" name="total_gastado" value="${totalGastado}">
-                                <input type="hidden" name="balance_final" value="${balanceActual}">
-                                <button type="submit" class="btn" style="background-color: #dc3545;">Cerrar Ciclo y Generar Reporte</button>
-                            </form>
-                        </div>
-                        <div class="form-container">
-                            <h3>Registrar Gasto de Caja Chica</h3>
-                            <form action="/caja-chica/nuevo-gasto" method="POST">
-                                <input type="hidden" name="cycleId" value="${activeCycle.id}">
-                                <div class="form-group"><label>Fecha:</label><input type="date" name="expense_date" required></div>
-                                <div class="form-group"><label>Suplidor:</label><select name="supplier_id" required>${suppliersOptionsHtml}</select></div>
-                                <div class="form-group"><label>Monto:</label><input type="number" name="amount" step="0.01" required></div>
-                                <div class="form-group"><label>Descripción / Concepto:</label><textarea name="description" rows="2" required></textarea></div>
-                                <button type="submit" class="btn">Guardar Gasto</button>
-                            </form>
-                        </div>
-                        <hr style="margin: 40px 0;">
-                        <h3>Gastos de este Ciclo</h3>
-                        <table>
-                            <thead><tr><th>Fecha</th><th>Suplidor</th><th>Descripción</th><th>Monto</th></tr></thead>
-                            <tbody>${expensesHtml}</tbody>
-                        </table>
-                    </div>
-                </body></html>
-            `);
+        let content = "";
 
-        } else {
-            // --- VISTA CUANDO NO HAY CICLOS ABIERTOS ---
+        if (!cycle) {
+            // --- VISTA CUANDO NO HAY CICLO ---
             const closedCyclesResult = await client.query("SELECT * FROM caja_chica_ciclos WHERE estado = 'cerrado' ORDER BY fecha_inicio DESC");
-            const closedCycles = closedCyclesResult.rows;
-            let closedCyclesHtml = closedCycles.map(c => `
+            const closedCyclesHtml = closedCyclesResult.rows.map(c => `
                 <tr>
                     <td>${new Date(c.fecha_inicio).toLocaleDateString()}</td>
                     <td>${new Date(c.fecha_cierre).toLocaleDateString()}</td>
-                    <td>$${parseFloat(c.fondo_inicial).toFixed(2)}</td>
-                    <td>$${parseFloat(c.total_gastado).toFixed(2)}</td>
-                    <td><a href="/caja-chica/reporte/${c.id}/pdf" target="_blank" class="btn" style="padding: 5px 10px; font-size: 14px;">Ver Reporte</a></td>
-                </tr>
-            `).join('') || '<tr><td colspan="5">No hay ciclos de caja cerrados.</td></tr>';
+                    <td>RD$ ${parseFloat(c.fondo_inicial).toFixed(2)}</td>
+                    <td style="color:red;">RD$ ${parseFloat(c.total_gastado).toFixed(2)}</td>
+                    <td><a href="/caja-chica/reporte/${c.id}/pdf" target="_blank" class="btn btn-info" style="padding:5px 10px;">Ver PDF</a></td>
+                </tr>`).join('') || '<tr><td colspan="5">No hay historial disponible.</td></tr>';
 
-            res.send(`
-                <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
-                    <div class="container">
-                        ${backToDashboardLink}
-                        <h2>Gestión de Caja Chica</h2>
-                        <div class="form-container">
-                            <h3>No hay un ciclo de caja chica activo.</h3>
-                            <p>Para empezar a registrar gastos, primero debes abrir un nuevo ciclo con un fondo inicial.</p>
-                            <form action="/caja-chica/abrir-ciclo" method="POST">
-                                <div class="form-group">
-                                    <label for="fondo_inicial">Monto del Fondo Inicial:</label>
-                                    <input type="number" id="fondo_inicial" name="fondo_inicial" step="0.01" required>
-                                </div>
-                                <button type="submit" class="btn">Abrir Nuevo Ciclo</button>
+            content = `
+                <div class="card" style="max-width: 600px; margin: 0 auto; text-align: center; padding: 40px;">
+                    <h2 style="color: var(--primary); margin-bottom: 10px;">Caja Chica Cerrada</h2>
+                    <p style="color: #666;">No hay un ciclo activo actualmente. Abre uno nuevo para registrar gastos.</p>
+                    <form action="/caja-chica/abrir-ciclo" method="POST" style="margin-top: 30px;">
+                        <div class="form-group">
+                            <label>Monto del Fondo Inicial (RD$):</label>
+                            <input type="number" name="fondo_inicial" step="0.01" style="font-size: 1.5rem; text-align: center; width: 80%;" required>
+                        </div>
+                        <button type="submit" class="btn btn-activar" style="width: 80%; margin-top: 20px;">🚀 Abrir Nuevo Ciclo</button>
+                    </form>
+                </div>
+                <div class="card" style="margin-top: 40px;">
+                    <h3>Historial de Ciclos Cerrados</h3>
+                    <table class="modern-table">
+                        <thead><tr><th>Inicio</th><th>Cierre</th><th>Fondo</th><th>Gastado</th><th>Reporte</th></tr></thead>
+                        <tbody>${closedCyclesHtml}</tbody>
+                    </table>
+                </div>`;
+        } else {
+            // --- VISTA CUANDO SÍ HAY CICLO (DISEÑO HORIZONTAL) ---
+            const [suppliersRes, expensesRes] = await Promise.all([
+                client.query('SELECT * FROM suppliers ORDER BY name ASC'),
+                client.query(`SELECT e.*, s.name as supplier_name FROM expenses e JOIN suppliers s ON e.supplier_id = s.id WHERE e.caja_chica_ciclo_id = $1 ORDER BY e.expense_date DESC`, [cycle.id])
+            ]);
+            
+            const expenses = expensesRes.rows;
+            const totalGastado = expenses.reduce((sum, e) => sum + parseFloat(e.amount), 0);
+            const balance = parseFloat(cycle.fondo_inicial) - totalGastado;
+            const supplierOptions = suppliersRes.rows.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+
+            content = `
+                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 30px;">
+                    <div class="summary-box" style="border-top: 5px solid var(--primary); text-align: center;">
+                        <small style="text-transform: uppercase; color: var(--primary); font-weight: bold;">Fondo Inicial</small>
+                        <div class="amount" style="font-size: 1.8rem;">RD$ ${parseFloat(cycle.fondo_inicial).toFixed(2)}</div>
+                    </div>
+                    <div class="summary-box" style="border-top: 5px solid var(--danger); text-align: center;">
+                        <small style="text-transform: uppercase; color: var(--danger); font-weight: bold;">Total Gastado</small>
+                        <div class="amount red" style="font-size: 1.8rem;">RD$ ${totalGastado.toFixed(2)}</div>
+                    </div>
+                    <div class="summary-box" style="border-top: 5px solid var(--success); text-align: center;">
+                        <small style="text-transform: uppercase; color: var(--success); font-weight: bold;">Balance Disponible</small>
+                        <div class="amount green" style="font-size: 1.8rem;">RD$ ${balance.toFixed(2)}</div>
+                    </div>
+                </div>
+
+                <div style="display: grid; grid-template-columns: 350px 1fr; gap: 30px;">
+                    <div class="form-container">
+                        <h3 style="margin-top:0;">➕ Registrar Gasto</h3>
+                        <form action="/caja-chica/nuevo-gasto" method="POST">
+                            <input type="hidden" name="cycleId" value="${cycle.id}">
+                            <div class="form-group">
+                                <label>Fecha:</label>
+                                <input type="date" name="expense_date" value="${new Date().toISOString().split('T')[0]}" required>
+                            </div>
+                            <div class="form-group">
+                                <label>Suplidor:</label>
+                                <select name="supplier_id" required><option value="">Seleccione...</option>${supplierOptions}</select>
+                            </div>
+                            <div class="form-group">
+                                <label>Monto (RD$):</label>
+                                <input type="number" name="amount" step="0.01" required>
+                            </div>
+                            <div class="form-group">
+                                <label>Concepto:</label>
+                                <textarea name="description" rows="2" required placeholder="¿Qué se compró?"></textarea>
+                            </div>
+                            <button type="submit" class="btn btn-activar" style="width: 100%; margin-top: 10px;">💾 Guardar Gasto</button>
+                        </form>
+                    </div>
+
+                    <div class="card" style="padding: 20px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                            <h3 style="margin:0;">Gastos Registrados</h3>
+                            <form action="/caja-chica/cerrar-ciclo" method="POST" onsubmit="return confirm('¿Confirmas el cierre? El total se enviará a Gastos Administrativos.')">
+                                <input type="hidden" name="cycleId" value="${cycle.id}">
+                                <button type="submit" class="btn" style="background: var(--danger); color: white;">🔒 Cerrar Ciclo</button>
                             </form>
                         </div>
-                        <hr style="margin: 40px 0;">
-                        <h3>Historial de Ciclos Cerrados</h3>
-                        <table>
-                            <thead><tr><th>Fecha de Inicio</th><th>Fecha de Cierre</th><th>Fondo Inicial</th><th>Total Gastado</th><th>Acciones</th></tr></thead>
-                            <tbody>${closedCyclesHtml}</tbody>
+                        <table style="width: 100%;">
+                            <thead><tr><th>Fecha</th><th>Detalle</th><th style="text-align:right;">Monto</th></tr></thead>
+                            <tbody>
+                                ${expenses.map(e => `
+                                    <tr>
+                                        <td>${new Date(e.expense_date).toLocaleDateString()}</td>
+                                        <td><b>${e.supplier_name}</b><br><small style="color:gray;">${e.description}</small></td>
+                                        <td style="text-align:right; font-weight:bold;">RD$ ${parseFloat(e.amount).toFixed(2)}</td>
+                                    </tr>`).join('') || '<tr><td colspan="3" style="text-align:center;">No hay gastos.</td></tr>'}
+                            </tbody>
                         </table>
                     </div>
-                </body></html>
-            `);
+                </div>`;
         }
-        client.release();
-    } catch (error) {
-        console.error("Error al cargar la página de caja chica:", error);
-        res.status(500).send('<h1>Error al cargar la página ❌</h1>');
-    }
-});
 
+        res.send(`
+            <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
+                <div class="container" style="max-width: 1200px;">
+                    <div style="margin-bottom: 20px;">${backToDashboardLink}</div>
+                    <h1>Gestión de Caja Chica</h1>
+                    ${content}
+                </div>
+            </body></html>`);
+    } catch (e) { res.status(500).send(e.message); } finally { if (client) client.release(); }
+});
 app.post('/caja-chica/abrir-ciclo', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { fondo_inicial } = req.body;
     if (!fondo_inicial || parseFloat(fondo_inicial) <= 0) {
