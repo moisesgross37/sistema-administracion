@@ -1680,70 +1680,131 @@ app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, re
     }
 });
 app.get('/reporte-gastos', requireLogin, requireAdminOrCoord, async (req, res) => {
-    const { startDate, endDate, cycleId } = req.query;
+    const { startDate, endDate, cycleId, missingDesc } = req.query;
     let client;
     try {
         client = await pool.connect();
         
-        // 1. Consulta para la TABLA (Detalle)
-        let queryText = `SELECT e.*, s.name as supplier_name FROM expenses e LEFT JOIN suppliers s ON e.supplier_id = s.id WHERE 1=1`;
+        // 1. Buscamos los ciclos para el selector de filtros
+        const cyclesRes = await client.query("SELECT id, fecha_inicio FROM caja_chica_ciclos ORDER BY id DESC LIMIT 15");
+        const cycleOptions = cyclesRes.rows.map(c => 
+            `<option value="${c.id}" ${cycleId == c.id ? 'selected' : ''}>Ciclo #${c.id} (${new Date(c.fecha_inicio).toLocaleDateString()})</option>`
+        ).join('');
+
+        // 2. Consulta dinámica para la TABLA y el GRÁFICO
+        let whereClause = "WHERE 1=1";
         const params = [];
-        if (startDate) { params.push(startDate); queryText += ` AND e.expense_date >= $${params.length}`; }
-        if (endDate) { params.push(endDate); queryText += ` AND e.expense_date <= $${params.length}`; }
-        if (cycleId) { params.push(cycleId); queryText += ` AND e.caja_chica_ciclo_id = $${params.length}`; }
+
+        if (startDate) {
+            params.push(startDate);
+            whereClause += ` AND e.expense_date >= $${params.length}`;
+        }
+        if (endDate) {
+            params.push(endDate);
+            whereClause += ` AND e.expense_date <= $${params.length}`;
+        }
+        if (cycleId) {
+            params.push(cycleId);
+            whereClause += ` AND e.caja_chica_ciclo_id = $${params.length}`;
+        }
+        if (missingDesc === 'true') {
+            whereClause += ` AND (e.description IS NULL OR e.description = '')`;
+        }
+
+        // Datos para la tabla
+        const tableQuery = `
+            SELECT e.*, s.name as supplier_name 
+            FROM expenses e 
+            LEFT JOIN suppliers s ON e.supplier_id = s.id 
+            ${whereClause} 
+            ORDER BY e.expense_date DESC`;
         
-        const expensesRes = await client.query(queryText + " ORDER BY e.expense_date DESC", params);
+        const expensesRes = await client.query(tableQuery, params);
         
-        // 2. CONSULTA PARA EL GRÁFICO (Agrupado por Tipo)
-        // Aquí sumamos los montos según el 'type' (Caja Chica, Administrativo, Suplidor, etc.)
-        let chartQuery = `SELECT type, SUM(amount) as total FROM expenses WHERE 1=1`;
-        if (startDate) chartQuery += ` AND expense_date >= '${startDate}'`;
-        if (endDate) chartQuery += ` AND expense_date <= '${endDate}'`;
-        chartQuery += ` GROUP BY type`;
+        // Datos para el gráfico (Agrupados por "Valor Fiscal" o "Tipo")
+        const chartQuery = `
+            SELECT 
+                CASE 
+                    WHEN description LIKE '%fiscal%' THEN 'Con Valor Fiscal'
+                    WHEN caja_chica_ciclo_id IS NOT NULL THEN 'Caja Chica'
+                    ELSE 'Otros'
+                END as categoria,
+                SUM(amount) as total
+            FROM expenses e
+            ${whereClause}
+            GROUP BY categoria`;
         
-        const chartDataRes = await client.query(chartQuery);
-        
-        // Preparamos los datos para enviarlos al navegador
-        const labels = chartDataRes.rows.map(r => r.type || 'Otros');
-        const totals = chartDataRes.rows.map(r => parseFloat(r.total));
+        const chartRes = await client.query(chartQuery, params);
+        const labels = chartRes.rows.map(r => r.categoria);
+        const totals = chartRes.rows.map(r => parseFloat(r.total));
+        const granTotal = totals.reduce((a, b) => a + b, 0);
 
         res.send(`
             <!DOCTYPE html><html lang="es"><head>
                 ${commonHtmlHead}
                 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
             </head><body>
-                <div class="container" style="max-width: 1200px;">
+                <div class="container" style="max-width: 1300px;">
                     <div style="margin-bottom: 20px;">${backToDashboardLink}</div>
-                    <h1>Auditoría y Análisis de Gastos</h1>
-
-                    <div style="display: grid; grid-template-columns: 1fr 400px; gap: 30px; margin-top: 20px;">
+                    
+                    <div class="card">
+                        <h1>Auditoría y Análisis de Gastos</h1>
                         
-                        <div>
-                            <div class="summary-box" style="margin-bottom: 20px; border-left: 8px solid var(--primary);">
-                                <small>TOTAL GASTADO EN EL PERIODO</small>
-                                <div class="amount" style="font-size: 2.5rem;">RD$ ${totals.reduce((a, b) => a + b, 0).toLocaleString()}</div>
+                        <div style="background:#f8f9fc; padding:20px; border-radius:12px; display:grid; grid-template-columns: repeat(4, 1fr) auto; gap:15px; align-items:end; margin-bottom:20px;">
+                            <div class="form-group"><label>Desde:</label><input type="date" id="startDate" value="${startDate || ''}"></div>
+                            <div class="form-group"><label>Hasta:</label><input type="date" id="endDate" value="${endDate || ''}"></div>
+                            <div class="form-group">
+                                <label>Ciclo:</label>
+                                <select id="cycleId"><option value="">-- Todos --</option>${cycleOptions}</select>
                             </div>
-                            
+                            <div class="form-group">
+                                <label>Auditoría:</label>
+                                <select id="missingDesc">
+                                    <option value="false">Todos</option>
+                                    <option value="true" ${missingDesc === 'true' ? 'selected' : ''}>Sin Descripción</option>
+                                </select>
+                            </div>
+                            <button class="btn btn-primary" onclick="filtrar()">🔍 Filtrar</button>
+                        </div>
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: 1fr 350px; gap: 30px; margin-top: 20px;">
+                        <div>
+                            <div class="summary-box" style="margin-bottom:20px; border-left: 8px solid var(--danger);">
+                                <small>TOTAL FILTRADO:</small>
+                                <div class="amount" style="font-size:2.5rem; color:var(--danger);">RD$ ${granTotal.toLocaleString('en-US', {minimumFractionDigits: 2})}</div>
+                            </div>
                             <div class="card">
-                                <h3>Detalle de Movimientos</h3>
                                 <table class="modern-table">
                                     <thead><tr><th>Fecha</th><th>Detalle</th><th style="text-align:right;">Monto</th></tr></thead>
                                     <tbody>
-                                        ${expensesRes.rows.map(e => `<tr><td>${new Date(e.expense_date).toLocaleDateString()}</td><td>${e.supplier_name || 'Gasto'}<br><small>${e.description || ''}</small></td><td style="text-align:right;">$${parseFloat(e.amount).toFixed(2)}</td></tr>`).join('')}
+                                        ${expensesRes.rows.map(e => `
+                                            <tr>
+                                                <td>${new Date(e.expense_date).toLocaleDateString()}</td>
+                                                <td><b>${e.supplier_name || 'Gasto'}</b><br><small>${e.description || '<span style="color:red;">⚠️ Falta descripción</span>'}</small></td>
+                                                <td style="text-align:right; font-weight:bold;">$${parseFloat(e.amount).toFixed(2)}</td>
+                                            </tr>`).join('')}
                                     </tbody>
                                 </table>
                             </div>
                         </div>
 
-                        <div class="card" style="text-align: center;">
-                            <h3>Distribución de Gastos</h3>
-                            <canvas id="myChart" width="400" height="400"></canvas>
-                            <div id="chart-legend" style="margin-top:20px; text-align:left; font-size:12px;"></div>
+                        <div class="card" style="text-align:center;">
+                            <h3>Distribución del Gasto</h3>
+                            <canvas id="myChart"></canvas>
                         </div>
                     </div>
                 </div>
 
                 <script>
+                    function filtrar() {
+                        const s = document.getElementById('startDate').value;
+                        const e = document.getElementById('endDate').value;
+                        const c = document.getElementById('cycleId').value;
+                        const m = document.getElementById('missingDesc').value;
+                        window.location.href = \`/reporte-gastos?startDate=\${s}&endDate=\${e}&cycleId=\${c}&missingDesc=\${m}\`;
+                    }
+
                     const ctx = document.getElementById('myChart').getContext('2d');
                     new Chart(ctx, {
                         type: 'doughnut',
@@ -1751,20 +1812,13 @@ app.get('/reporte-gastos', requireLogin, requireAdminOrCoord, async (req, res) =
                             labels: ${JSON.stringify(labels)},
                             datasets: [{
                                 data: ${JSON.stringify(totals)},
-                                backgroundColor: ['#4e73df', '#1cc88a', '#36b9cc', '#f6c23e', '#e74a3b'],
-                                hoverOffset: 4
+                                backgroundColor: ['#4e73df', '#1cc88a', '#f6c23e', '#e74a3b'],
                             }]
                         },
-                        options: {
-                            responsive: true,
-                            plugins: {
-                                legend: { position: 'bottom' }
-                            }
-                        }
+                        options: { plugins: { legend: { position: 'bottom' } } }
                     });
                 </script>
-            </body></html>
-        `);
+            </body></html>`);
     } catch (e) { res.status(500).send(e.message); } finally { if (client) client.release(); }
 });
 app.get('/reporte-gastos-pdf', requireLogin, requireAdminOrCoord, async (req, res) => {
