@@ -549,137 +549,94 @@ app.post('/restaurar-cotizacion/:id', requireLogin, requireAdminOrCoord, async (
 
 // --- PÁGINA PRINCIPAL DE CUENTAS POR PAGAR ---
 app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res) => {
-    const { supplierId, startDate, endDate } = req.query;
+    const { supplierId } = req.query;
     let client;
     try {
         client = await pool.connect();
 
-        // 1. Obtenemos el Resumen de Deuda por cada Suplidor (Para saber a quién debemos más)
+        // 1. Resumen de Deuda Total por Suplidor (Para las tarjetas de arriba)
         const summaryRes = await client.query(`
             SELECT s.id, s.name, SUM(e.amount) as total_deuda
             FROM expenses e
             JOIN suppliers s ON e.supplier_id = s.id
-            WHERE e.status != 'pagado'
+            WHERE e.status != 'Pagada'
             GROUP BY s.id, s.name
             ORDER BY total_deuda DESC`);
 
-        // 2. Construcción de filtros dinámicos para la tabla de facturas
+        // 2. Filtro dinámico para la tabla principal
         let queryText = `
             SELECT e.*, s.name as supplier_name 
             FROM expenses e 
             JOIN suppliers s ON e.supplier_id = s.id 
-            WHERE 1=1`;
+            WHERE e.status != 'Pagada'`;
         const params = [];
 
         if (supplierId) {
             params.push(supplierId);
-            queryText += ` AND e.supplier_id = $${params.length}`;
+            queryText += \` AND e.supplier_id = $\${params.length}\`;
         }
 
         const invoicesRes = await client.query(queryText + " ORDER BY e.expense_date DESC", params);
         const suppliersRes = await client.query("SELECT id, name FROM suppliers ORDER BY name ASC");
 
-        // 3. Generación del HTML con diseño moderno
+        // Generación de Tarjetas de Suplidores
         const summaryCards = summaryRes.rows.map(s => `
-            <div class="summary-box" style="border-top: 4px solid var(--primary); min-width: 200px;">
-                <small>${s.name}</small>
-                <div style="font-weight:bold; font-size:1.2rem;">RD$ ${parseFloat(s.total_deuda).toFixed(2)}</div>
-                <a href="/reporte-suplidor-pdf/${s.id}" target="_blank" style="font-size:10px; color:var(--primary); text-decoration:none;">🖨️ Exportar PDF</a>
+            <div class="summary-box" style="border-top: 4px solid var(--primary); min-width: 220px; text-align:center;">
+                <small style="color:gray;">\${s.name}</small>
+                <div style="font-weight:bold; font-size:1.2rem; margin:10px 0;">RD$ \${parseFloat(s.total_deuda).toFixed(2)}</div>
+                <a href="/reporte-suplidor-pdf/\${s.id}" target="_blank" class="btn" style="padding:4px 8px; font-size:10px; background:#eef2ff; color:var(--primary);">🖨️ Estado de Cuenta PDF</a>
             </div>`).join('');
 
-        res.send(`
-            <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
+        res.send(\`
+            <!DOCTYPE html><html lang="es"><head>\${commonHtmlHead}</head><body>
                 <div class="container" style="max-width: 1300px;">
-                    <div style="margin-bottom: 20px;">${backToDashboardLink}</div>
+                    <div style="margin-bottom: 20px;">\${backToDashboardLink}</div>
                     <h1>Cuentas por Pagar a Suplidores</h1>
 
-                    <h3 style="margin-bottom:10px; font-size:0.9rem; color:gray;">RESUMEN DE MAYORES DEUDAS:</h3>
                     <div style="display: flex; gap: 15px; overflow-x: auto; padding-bottom: 15px; margin-bottom: 30px;">
-                        ${summaryCards || '<p>No hay deudas pendientes.</p>'}
+                        \${summaryCards || '<p>No hay deudas pendientes actualmente.</p>'}
                     </div>
 
-                    <div class="card" style="display: grid; grid-template-columns: 2fr 1fr 1fr auto; gap: 15px; align-items: end; margin-bottom: 30px;">
-                        <div class="form-group">
-                            <label>Filtrar por Suplidor:</label>
-                            <select id="f-supplier"><option value="">-- Todos --</option>${suppliersRes.rows.map(s=>`<option value="${s.id}" ${supplierId == s.id ? 'selected' : ''}>${s.name}</option>`).join('')}</select>
+                    <div style="display: grid; grid-template-columns: 350px 1fr; gap: 30px;">
+                        <div class="form-container">
+                            <h3>➕ Registrar Factura</h3>
+                            <form action="/cuentas-por-pagar" method="POST">
+                                <div class="form-group">
+                                    <label>Suplidor:</label>
+                                    <select name="supplier_id" required><option value="">Seleccione...</option>\${suppliersRes.rows.map(s=>\`<option value="\${s.id}">\${s.name}</option>\`).join('')}</select>
+                                </div>
+                                <div class="form-group"><label>Monto Total:</label><input type="number" name="amount" step="0.01" required></div>
+                                <div class="form-group"><label>Fecha Factura:</label><input type="date" name="expense_date" required></div>
+                                <div class="form-group"><label>Concepto:</label><textarea name="description" rows="2"></textarea></div>
+                                <button type="submit" class="btn btn-activar" style="width:100%;">💾 Guardar Factura</button>
+                            </form>
                         </div>
-                        <div class="form-group"><label>Desde:</label><input type="date" id="f-start"></div>
-                        <div class="form-group"><label>Hasta:</label><input type="date" id="f-end"></div>
-                        <button class="btn btn-primary" onclick="filtrar()">🔍 Buscar</button>
-                    </div>
 
-                    <div class="card">
-                        <table class="modern-table">
-                            <thead>
-                                <tr><th>Fecha</th><th>Suplidor</th><th>Factura #</th><th>Descripción</th><th>Monto</th><th>Estado</th></tr>
-                            </thead>
-                            <tbody>
-                                ${invoicesRes.rows.map(i => `
-                                    <tr>
-                                        <td>${new Date(i.expense_date).toLocaleDateString()}</td>
-                                        <td><b>${i.supplier_name}</b></td>
-                                        <td>${i.invoice_number || 'N/A'}</td>
-                                        <td>${i.description}</td>
-                                        <td style="font-weight:bold; text-align:right;">RD$ ${parseFloat(i.amount).toFixed(2)}</td>
-                                        <td><span class="advisor-badge" style="background:${i.status === 'pagado' ? '#e6fffa' : '#fff5f5'}; color:${i.status === 'pagado' ? '#2c7a7b' : '#c53030'};">${i.status}</span></td>
-                                    </tr>`).join('')}
-                            </tbody>
-                        </table>
+                        <div class="card">
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+                                <h3 style="margin:0;">Detalle de Facturas Pendientes</h3>
+                                <select id="filter-supplier" onchange="window.location.href='/cuentas-por-pagar?supplierId='+this.value">
+                                    <option value="">-- Filtrar por Suplidor --</option>
+                                    \${suppliersRes.rows.map(s=>\`<option value="\${s.id}" \${supplierId == s.id ? 'selected' : ''}>\${s.name}</option>\`).join('')}
+                                </select>
+                            </div>
+                            <table class="modern-table">
+                                <thead><tr><th>Fecha</th><th>Factura</th><th>Monto</th><th>Estado</th></tr></thead>
+                                <tbody>
+                                    \${invoicesRes.rows.map(i => \`
+                                        <tr>
+                                            <td>\${new Date(i.expense_date).toLocaleDateString()}</td>
+                                            <td><b>\${i.supplier_name}</b><br><small>\${i.description || 'Sin concepto'}</small></td>
+                                            <td style="font-weight:bold; text-align:right;">RD$ \${parseFloat(i.amount).toFixed(2)}</td>
+                                            <td><span class="badge" style="background:#fff5f5; color:#c53030; padding:4px 8px; border-radius:10px; font-size:11px;">\${i.status}</span></td>
+                                        </tr>\`).join('')}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
-                <script>
-                    function filtrar() {
-                        const sid = document.getElementById('f-supplier').value;
-                        window.location.href = '/cuentas-por-pagar?supplierId=' + sid;
-                    }
-                </script>
-            </body></html>`);
+            </body></html>\`);
     } catch (e) { res.status(500).send(e.message); } finally { if (client) client.release(); }
-});
-app.get('/reporte-suplidor-pdf/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
-    const supplierId = req.params.id;
-    let client;
-    try {
-        client = await pool.connect();
-        const supplierRes = await client.query("SELECT name FROM suppliers WHERE id = $1", [supplierId]);
-        const invoicesRes = await client.query(`
-            SELECT * FROM expenses 
-            WHERE supplier_id = $1 AND status != 'pagado'
-            ORDER BY expense_date ASC`, [supplierId]);
-        
-        const invoices = invoicesRes.rows;
-        const totalDeuda = invoices.reduce((sum, i) => sum + parseFloat(i.amount), 0);
-        client.release();
-
-        const doc = new PDFDocument({ size: 'A4', margin: 50 });
-        res.setHeader('Content-Type', 'application/pdf');
-        doc.pipe(res);
-
-        doc.fontSize(16).text('ESTADO DE CUENTA - CUENTAS POR PAGAR', { align: 'center' });
-        doc.fontSize(12).text(`Suplidor: ${supplierRes.rows[0].name}`, { align: 'center' });
-        doc.moveDown();
-
-        doc.fontSize(10).font('Helvetica-Bold');
-        doc.text('FECHA', 50, doc.y);
-        doc.text('FACTURA', 120, doc.y);
-        doc.text('DESCRIPCIÓN', 200, doc.y);
-        doc.text('MONTO', 450, doc.y, { align: 'right' });
-        doc.moveTo(50, doc.y + 12).lineTo(550, doc.y + 12).stroke();
-        doc.moveDown();
-
-        doc.font('Helvetica');
-        invoices.forEach(i => {
-            doc.text(new Date(i.expense_date).toLocaleDateString(), 50, doc.y);
-            doc.text(i.invoice_number || 'N/A', 120, doc.y);
-            doc.text(i.description || 'Sin concepto', 200, doc.y, { width: 230 });
-            doc.text(`$${parseFloat(i.amount).toFixed(2)}`, 450, doc.y, { align: 'right' });
-            doc.moveDown(1.5);
-        });
-
-        doc.moveDown();
-        doc.fontSize(13).font('Helvetica-Bold').text(`DEUDA TOTAL PENDIENTE: RD$ ${totalDeuda.toFixed(2)}`, { align: 'right' });
-        doc.end();
-    } catch (e) { res.status(500).send(e.message); }
 });
 // --- RUTA PARA GUARDAR UNA NUEVA FACTURA DE SUPLIDOR ---
 app.post('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res) => {
@@ -4247,6 +4204,52 @@ app.post('/anular-nomina/:payroll_id', requireLogin, requireAdminOrCoord, async 
         if (client) client.release();
     }
 });
+app.get('/reporte-suplidor-pdf/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const supplierId = req.params.id;
+    let client;
+    try {
+        client = await pool.connect();
+        const supplierRes = await client.query("SELECT name FROM suppliers WHERE id = $1", [supplierId]);
+        const invoicesRes = await client.query(`
+            SELECT * FROM expenses 
+            WHERE supplier_id = $1 AND status != 'pagado'
+            ORDER BY expense_date ASC`, [supplierId]);
+        
+        const invoices = invoicesRes.rows;
+        const totalDeuda = invoices.reduce((sum, i) => sum + parseFloat(i.amount), 0);
+        client.release();
+
+        const doc = new PDFDocument({ size: 'A4', margin: 50 });
+        res.setHeader('Content-Type', 'application/pdf');
+        doc.pipe(res);
+
+        doc.fontSize(16).text('ESTADO DE CUENTA - CUENTAS POR PAGAR', { align: 'center' });
+        doc.fontSize(12).text(`Suplidor: ${supplierRes.rows[0].name}`, { align: 'center' });
+        doc.moveDown();
+
+        doc.fontSize(10).font('Helvetica-Bold');
+        doc.text('FECHA', 50, doc.y);
+        doc.text('FACTURA', 120, doc.y);
+        doc.text('DESCRIPCIÓN', 200, doc.y);
+        doc.text('MONTO', 450, doc.y, { align: 'right' });
+        doc.moveTo(50, doc.y + 12).lineTo(550, doc.y + 12).stroke();
+        doc.moveDown();
+
+        doc.font('Helvetica');
+        invoices.forEach(i => {
+            doc.text(new Date(i.expense_date).toLocaleDateString(), 50, doc.y);
+            doc.text(i.invoice_number || 'N/A', 120, doc.y);
+            doc.text(i.description || 'Sin concepto', 200, doc.y, { width: 230 });
+            doc.text(`$${parseFloat(i.amount).toFixed(2)}`, 450, doc.y, { align: 'right' });
+            doc.moveDown(1.5);
+        });
+
+        doc.moveDown();
+        doc.fontSize(13).font('Helvetica-Bold').text(`DEUDA TOTAL PENDIENTE: RD$ ${totalDeuda.toFixed(2)}`, { align: 'right' });
+        doc.end();
+    } catch (e) { res.status(500).send(e.message); }
+});
+
 app.listen(PORT, () => {
     console.log(`✅ Servidor de Administración corriendo en http://localhost:${PORT}`);
 });
