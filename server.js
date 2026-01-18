@@ -1645,65 +1645,171 @@ app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, re
     }
 });
 app.get('/reporte-gastos', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { startDate, endDate, missingDesc, cycleId } = req.query;
+    let client;
     try {
-        const client = await pool.connect();
+        client = await pool.connect();
         
-        const result = await client.query(`
-            SELECT 
-                e.*, 
-                s.name as supplier_name, 
-                q.clientname,
-                cc.id as ciclo_id
+        // 1. Buscamos los ciclos de caja chica para el selector
+        const cyclesRes = await client.query("SELECT id, fecha_inicio, total_gastado FROM caja_chica_ciclos ORDER BY id DESC LIMIT 20");
+        const cycleOptions = cyclesRes.rows.map(c => 
+            `<option value="${c.id}" ${cycleId == c.id ? 'selected' : ''}>Ciclo #${c.id} (${new Date(c.fecha_inicio).toLocaleDateString()})</option>`
+        ).join('');
+
+        // 2. Consulta dinámica
+        let queryText = `
+            SELECT e.*, s.name as supplier_name, q.clientname as project_name
             FROM expenses e
-            JOIN suppliers s ON e.supplier_id = s.id
+            LEFT JOIN suppliers s ON e.supplier_id = s.id
             LEFT JOIN quotes q ON e.quote_id = q.id
-            LEFT JOIN caja_chica_ciclos cc ON e.caja_chica_ciclo_id = cc.id
-            ORDER BY e.expense_date DESC;
-        `);
-        const expenses = result.rows;
-        client.release();
-
-        const totalGastado = expenses.reduce((sum, expense) => sum + parseFloat(expense.amount), 0);
+            WHERE 1=1`;
         
-        let expensesHtml = expenses.map(e => {
-            let origenGasto = '<span style="color:#6c757d; font-style:italic;">Gasto General</span>';
-            if (e.clientname) {
-                origenGasto = `Proyecto: ${e.clientname}`;
-            } else if (e.ciclo_id) {
-                origenGasto = `Caja Chica (Ciclo #${e.ciclo_id})`;
-            }
+        const params = [];
 
-            return `<tr>
-                        <td>${new Date(e.expense_date).toLocaleDateString()}</td>
-                        <td>${origenGasto}</td>
-                        <td>${e.supplier_name}</td>
-                        <td>${e.description}</td>
-                        <td>$${parseFloat(e.amount).toFixed(2)}</td>
-                    </tr>`;
-        }).join('');
-
-        if (expenses.length === 0) {
-            expensesHtml = '<tr><td colspan="5">No hay gastos registrados en el sistema.</td></tr>';
+        if (startDate) {
+            params.push(startDate);
+            queryText += ` AND e.expense_date >= $${params.length}`;
         }
+        if (endDate) {
+            params.push(endDate);
+            queryText += ` AND e.expense_date <= $${params.length}`;
+        }
+        if (cycleId) {
+            params.push(cycleId);
+            queryText += ` AND e.caja_chica_ciclo_id = $${params.length}`;
+        }
+        if (missingDesc === 'true') {
+            queryText += ` AND (e.description IS NULL OR e.description = '')`;
+        }
+
+        queryText += ` ORDER BY e.expense_date DESC`;
+        const expensesRes = await client.query(queryText, params);
+        const expenses = expensesRes.rows;
+        const totalGastado = expenses.reduce((sum, e) => sum + parseFloat(e.amount), 0);
+
+        const rows = expenses.map(e => `
+            <tr>
+                <td>${new Date(e.expense_date).toLocaleDateString()}</td>
+                <td>${e.project_name || '<span style="color:gray; font-size:11px;">ADMNISTRATIVO</span>'}</td>
+                <td>${e.supplier_name || 'N/A'}</td>
+                <td style="${!e.description ? 'color:red; font-weight:bold; background:#fff0f0;' : ''}">
+                    ${e.description || '⚠️ COMPLETAR DESCRIPCIÓN'}
+                </td>
+                <td style="font-weight:bold; text-align:right;">RD$ ${parseFloat(e.amount).toFixed(2)}</td>
+            </tr>`).join('');
 
         res.send(`
             <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
-                <div class="container">
-                    ${backToDashboardLink}
-                    <h2>Reporte General de Gastos</h2>
-                    <div class="summary">
-                        <div class="summary-box" style="grid-column: span 3; margin: auto;">
-                            <h3>Total General Gastado</h3>
-                            <p class="amount orange">$${totalGastado.toFixed(2)}</p>
+                <div class="container" style="max-width: 1300px;">
+                    <div style="margin-bottom: 20px;">${backToDashboardLink}</div>
+                    <div class="card">
+                        <h1>Auditoría General de Gastos</h1>
+                        <div style="background:#f8f9fc; padding:20px; border-radius:12px; display:grid; grid-template-columns: repeat(3, 1fr); gap:15px;">
+                            <div class="form-group"><label>Desde:</label><input type="date" id="startDate" value="${startDate || ''}"></div>
+                            <div class="form-group"><label>Hasta:</label><input type="date" id="endDate" value="${endDate || ''}"></div>
+                            <div class="form-group">
+                                <label>Por Ciclo de Caja Chica:</label>
+                                <select id="cycleId"><option value="">-- Todos los Ciclos --</option>${cycleOptions}</select>
+                            </div>
+                            <div class="form-group">
+                                <label>Filtro de Auditoría:</label>
+                                <select id="missingDesc">
+                                    <option value="false">Todos los registros</option>
+                                    <option value="true" ${missingDesc === 'true' ? 'selected' : ''}>Solo sin descripción</option>
+                                </select>
+                            </div>
+                            <div style="grid-column: span 2; display: flex; gap: 10px; align-items: flex-end;">
+                                <button class="btn btn-primary" style="flex:1;" onclick="filtrar()">🔍 Filtrar Resultados</button>
+                                <button class="btn btn-info" style="flex:1;" onclick="imprimir()">🖨️ Generar PDF</button>
+                            </div>
                         </div>
                     </div>
-                    <table><thead><tr><th>Fecha</th><th>Origen del Gasto</th><th>Suplidor</th><th>Descripción</th><th>Monto</th></tr></thead><tbody>${expensesHtml}</tbody></table>
+
+                    <div class="summary-box" style="margin-top:20px; border-left: 10px solid var(--danger);">
+                        <small>Total Gastado en este Periodo / Selección:</small>
+                        <div class="amount" style="font-size:2.8rem; color:var(--danger);">RD$ ${totalGastado.toLocaleString('en-US', {minimumFractionDigits: 2})}</div>
+                    </div>
+
+                    <div class="card" style="margin-top:30px;">
+                        <table class="modern-table">
+                            <thead><tr><th>Fecha</th><th>Origen</th><th>Suplidor</th><th>Descripción</th><th style="text-align:right;">Monto</th></tr></thead>
+                            <tbody>${rows}</tbody>
+                        </table>
+                    </div>
                 </div>
+                <script>
+                    function filtrar() {
+                        const s = document.getElementById('startDate').value;
+                        const e = document.getElementById('endDate').value;
+                        const m = document.getElementById('missingDesc').value;
+                        const c = document.getElementById('cycleId').value;
+                        window.location.href = \`/reporte-gastos?startDate=\${s}&endDate=\${e}&missingDesc=\${m}&cycleId=\${c}\`;
+                    }
+                    function imprimir() {
+                        const s = document.getElementById('startDate').value;
+                        const e = document.getElementById('endDate').value;
+                        const m = document.getElementById('missingDesc').value;
+                        const c = document.getElementById('cycleId').value;
+                        window.open(\`/reporte-gastos-pdf?startDate=\${s}&endDate=\${e}&missingDesc=\${m}&cycleId=\${c}\`, '_blank');
+                    }
+                </script>
             </body></html>`);
-    } catch (error) {
-        console.error("Error al generar el reporte de gastos:", error);
-        res.status(500).send('<h1>Error al cargar el reporte ❌</h1>');
-    }
+    } catch (e) { res.status(500).send(e.message); } finally { if (client) client.release(); }
+});
+app.get('/reporte-gastos-pdf', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { startDate, endDate, missingDesc, cycleId } = req.query;
+    let client;
+    try {
+        client = await pool.connect();
+        // (La misma lógica SQL de arriba para obtener los datos filtrados)
+        let queryText = `SELECT e.*, s.name as supplier_name, q.clientname as project_name FROM expenses e LEFT JOIN suppliers s ON e.supplier_id = s.id LEFT JOIN quotes q ON e.quote_id = q.id WHERE 1=1`;
+        const params = [];
+        if (startDate) { params.push(startDate); queryText += ` AND e.expense_date >= $${params.length}`; }
+        if (endDate) { params.push(endDate); queryText += ` AND e.expense_date <= $${params.length}`; }
+        if (cycleId) { params.push(cycleId); queryText += ` AND e.caja_chica_ciclo_id = $${params.length}`; }
+        if (missingDesc === 'true') { queryText += ` AND (e.description IS NULL OR e.description = '')`; }
+        queryText += ` ORDER BY e.expense_date ASC`;
+
+        const expensesRes = await client.query(queryText, params);
+        const expenses = expensesRes.rows;
+        const total = expenses.reduce((sum, e) => sum + parseFloat(e.amount), 0);
+        client.release();
+
+        const doc = new PDFDocument({ size: 'A4', margin: 50 });
+        res.setHeader('Content-Type', 'application/pdf');
+        doc.pipe(res);
+
+        // Membrete y Título
+        doc.font('Helvetica-Bold').fontSize(18).text('REPORTE DETALLADO DE GASTOS', { align: 'center' });
+        doc.fontSize(10).text(`Generado el: ${new Date().toLocaleString()}`, { align: 'center' });
+        doc.moveDown();
+
+        // Tabla de datos
+        doc.fontSize(10).font('Helvetica-Bold');
+        doc.text('FECHA', 50, doc.y, { width: 70 });
+        doc.text('PROYECTO / ORIGEN', 120, doc.y, { width: 150 });
+        doc.text('DESCRIPCIÓN', 270, doc.y, { width: 180 });
+        doc.text('MONTO', 450, doc.y, { align: 'right' });
+        doc.moveDown(0.5);
+        doc.moveTo(50, doc.y).lineTo(550, doc.y).stroke();
+        doc.moveDown(0.5);
+
+        doc.font('Helvetica').fontSize(9);
+        expenses.forEach(e => {
+            const currentY = doc.y;
+            doc.text(new Date(e.expense_date).toLocaleDateString(), 50, currentY);
+            doc.text(e.project_name || 'ADMINISTRATIVO', 120, currentY, { width: 140 });
+            doc.text(e.description || 'SIN DESCRIPCIÓN', 270, currentY, { width: 170 });
+            doc.text(`$${parseFloat(e.amount).toFixed(2)}`, 450, currentY, { align: 'right' });
+            doc.moveDown(1.5);
+            if (doc.y > 700) doc.addPage();
+        });
+
+        doc.moveDown();
+        doc.font('Helvetica-Bold').fontSize(12).text(`TOTAL GENERAL: RD$ ${total.toLocaleString('en-US', {minimumFractionDigits: 2})}`, { align: 'right' });
+
+        doc.end();
+    } catch (e) { res.status(500).send(e.message); }
 });
 // =======================================================
 //   NUEVAS RUTAS PARA GESTIÓN DE ASESORES Y COMISIONES
