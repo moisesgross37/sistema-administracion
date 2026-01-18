@@ -125,150 +125,110 @@ app.post('/descartar-cotizacion/:id', requireLogin, requireAdminOrCoord, async (
 const commonHtmlHead = `
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PCOE - Panel de Control</title>
+    <title>PCOE - Sistema de Gestión</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    
     <style>
         :root {
-            /* Paleta de Colores Moderna */
             --primary: #4e73df;
-            --primary-dark: #224abe;
-            --success: #1cc88a;
-            --danger: #e74a3b;
-            --warning: #f6c23e;
-            --info: #36b9cc;
-            --bg-body: #f8f9fc;
-            --text-main: #5a5c69;
-            --text-bold: #2e2f37;
-            --white: #ffffff;
-            --shadow-soft: 0 0.15rem 1.75rem 0 rgba(58, 59, 69, 0.1);
+            --bg-page: #f0f2f5;
+            --card-bg: #ffffff;
+            --text-main: #4a5568;
+            --text-dark: #1a202c;
+            --border: #e2e8f0;
+            --shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
         }
 
         body { 
-            font-family: 'Inter', system-ui, -apple-system, sans-serif; 
-            background-color: var(--bg-body); 
-            color: var(--text-main);
-            margin: 0;
-            line-height: 1.6;
-        }
-
-        .container { max-width: 1200px; margin: 40px auto; padding: 0 20px; }
-
-        /* Títulos */
-        h1, h2, h3 { color: var(--text-bold); font-weight: 700; letter-spacing: -0.5px; }
-
-        /* Navegación Estilo App */
-        nav { 
-            display: flex; 
-            justify-content: space-between; 
-            align-items: center; 
-            padding: 1rem 2rem; 
-            background: var(--white);
-            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-            margin-bottom: 2rem;
-        }
-        nav .links a { 
-            text-decoration: none; 
+            font-family: 'Inter', sans-serif; 
+            background-color: var(--bg-page); 
             color: var(--text-main); 
-            font-weight: 500; 
-            margin-right: 20px;
-            padding: 8px 12px;
-            border-radius: 8px;
-            transition: all 0.2s;
+            margin: 0; 
+            padding-bottom: 50px;
         }
-        nav .links a:hover { background: #f1f3f9; color: var(--primary); }
 
-        /* Tarjetas de Dashboard (Cards) */
-        .dashboard { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1.5rem; }
-        .dashboard-card { 
-            background: var(--white); 
-            border-radius: 12px; 
-            padding: 24px; 
-            text-decoration: none; 
-            border-left: 4px solid var(--primary);
-            box-shadow: var(--shadow-soft);
-            transition: all 0.3s cubic-bezier(0.165, 0.84, 0.44, 1);
+        /* Contenedor tipo "App" */
+        .app-container { 
+            max-width: 1000px; 
+            margin: 40px auto; 
+            padding: 0 20px; 
         }
-        .dashboard-card:hover { transform: translateY(-5px); box-shadow: 0 1rem 3rem rgba(0,0,0,0.1); }
-        .dashboard-card h3 { margin: 0 0 8px; font-size: 0.9rem; text-transform: uppercase; color: var(--primary); }
-        .dashboard-card p { margin: 0; font-size: 1.1rem; font-weight: 700; color: var(--text-bold); }
 
-        /* Tablas Modernas (Efecto Flotante) */
-        table { width: 100%; border-collapse: separate; border-spacing: 0 12px; margin-top: 10px; }
-        th { 
-            padding: 0 15px; 
-            text-align: left; 
-            font-size: 0.75rem; 
-            text-transform: uppercase; 
-            font-weight: 700; 
-            color: #b7b9cc; 
+        /* Tarjetas Profesionales */
+        .card {
+            background: var(--card-bg);
+            border-radius: 16px;
+            box-shadow: var(--shadow);
+            padding: 30px;
+            margin-bottom: 30px;
+            border: 1px solid var(--border);
         }
-        td { 
-            background: var(--white); 
-            padding: 1.25rem 1rem; 
-            border: none;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.02);
-        }
-        td:first-child { border-radius: 12px 0 0 12px; border-left: 1px solid #e3e6f0; }
-        td:last-child { border-radius: 0 12px 12px 0; border-right: 1px solid #e3e6f0; }
-        tr:hover td { background-color: #fcfdfe; transform: scale(1.005); transition: 0.2s ease-in-out; }
 
-        /* Formularios Estilizados */
-        .form-container { 
-            background: var(--white); 
-            padding: 30px; 
-            border-radius: 15px; 
-            box-shadow: var(--shadow-soft);
-            border: 1px solid #e3e6f0;
+        .card-header { border-bottom: 2px solid var(--bg-page); margin-bottom: 25px; padding-bottom: 15px; }
+        .card-header h2 { margin: 0; color: var(--text-dark); font-size: 1.5rem; }
+
+        /* Grids para Formularios (Adiós a la lista vertical infinita) */
+        .form-grid { 
+            display: grid; 
+            grid-template-columns: 1fr 1fr; 
+            gap: 20px; 
         }
-        .form-group label { display: block; margin-bottom: 8px; font-size: 0.85rem; font-weight: 700; color: var(--text-bold); }
-        input[type="text"], input[type="number"], input[type="date"], select, textarea {
+
+        .form-group { margin-bottom: 15px; }
+        .full-width { grid-column: span 2; }
+
+        label { 
+            display: block; 
+            font-weight: 600; 
+            font-size: 0.85rem; 
+            margin-bottom: 8px; 
+            color: var(--text-dark); 
+        }
+
+        input, select, textarea {
             width: 100%;
             padding: 12px;
-            border: 1px solid #d1d3e2;
-            border-radius: 8px;
-            background-color: #fdfdfd;
-            transition: border-color 0.15s ease-in-out;
+            border: 1.5px solid var(--border);
+            border-radius: 10px;
+            font-size: 0.95rem;
+            box-sizing: border-box;
+            transition: all 0.2s;
         }
-        input:focus { border-color: var(--primary); outline: none; background: white; }
 
-        /* Botones Profesionales con Degradado */
-        .btn { 
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            padding: 10px 20px; 
-            font-weight: 600; 
-            border-radius: 8px; 
-            border: none;
+        input:focus { border-color: var(--primary); outline: none; box-shadow: 0 0 0 4px rgba(78, 115, 223, 0.1); }
+
+        /* Tablas tipo "Lista Moderna" */
+        .modern-table { width: 100%; border-collapse: collapse; }
+        .modern-table th { 
+            text-align: left; 
+            padding: 12px; 
+            font-size: 0.75rem; 
+            text-transform: uppercase; 
+            color: #718096; 
+            letter-spacing: 1px;
+        }
+        .modern-table td { 
+            padding: 18px 12px; 
+            border-bottom: 1px solid var(--border); 
+            font-size: 0.95rem; 
+        }
+        .modern-table tr:last-child td { border-bottom: none; }
+        .modern-table tr:hover { background-color: #f8fafc; }
+
+        /* Botones con Relieve */
+        .btn {
+            padding: 12px 24px;
+            border-radius: 10px;
+            font-weight: 600;
             cursor: pointer;
+            border: none;
             transition: all 0.2s;
             text-decoration: none;
-            font-size: 14px;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
         }
-        .btn:active { transform: scale(0.98); }
-
-        .btn-activar { background: linear-gradient(180deg, var(--success) 10%, #169b6b 100%); color: white; }
-        .btn-activar:hover { opacity: 0.9; }
-        
-        .btn-danger { background: var(--danger); color: white; }
-        .btn-info { background: var(--info); color: white; }
-
-        /* Badges y Resúmenes */
-        .summary-box { 
-            background: var(--white); 
-            padding: 2rem; 
-            border-radius: 15px; 
-            text-align: center;
-            box-shadow: var(--shadow-soft);
-            border-top: 4px solid var(--primary);
-        }
-        .amount { font-size: 2rem; font-weight: 700; color: var(--text-bold); }
-        .amount.green { color: var(--success); }
-        .amount.red { color: var(--danger); }
-        
-        .back-link { color: var(--primary); font-weight: 600; text-decoration: none; margin-bottom: 20px; display: inline-block; }
-        .back-link:hover { text-decoration: underline; }
+        .btn-primary { background: var(--primary); color: white; box-shadow: 0 4px 6px rgba(78, 115, 223, 0.2); }
+        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 7px 14px rgba(78, 115, 223, 0.3); }
     </style>
 `;
 const dashboardHeader = (user) => `
