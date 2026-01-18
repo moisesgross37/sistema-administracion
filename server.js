@@ -125,110 +125,86 @@ app.post('/descartar-cotizacion/:id', requireLogin, requireAdminOrCoord, async (
 const commonHtmlHead = `
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PCOE - Sistema de Gestión</title>
+    <title>PCOE - Panel de Control</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
             --primary: #4e73df;
-            --bg-page: #f0f2f5;
-            --card-bg: #ffffff;
-            --text-main: #4a5568;
-            --text-dark: #1a202c;
-            --border: #e2e8f0;
-            --shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            --bg-body: #f0f2f5;
+            --card-shadow: 0 0.15rem 1.75rem 0 rgba(33, 40, 50, 0.15);
+            --text-dark: #2e2f37;
+            --text-gray: #858796;
         }
 
         body { 
             font-family: 'Inter', sans-serif; 
-            background-color: var(--bg-page); 
-            color: var(--text-main); 
-            margin: 0; 
-            padding-bottom: 50px;
+            background-color: var(--bg-body); 
+            margin: 0; color: #5a5c69; 
         }
 
-        /* Contenedor tipo "App" */
-        .app-container { 
-            max-width: 1000px; 
-            margin: 40px auto; 
-            padding: 0 20px; 
-        }
+        .container { max-width: 1100px; margin: 40px auto; padding: 0 20px; }
 
-        /* Tarjetas Profesionales */
-        .card {
-            background: var(--card-bg);
-            border-radius: 16px;
-            box-shadow: var(--shadow);
-            padding: 30px;
-            margin-bottom: 30px;
-            border: 1px solid var(--border);
-        }
-
-        .card-header { border-bottom: 2px solid var(--bg-page); margin-bottom: 25px; padding-bottom: 15px; }
-        .card-header h2 { margin: 0; color: var(--text-dark); font-size: 1.5rem; }
-
-        /* Grids para Formularios (Adiós a la lista vertical infinita) */
-        .form-grid { 
+        /* ARREGLO DEL DASHBOARD (AFUERA) */
+        .module { margin-bottom: 40px; }
+        .module h2 { font-size: 1.2rem; color: var(--primary); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 20px; border-bottom: 2px solid #e3e6f0; padding-bottom: 10px; }
+        
+        .dashboard { 
             display: grid; 
-            grid-template-columns: 1fr 1fr; 
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); 
             gap: 20px; 
         }
 
-        .form-group { margin-bottom: 15px; }
-        .full-width { grid-column: span 2; }
-
-        label { 
-            display: block; 
-            font-weight: 600; 
-            font-size: 0.85rem; 
-            margin-bottom: 8px; 
-            color: var(--text-dark); 
-        }
-
-        input, select, textarea {
-            width: 100%;
-            padding: 12px;
-            border: 1.5px solid var(--border);
-            border-radius: 10px;
-            font-size: 0.95rem;
-            box-sizing: border-box;
-            transition: all 0.2s;
-        }
-
-        input:focus { border-color: var(--primary); outline: none; box-shadow: 0 0 0 4px rgba(78, 115, 223, 0.1); }
-
-        /* Tablas tipo "Lista Moderna" */
-        .modern-table { width: 100%; border-collapse: collapse; }
-        .modern-table th { 
-            text-align: left; 
-            padding: 12px; 
-            font-size: 0.75rem; 
-            text-transform: uppercase; 
-            color: #718096; 
-            letter-spacing: 1px;
-        }
-        .modern-table td { 
-            padding: 18px 12px; 
-            border-bottom: 1px solid var(--border); 
-            font-size: 0.95rem; 
-        }
-        .modern-table tr:last-child td { border-bottom: none; }
-        .modern-table tr:hover { background-color: #f8fafc; }
-
-        /* Botones con Relieve */
-        .btn {
-            padding: 12px 24px;
-            border-radius: 10px;
-            font-weight: 600;
-            cursor: pointer;
-            border: none;
-            transition: all 0.2s;
+        .dashboard-card {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
             text-decoration: none;
+            color: inherit;
+            box-shadow: var(--card-shadow);
+            border-left: 5px solid var(--primary);
+            transition: transform 0.2s, box-shadow 0.2s;
+            display: block;
+        }
+        .dashboard-card:hover { transform: translateY(-5px); box-shadow: 0 1rem 3rem rgba(0,0,0,0.1); }
+        .dashboard-card h3 { margin: 0 0 10px; font-size: 1rem; color: var(--primary); }
+        .dashboard-card p { margin: 0; font-size: 0.9rem; color: var(--text-gray); }
+
+        /* ARREGLO DEL INTERIOR (ADENTRO) */
+        .card, .form-container, .summary-box {
+            background: white !important;
+            border-radius: 15px !important;
+            box-shadow: var(--card-shadow) !important;
+            padding: 30px !important;
+            margin-bottom: 30px;
+            border: none !important;
+        }
+
+        /* Tablas Modernas */
+        table { width: 100%; border-collapse: separate; border-spacing: 0 10px; }
+        th { text-transform: uppercase; font-size: 0.7rem; letter-spacing: 1px; color: var(--text-gray); padding: 10px; text-align: left; }
+        td { background: white; padding: 15px; border-top: 1px solid #f1f4f8; border-bottom: 1px solid #f1f4f8; }
+        td:first-child { border-left: 1px solid #f1f4f8; border-radius: 10px 0 0 10px; }
+        td:last-child { border-right: 1px solid #f1f4f8; border-radius: 0 10px 10px 0; }
+
+        /* Botones Estilo App */
+        .btn {
+            border-radius: 10px;
+            padding: 12px 25px;
+            font-weight: 600;
+            border: none;
+            cursor: pointer;
+            transition: 0.2s;
             display: inline-flex;
             align-items: center;
-            gap: 8px;
+            text-decoration: none;
+            justify-content: center;
         }
-        .btn-primary { background: var(--primary); color: white; box-shadow: 0 4px 6px rgba(78, 115, 223, 0.2); }
-        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 7px 14px rgba(78, 115, 223, 0.3); }
+        .btn-primary { background: var(--primary); color: white; }
+        .btn-success { background: #1cc88a; color: white; }
+
+        /* Distribución Horizontal (Grids) */
+        .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .full-width { grid-column: span 2; }
     </style>
 `;
 const dashboardHeader = (user) => `
