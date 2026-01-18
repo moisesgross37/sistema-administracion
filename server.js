@@ -2865,57 +2865,100 @@ app.post('/guardar-nomina', requireLogin, requireAdminOrCoord, async (req, res) 
     }
 });
 app.get('/historial-nomina', requireLogin, requireAdminOrCoord, async (req, res) => {
+    let client;
     try {
-        const client = await pool.connect();
-        const result = await client.query(`
-            SELECT 
-                pr.id, pr.pay_date, pr.base_salary_paid, pr.bonuses, pr.deductions, pr.net_pay,
-                e.first_name, e.last_name
-            FROM payroll_records pr
-            JOIN employees e ON pr.employee_id = e.id
-            ORDER BY pr.pay_date DESC, e.last_name ASC;
+        client = await pool.connect();
+        
+        // Agrupamos los extras por payroll_id para identificar las quincenas
+        const resNomina = await client.query(`
+            SELECT payroll_id, 
+                   MIN(payment_date) as fecha_lote, 
+                   SUM(amount) as total_pagado_extras,
+                   COUNT(DISTINCT employee_id) as total_empleados
+            FROM payroll_extras 
+            GROUP BY payroll_id 
+            ORDER BY payroll_id DESC
         `);
-        const records = result.rows;
-        client.release();
 
-        let recordsHtml = records.map(r => `
-            <tr>
-                <td>${new Date(r.pay_date).toLocaleDateString()}</td>
-                <td>${r.first_name} ${r.last_name}</td>
-                <td>$${parseFloat(r.base_salary_paid).toFixed(2)}</td>
-                <td>$${parseFloat(r.bonuses).toFixed(2)}</td>
-                <td>$${parseFloat(r.deductions).toFixed(2)}</td>
-                <td style="font-weight: bold;">$${parseFloat(r.net_pay).toFixed(2)}</td>
-                <td>
-                    <a href="/recibo-nomina/${r.id}/pdf" target="_blank" class="btn" style="padding: 5px 10px; font-size: 14px;">
-                        Imprimir
-                    </a>
-                </td>
-            </tr>
-        `).join('');
+        let lotesHtml = resNomina.rows.map(lote => {
+            const fecha = new Date(lote.fecha_lote);
+            const quincena = fecha.getDate() <= 15 ? "1ra Quincena" : "2da Quincena";
+            const mes = fecha.toLocaleString('es-ES', { month: 'long' });
+            const año = fecha.getFullYear();
 
-        if (records.length === 0) {
-            recordsHtml = '<tr><td colspan="7">No hay registros de nómina guardados.</td></tr>';
-        }
+            return `
+            <div class="card-nomina" style="display: flex; justify-content: space-between; align-items: center; padding: 20px; border: 1px solid #ddd; border-radius: 10px; margin-bottom: 15px; background: white;">
+                <div>
+                    <h3 style="margin:0; color:#0056b3;">${quincena} de ${mes} ${año}</h3>
+                    <p style="margin:5px 0 0; color:#666;">Fecha de proceso: ${fecha.toLocaleDateString()}</p>
+                </div>
+                <div style="text-align: center;">
+                    <span style="display:block; font-weight:bold;">${lote.total_empleados}</span>
+                    <small>Colaboradores</small>
+                </div>
+                <div>
+                    <a href="/ver-detalle-nomina/${lote.payroll_id}" class="btn" style="background:#28a745; color:white; text-decoration:none; padding:10px 20px; border-radius:5px;">Ver Detalle y Recibos</a>
+                </div>
+            </div>`;
+        }).join('');
 
         res.send(`
-            <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
-                <div class="container">
+            <!DOCTYPE html><html lang="es">
+            <head>${commonHtmlHead.replace('<title>Panel de Administración</title>', '<title>Historial de Quincenas</title>')}</head>
+            <body>
+                <div class="container" style="max-width: 900px;">
                     ${backToDashboardLink}
-                    <h2>Historial de Pagos de Nómina</h2>
-                    <table>
-                        <thead><tr><th>Fecha de Pago</th><th>Empleado</th><th>Salario Pagado</th><th>Bonos</th><th>Descuentos</th><th>Pago Neto</th><th>Acciones</th></tr></thead>
-                        <tbody>${recordsHtml}</tbody>
+                    <h1>Archivo Histórico de Nóminas</h1>
+                    <p>Selecciona una quincena para ver los pagos detallados e imprimir recibos.</p>
+                    <div style="margin-top: 30px;">
+                        ${lotesHtml.length > 0 ? lotesHtml : '<p style="text-align:center; padding:50px;">Aún no has procesado ninguna nómina con el nuevo sistema.</p>'}
+                    </div>
+                </div>
+            </body></html>`);
+    } catch (e) { res.status(500).send(e.message); } finally { if (client) client.release(); }
+});
+app.get('/ver-detalle-nomina/:payroll_id', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { payroll_id } = req.params;
+    let client;
+    try {
+        client = await pool.connect();
+        
+        // Buscamos a todos los empleados que recibieron pago en este lote
+        const resDetalle = await client.query(`
+            SELECT DISTINCT e.id, e.nombre, e.name, e.salary, e.sueldo
+            FROM employees e
+            JOIN payroll_extras pe ON e.id = pe.employee_id
+            WHERE pe.payroll_id = $1
+        `, [payroll_id]);
+
+        let filas = resDetalle.rows.map(emp => {
+            const nombre = emp.nombre || emp.name;
+            return `
+            <tr>
+                <td style="font-weight:bold; padding:15px;">${nombre}</td>
+                <td style="text-align:center;">
+                    <a href="/ver-recibo/${payroll_id}/${emp.id}" target="_blank" class="btn" style="background:#007bff; color:white; text-decoration:none; padding:5px 15px; font-size:12px;">🖨️ Imprimir Recibo Detallado</a>
+                </td>
+            </tr>`;
+        }).join('');
+
+        res.send(`
+            <!DOCTYPE html><html lang="es">
+            <head>${commonHtmlHead}</head>
+            <body>
+                <div class="container">
+                    <a href="/historial-nomina" style="text-decoration:none; color:#007bff;">← Volver al Archivo</a>
+                    <h1 style="margin-top:20px;">Detalle de Pagos: Lote #${payroll_id}</h1>
+                    <table style="background:white; margin-top:30px;">
+                        <thead>
+                            <tr><th>Colaborador</th><th style="text-align:center;">Acciones</th></tr>
+                        </thead>
+                        <tbody>${filas}</tbody>
                     </table>
                 </div>
-            </body></html>
-        `);
-    } catch (error) {
-        console.error("Error al obtener el historial de nómina:", error);
-        res.status(500).send('<h1>Error al cargar el historial ❌</h1>');
-    }
+            </body></html>`);
+    } catch (e) { res.status(500).send(e.message); } finally { if (client) client.release(); }
 });
-
 // =======================================================
 // NUEVA RUTA PARA GENERAR PDF DE RECIBO DE NÓMINA
 // =======================================================
