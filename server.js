@@ -556,7 +556,7 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
 
         // 1. Resumen de Deuda Total por Suplidor
         const summaryRes = await client.query(`
-            SELECT s.id, s.name, SUM(e.amount) as total_deuda
+            SELECT s.id, s.name, SUM(e.amount - COALESCE(e.paid_amount, 0)) as total_deuda
             FROM expenses e
             JOIN suppliers s ON e.supplier_id = s.id
             WHERE e.status != 'Pagada'
@@ -623,15 +623,38 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
                                 </select>
                             </div>
                             <table class="modern-table">
-                                <thead><tr><th>Fecha</th><th>Factura</th><th>Monto</th><th>Estado</th></tr></thead>
+                                <thead>
+                                    <tr>
+                                        <th>Fecha</th>
+                                        <th>Suplidor / Concepto</th>
+                                        <th style="text-align:right;">Balance (RD$)</th>
+                                        <th>Acción de Pago</th>
+                                    </tr>
+                                </thead>
                                 <tbody>
-                                    ${invoicesRes.rows.map(i => `
+                                    ${invoicesRes.rows.map(i => {
+                                        const montoOriginal = parseFloat(i.amount);
+                                        const yaPagado = parseFloat(i.paid_amount || 0);
+                                        const pendiente = montoOriginal - yaPagado;
+                                        
+                                        return `
                                         <tr>
                                             <td>${new Date(i.expense_date).toLocaleDateString()}</td>
                                             <td><b>${i.supplier_name}</b><br><small>${i.description || 'Sin concepto'}</small></td>
-                                            <td style="font-weight:bold; text-align:right;">RD$ ${parseFloat(i.amount).toFixed(2)}</td>
-                                            <td><span class="badge" style="background:#fff5f5; color:#c53030; padding:4px 8px; border-radius:10px; font-size:11px;">${i.status || 'Pendiente'}</span></td>
-                                        </tr>`).join('')}
+                                            <td style="text-align:right;">
+                                                <div style="font-size:11px; color:gray;">Original: $${montoOriginal.toFixed(2)}</div>
+                                                <div style="font-weight:bold; color:var(--success);">Pagado: $${yaPagado.toFixed(2)}</div>
+                                                <div style="font-weight:bold; color:var(--danger); border-top:1px solid #eee;">Pendiente: RD$ ${pendiente.toFixed(2)}</div>
+                                            </td>
+                                            <td>
+                                                <form action="/cuentas-por-pagar/abonar" method="POST" style="display:flex; gap:5px; align-items:center;">
+                                                    <input type="hidden" name="expenseId" value="${i.id}">
+                                                    <input type="number" name="paymentAmount" step="0.01" max="${pendiente.toFixed(2)}" placeholder="Monto" style="width:90px; padding:5px; border-radius:5px; border:1px solid #ddd;" required>
+                                                    <button type="submit" class="btn btn-activar" style="padding:6px 10px; font-size:11px; white-space:nowrap;">Abonar</button>
+                                                </form>
+                                            </td>
+                                        </tr>`;
+                                    }).join('')}
                                 </tbody>
                             </table>
                         </div>
@@ -4251,7 +4274,43 @@ app.get('/reporte-suplidor-pdf/:id', requireLogin, requireAdminOrCoord, async (r
         doc.end();
     } catch (e) { res.status(500).send(e.message); }
 });
+app.post('/cuentas-por-pagar/abonar', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { expenseId, paymentAmount } = req.body;
+    let client;
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN');
 
+        // 1. Buscamos la factura actual
+        const expenseRes = await client.query("SELECT amount, paid_amount FROM expenses WHERE id = $1", [expenseId]);
+        const expense = expenseRes.rows[0];
+        
+        const nuevoPagado = parseFloat(expense.paid_amount || 0) + parseFloat(paymentAmount);
+        const montoTotal = parseFloat(expense.amount);
+
+        // 2. Determinamos el nuevo estado
+        let nuevoEstado = 'Pendiente';
+        if (nuevoPagado >= montoTotal) {
+            nuevoEstado = 'Pagada';
+        } else if (nuevoPagado > 0) {
+            nuevoEstado = 'Abonada';
+        }
+
+        // 3. Actualizamos la factura
+        await client.query(
+            "UPDATE expenses SET paid_amount = $1, status = $2 WHERE id = $3",
+            [nuevoPagado, nuevoEstado, expenseId]
+        );
+
+        await client.query('COMMIT');
+        res.redirect('/cuentas-por-pagar');
+    } catch (e) {
+        if (client) await client.query('ROLLBACK');
+        res.status(500).send(e.message);
+    } finally {
+        if (client) client.release();
+    }
+});
 app.listen(PORT, () => {
     console.log(`✅ Servidor de Administración corriendo en http://localhost:${PORT}`);
 });
