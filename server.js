@@ -2423,22 +2423,25 @@ app.get('/gestionar-prestamos', requireLogin, requireAdminOrCoord, async (req, r
 // --- RUTA PARA GUARDAR UN NUEVO PRÉSTAMO ---
 app.post('/gestionar-prestamos', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { employee_id, loan_date, loan_amount, reason } = req.body;
-    if (!employee_id || !loan_date || !loan_amount) {
-        return res.status(400).send("El colaborador, la fecha y el monto son obligatorios.");
-    }
+    let client;
     try {
-        const client = await pool.connect();
-        await client.query(
-            `INSERT INTO loans (employee_id, loan_date, loan_amount, reason) VALUES ($1, $2, $3, $4)`,
+        client = await pool.connect();
+        // Guardamos y pedimos que nos devuelva el ID del nuevo préstamo
+        const result = await client.query(
+            `INSERT INTO loans (employee_id, loan_date, loan_amount, reason, status) 
+             VALUES ($1, $2, $3, $4, 'activo') RETURNING id`,
             [employee_id, loan_date, loan_amount, reason || null]
         );
+        const newLoanId = result.rows[0].id;
         client.release();
-        res.redirect('/gestionar-prestamos');
+        
+        // Redirigimos al detalle del préstamo recién creado para imprimir el comprobante
+        res.redirect(`/prestamo/${newLoanId}?nuevo=true`);
     } catch (error) {
-        console.error("Error al guardar el préstamo:", error);
-        res.status(500).send('<h1>Error al guardar el préstamo ❌</h1>');
+        res.status(500).send('Error al guardar el préstamo');
     }
 });
+
 // --- RUTA PARA GUARDAR UN NUEVO AVANCE ---
 app.post('/gestionar-avances', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { employee_id, advance_date, amount, reason } = req.body;
@@ -3996,6 +3999,54 @@ app.post('/procesar-super-nomina', requireLogin, requireAdminOrCoord, async (req
     } finally {
         if (client) client.release();
     }
+});
+app.get('/imprimir-desembolso/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { id } = req.params;
+    let client;
+    try {
+        client = await pool.connect();
+        const result = await client.query(`
+            SELECT l.*, e.nombre, e.name, e.cedula 
+            FROM loans l JOIN employees e ON l.employee_id = e.id 
+            WHERE l.id = $1`, [id]);
+        client.release();
+        const loan = result.rows[0];
+
+        res.send(`
+            <!DOCTYPE html><html lang="es">
+            <head><title>Comprobante de Desembolso</title>
+                <style>
+                    body { font-family: sans-serif; padding: 50px; line-height: 1.6; }
+                    .header { text-align: center; border-bottom: 2px solid #333; margin-bottom: 30px; }
+                    .contrato { text-align: justify; margin-bottom: 50px; }
+                    .firmas { display: grid; grid-template-columns: 1fr 1fr; gap: 100px; margin-top: 80px; }
+                    .linea { border-top: 1px solid #000; text-align: center; padding-top: 10px; }
+                </style>
+            </head>
+            <body>
+                <div class="header">
+                    <h1>COMPROBANTE DE DESEMBOLSO DE PRÉSTAMO</h1>
+                    <p>Referencia del Préstamo: #00${loan.id}</p>
+                </div>
+                <div class="contrato">
+                    <p>Yo, <b>${loan.nombre || loan.name}</b>, identificado con la cédula No. <b>${loan.cedula || '___________'}</b>, 
+                    declaro haber recibido de la empresa la suma de <b>RD$ ${parseFloat(loan.loan_amount).toFixed(2)}</b> 
+                    en fecha <b>${new Date(loan.loan_date).toLocaleDateString()}</b>.</p>
+                    
+                    <p>Acepto que dicho monto sea descontado de mis pagos de nómina, bonos o comisiones de forma quincenal, 
+                    según los acuerdos establecidos, hasta saldar la totalidad de la deuda.</p>
+                    
+                    <p><b>Concepto:</b> ${loan.reason || 'Préstamo personal'}</p>
+                </div>
+                <div class="firmas">
+                    <div class="linea">Entregado por (Empresa)</div>
+                    <div class="linea">Recibido Conforme (Empleado)</div>
+                </div>
+                <div style="margin-top: 50px; text-align: center;">
+                    <button onclick="window.print()" style="padding: 10px 20px; cursor: pointer;">🖨️ Imprimir para Firma</button>
+                </div>
+            </body></html>`);
+    } catch (e) { res.status(500).send(e.message); }
 });
 app.listen(PORT, () => {
     console.log(`✅ Servidor de Administración corriendo en http://localhost:${PORT}`);
