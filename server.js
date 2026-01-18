@@ -303,7 +303,6 @@ app.get('/', requireLogin, requireAdminOrCoord, (req, res) => {
                     </div>
                 </div>
 
-               // SECCIÓN PERSONAL Y PAGOS CON 5 BOTONES
 <div class="module">
     <h2>Personal y Pagos</h2>
     <div class="dashboard">
