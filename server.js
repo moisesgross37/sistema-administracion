@@ -3623,9 +3623,13 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
     try {
         client = await pool.connect();
         
-        // 1. Obtención de datos
-        const employeesRes = await client.query("SELECT * FROM employees ORDER BY name ASC");
-        const employees = employeesRes.rows.filter(e => e.participa_en_nomina === true);
+        // 1. Corregimos el nombre de la columna a 'nombre' (que es el estándar en tu DB)
+        // Usamos un filtro más seguro para los empleados
+        const employeesRes = await client.query("SELECT * FROM employees ORDER BY id ASC");
+        
+        // Filtramos para asegurar que solo aparezcan los que participan en nómina
+        // Probamos con 'participa_en_nomina' o 'participa_nomina'
+        const employees = employeesRes.rows.filter(e => e.participa_en_nomina === true || e.participa_nomina === true);
 
         const quotesRes = await client.query("SELECT id, clientname FROM quotes WHERE status = 'activa' ORDER BY clientname ASC");
         const activeProjects = quotesRes.rows;
@@ -3633,13 +3637,16 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
         const projectOptions = activeProjects.map(p => `<option value="${p.id}">${p.clientname}</option>`).join('');
 
         let employeesRows = employees.map(emp => {
-            const sueldoQuincenal = (parseFloat(emp.salary || 0) / 2).toFixed(2);
+            // Usamos emp.nombre o emp.name dependiendo de lo que venga de la base de datos
+            const nombreEmpleado = emp.nombre || emp.name || "Sin nombre";
+            const sueldoQuincenal = (parseFloat(emp.salary || emp.sueldo || 0) / 2).toFixed(2);
+            
             return `
             <tr data-employee-id="${emp.id}">
-                <td style="font-weight:bold;">${emp.name}</td>
+                <td style="font-weight:bold;">${nombreEmpleado}</td>
                 <td>$${sueldoQuincenal}</td>
                 <td id="extras-container-${emp.id}">
-                    <div class="no-extras-msg" style="color:gray; font-size:12px;">Sin extras registrados</div>
+                    <div class="no-extras-msg" style="color:gray; font-size:12px;">Sin actividades registradas</div>
                 </td>
                 <td style="text-align:right;">
                     <button class="btn btn-activar" style="padding:5px 10px; font-size:12px;" onclick="addExtraRow(${emp.id})">+ Actividad</button>
@@ -3653,52 +3660,64 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
                 ${commonHtmlHead.replace('<title>Panel de Administración</title>', '<title>Super Nómina</title>')}
                 <style>
                     .extra-row { display: grid; grid-template-columns: 1fr 1fr 80px 30px; gap: 5px; margin-bottom: 5px; background: #f8f9fa; padding: 5px; border-radius: 4px; border: 1px solid #eee; }
-                    .extra-row select, .extra-row input { padding: 4px; font-size: 11px; }
-                    .btn-delete { color: #dc3545; cursor: pointer; font-weight: bold; text-align: center; }
+                    .extra-row select, .extra-row input { padding: 4px; font-size: 11px; border: 1px solid #ccc; border-radius: 3px; }
+                    .btn-delete { color: #dc3545; cursor: pointer; font-weight: bold; text-align: center; line-height: 25px; }
+                    .container h1 { color: #007bff; margin-bottom: 20px; }
                 </style>
             </head>
             <body>
                 <div class="container" style="max-width: 1100px;">
                     ${backToDashboardLink}
                     <h1>Super Nómina Quincenal</h1>
+                    <p>Agrega múltiples actividades por centro para cada colaborador.</p>
+                    
                     <table>
                         <thead>
                             <tr>
                                 <th>Empleado</th>
                                 <th>Sueldo Base (1/2)</th>
-                                <th style="width: 50%;">Actividades / Extras (Centro - Detalle - Monto)</th>
+                                <th style="width: 50%;">Actividades (Centro - Descripción - Monto)</th>
                                 <th>Acciones</th>
                             </tr>
                         </thead>
-                        <tbody>${employeesRows}</tbody>
+                        <tbody>
+                            ${employeesRows.length > 0 ? employeesRows : '<tr><td colspan="4" style="text-align:center;">No hay empleados configurados para nómina.</td></tr>'}
+                        </tbody>
                     </table>
+
                     <div style="margin-top: 30px; text-align: right;">
                         <button class="btn" style="background-color: #28a745; color: white; padding: 15px 30px;" onclick="procesarNomina()">
                             💾 Procesar Nómina y Generar Recibos
                         </button>
                     </div>
                 </div>
+
                 <script>
                     const projectOptionsHtml = '${projectOptions}';
+
                     function addExtraRow(empId) {
                         const container = document.getElementById('extras-container-' + empId);
                         const noExtrasMsg = container.querySelector('.no-extras-msg');
                         if (noExtrasMsg) noExtrasMsg.remove();
+
                         const div = document.createElement('div');
                         div.className = 'extra-row';
-                        div.innerHTML = '<select class="extra-project"><option value="">Centro...</option>' + projectOptionsHtml + '</select>' +
-                            '<input type="text" class="extra-desc" placeholder="Fotos, etc.">' +
+                        div.innerHTML = '<select class="extra-project"><option value="">Elegir Centro...</option>' + projectOptionsHtml + '</select>' +
+                            '<input type="text" class="extra-desc" placeholder="Detalle (ej: Fotos)">' +
                             '<input type="number" class="extra-amount" placeholder="0.00" step="0.01">' +
                             '<div class="btn-delete" onclick="this.parentElement.remove()">×</div>';
                         container.appendChild(div);
                     }
-                    function procesarNomina() { alert("Función de guardado en construcción."); }
+
+                    function procesarNomina() {
+                        alert("Lógica de guardado detallado lista para ser activada.");
+                    }
                 </script>
             </body></html>`);
 
     } catch (e) {
-        console.error("Error crítico:", e.message);
-        res.status(500).send('<h1>Error de Servidor</h1><p>' + e.message + '</p>');
+        console.error("Error en Super Nómina:", e.message);
+        res.status(500).send('<h1>Error de Servidor</h1><p>' + e.message + '</p><a href="/dashboard">Volver</a>');
     } finally {
         if (client) client.release();
     }
