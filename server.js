@@ -554,7 +554,7 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
     try {
         client = await pool.connect();
 
-        // 1. Resumen de Deuda Total por Suplidor
+        // 1. Resumen de Deuda Total por Suplidor (Calculando el balance real)
         const summaryRes = await client.query(`
             SELECT s.id, s.name, SUM(e.amount - COALESCE(e.paid_amount, 0)) as total_deuda
             FROM expenses e
@@ -563,7 +563,7 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
             GROUP BY s.id, s.name
             ORDER BY total_deuda DESC`);
 
-        // 2. Filtro dinámico para la tabla
+        // 2. Consulta de facturas y del HISTORIAL DE ABONOS
         let queryText = `
             SELECT e.*, s.name as supplier_name 
             FROM expenses e 
@@ -577,6 +577,10 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
         }
 
         const invoicesRes = await client.query(queryText + " ORDER BY e.expense_date DESC", params);
+        
+        // --- ESTA ES LA CONSULTA NUEVA PARA EL HISTORIAL ---
+        const historyRes = await client.query("SELECT * FROM payment_history ORDER BY payment_date DESC");
+        
         const suppliersRes = await client.query("SELECT id, name FROM suppliers ORDER BY name ASC");
 
         const summaryCards = summaryRes.rows.map(s => `
@@ -627,7 +631,7 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
                                     <tr>
                                         <th>Fecha</th>
                                         <th>Suplidor / Concepto</th>
-                                        <th style="text-align:right;">Balance (RD$)</th>
+                                        <th style="text-align:right;">Balance e Historial</th>
                                         <th>Acción de Pago</th>
                                     </tr>
                                 </thead>
@@ -636,21 +640,36 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
                                         const montoOriginal = parseFloat(i.amount);
                                         const yaPagado = parseFloat(i.paid_amount || 0);
                                         const pendiente = montoOriginal - yaPagado;
+
+                                        // Filtramos los abonos que pertenecen a esta factura específica
+                                        const misAbonos = historyRes.rows.filter(h => h.expense_id === i.id);
+                                        const abonosHtml = misAbonos.map(a => `
+                                            <div style="font-size:10px; color:#2c7a7b; background:#f0fff4; padding:2px 5px; margin-top:2px; border-radius:3px;">
+                                                ✅ ${new Date(a.payment_date).toLocaleDateString()}: <b>$${parseFloat(a.amount_paid).toFixed(2)}</b> (${a.payment_method})
+                                            </div>
+                                        `).join('');
                                         
                                         return `
                                         <tr>
                                             <td>${new Date(i.expense_date).toLocaleDateString()}</td>
                                             <td><b>${i.supplier_name}</b><br><small>${i.description || 'Sin concepto'}</small></td>
                                             <td style="text-align:right;">
-                                                <div style="font-size:11px; color:gray;">Original: $${montoOriginal.toFixed(2)}</div>
-                                                <div style="font-weight:bold; color:var(--success);">Pagado: $${yaPagado.toFixed(2)}</div>
-                                                <div style="font-weight:bold; color:var(--danger); border-top:1px solid #eee;">Pendiente: RD$ ${pendiente.toFixed(2)}</div>
+                                                <div style="font-size:11px; color:gray;">Total: $${montoOriginal.toFixed(2)}</div>
+                                                <div style="font-weight:bold; color:var(--danger); border-bottom:1px solid #eee; padding-bottom:3px;">Pendiente: RD$ ${pendiente.toFixed(2)}</div>
+                                                <div style="margin-top:5px; text-align:left;">
+                                                    ${abonosHtml || '<span style="font-size:10px; color:gray;">Sin abonos registrados</span>'}
+                                                </div>
                                             </td>
                                             <td>
-                                                <form action="/cuentas-por-pagar/abonar" method="POST" style="display:flex; gap:5px; align-items:center;">
+                                                <form action="/cuentas-por-pagar/abonar" method="POST" style="display:flex; flex-direction:column; gap:5px;">
                                                     <input type="hidden" name="expenseId" value="${i.id}">
-                                                    <input type="number" name="paymentAmount" step="0.01" max="${pendiente.toFixed(2)}" placeholder="Monto" style="width:90px; padding:5px; border-radius:5px; border:1px solid #ddd;" required>
-                                                    <button type="submit" class="btn btn-activar" style="padding:6px 10px; font-size:11px; white-space:nowrap;">Abonar</button>
+                                                    <input type="number" name="paymentAmount" step="0.01" max="${pendiente.toFixed(2)}" placeholder="Monto RD$" style="padding:5px; border-radius:5px; border:1px solid #ddd;" required>
+                                                    <select name="paymentMethod" style="padding:5px; border-radius:5px; border:1px solid #ddd; font-size:11px;">
+                                                        <option value="Transferencia">Transferencia</option>
+                                                        <option value="Efectivo">Efectivo</option>
+                                                        <option value="Cheque">Cheque</option>
+                                                    </select>
+                                                    <button type="submit" class="btn btn-activar" style="padding:6px; font-size:11px;">Registrar Abono</button>
                                                 </form>
                                             </td>
                                         </tr>`;
@@ -1350,20 +1369,24 @@ app.get('/caja-chica', requireLogin, requireAdminOrCoord, async (req, res) => {
 
                     // Función para imprimir vale individual
                     function printTicket(sup, des, amt) {
-                        const w = window.open('', '', 'width=600,height=400');
-                        w.document.write('<html><body style="font-family:sans-serif; padding:40px; text-align:center; border: 1px solid #eee;">');
-                        w.document.write('<h2>VALE DE CAJA CHICA</h2><hr>');
-                        w.document.write('<p style="font-size:24px;"><b>Monto: RD$ ' + amt + '</b></p>');
-                        w.document.write('<p><b>Pagado a:</b> ' + sup + '</p>');
-                        w.document.write('<p><b>Concepto:</b> ' + des + '</p>');
-                        w.document.write('<p>Fecha: ' + new Date().toLocaleDateString() + '</p>');
-                        w.document.write('<div style="margin-top:80px; display:flex; justify-content:space-around;">');
-                        w.document.write('<div style="border-top:1px solid #000; width:180px; padding-top:10px;">Entregado por</div>');
-                        w.document.write('<div style="border-top:1px solid #000; width:180px; padding-top:10px;">Recibido por</div>');
-                        w.document.write('</div></body></html>');
-                        w.document.close();
-                        w.print();
-                        w.close();
+    const w = window.open('', '', 'width=600,height=450');
+    w.document.write('<html><body style="font-family:sans-serif; padding:30px; border: 2px solid #000;">');
+    w.document.write('<div style="text-align:center;"><h2>PCOE - VALE DE CAJA CHICA</h2><p>Comprobante de Egreso</p></div><hr>');
+    w.document.write('<div style="margin: 20px 0; font-size: 18px;">');
+    w.document.write('<p><b>Fecha:</b> ' + new Date().toLocaleDateString() + '</p>');
+    w.document.write('<p><b>Pagado a:</b> ' + sup + '</p>');
+    w.document.write('<p><b>Monto:</b> <span style="font-size:24px;">RD$ ' + amt + '</span></p>');
+    w.document.write('<p><b>Concepto:</b> ' + des + '</p></div>');
+    w.document.write('<div style="margin-top:100px; display:flex; justify-content:space-between;">');
+    w.document.write('<div style="text-align:center; width:200px; border-top:1px solid #000; padding-top:10px;">Entregado por (Secretaría)</div>');
+    w.document.write('<div style="text-align:center; width:200px; border-top:1px solid #000; padding-top:10px;">Recibido por (Suplidor)</div>');
+    w.document.write('</div>');
+    w.document.write('<p style="margin-top:40px; font-size:10px; text-align:center; color:gray;">Documento interno para reposición de fondos</p>');
+    w.document.write('</body></html>');
+    w.document.close();
+    w.print();
+    w.close();
+}
                     }
                 </script>
             `;
@@ -4275,31 +4298,29 @@ app.get('/reporte-suplidor-pdf/:id', requireLogin, requireAdminOrCoord, async (r
     } catch (e) { res.status(500).send(e.message); }
 });
 app.post('/cuentas-por-pagar/abonar', requireLogin, requireAdminOrCoord, async (req, res) => {
-    const { expenseId, paymentAmount } = req.body;
+    const { expenseId, paymentAmount, paymentMethod } = req.body;
     let client;
     try {
         client = await pool.connect();
         await client.query('BEGIN');
 
-        // 1. Buscamos la factura actual
+        // 1. Registrar el abono en el historial
+        await client.query(
+            "INSERT INTO payment_history (expense_id, amount_paid, payment_method) VALUES ($1, $2, $3)",
+            [expenseId, paymentAmount, paymentMethod || 'Efectivo']
+        );
+
+        // 2. Actualizar el monto pagado acumulado en la factura
         const expenseRes = await client.query("SELECT amount, paid_amount FROM expenses WHERE id = $1", [expenseId]);
         const expense = expenseRes.rows[0];
+        const nuevoTotalPagado = parseFloat(expense.paid_amount || 0) + parseFloat(paymentAmount);
         
-        const nuevoPagado = parseFloat(expense.paid_amount || 0) + parseFloat(paymentAmount);
-        const montoTotal = parseFloat(expense.amount);
+        // 3. Determinar el nuevo estado
+        let nuevoEstado = (nuevoTotalPagado >= parseFloat(expense.amount)) ? 'Pagada' : 'Abonada';
 
-        // 2. Determinamos el nuevo estado
-        let nuevoEstado = 'Pendiente';
-        if (nuevoPagado >= montoTotal) {
-            nuevoEstado = 'Pagada';
-        } else if (nuevoPagado > 0) {
-            nuevoEstado = 'Abonada';
-        }
-
-        // 3. Actualizamos la factura
         await client.query(
             "UPDATE expenses SET paid_amount = $1, status = $2 WHERE id = $3",
-            [nuevoPagado, nuevoEstado, expenseId]
+            [nuevoTotalPagado, nuevoEstado, expenseId]
         );
 
         await client.query('COMMIT');
