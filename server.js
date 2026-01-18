@@ -1222,128 +1222,96 @@ app.get('/caja-chica', requireLogin, requireAdminOrCoord, async (req, res) => {
     let client;
     try {
         client = await pool.connect();
-        
-        // 1. Buscamos si hay un ciclo abierto
-        const activeCycleResult = await client.query("SELECT * FROM caja_chica_ciclos WHERE estado = 'abierto' LIMIT 1");
-        const cycle = activeCycleResult.rows[0];
+        const cycleRes = await client.query("SELECT * FROM caja_chica_ciclos WHERE estado = 'abierto' LIMIT 1");
+        const cycle = cycleRes.rows[0];
 
         let content = "";
 
         if (!cycle) {
-            // --- VISTA CUANDO NO HAY CICLO ---
-            const closedCyclesResult = await client.query("SELECT * FROM caja_chica_ciclos WHERE estado = 'cerrado' ORDER BY fecha_inicio DESC");
-            const closedCyclesHtml = closedCyclesResult.rows.map(c => `
+            const historyRes = await client.query("SELECT * FROM caja_chica_ciclos WHERE estado = 'cerrado' ORDER BY fecha_cierre DESC LIMIT 5");
+            const historyHtml = historyRes.rows.map(c => `
                 <tr>
-                    <td>${new Date(c.fecha_inicio).toLocaleDateString()}</td>
                     <td>${new Date(c.fecha_cierre).toLocaleDateString()}</td>
-                    <td>RD$ ${parseFloat(c.fondo_inicial).toFixed(2)}</td>
-                    <td style="color:red;">RD$ ${parseFloat(c.total_gastado).toFixed(2)}</td>
-                    <td><a href="/caja-chica/reporte/${c.id}/pdf" target="_blank" class="btn btn-info" style="padding:5px 10px;">Ver PDF</a></td>
-                </tr>`).join('') || '<tr><td colspan="5">No hay historial disponible.</td></tr>';
+                    <td>RD$ ${parseFloat(c.total_gastado).toFixed(2)}</td>
+                    <td><a href="/caja-chica/reporte/${c.id}/pdf" target="_blank" class="btn btn-info" style="padding:5px 10px; font-size:12px;">🖨️ Reporte para Reposición</a></td>
+                </tr>`).join('');
 
             content = `
-                <div class="card" style="max-width: 600px; margin: 0 auto; text-align: center; padding: 40px;">
-                    <h2 style="color: var(--primary); margin-bottom: 10px;">Caja Chica Cerrada</h2>
-                    <p style="color: #666;">No hay un ciclo activo actualmente. Abre uno nuevo para registrar gastos.</p>
-                    <form action="/caja-chica/abrir-ciclo" method="POST" style="margin-top: 30px;">
-                        <div class="form-group">
-                            <label>Monto del Fondo Inicial (RD$):</label>
-                            <input type="number" name="fondo_inicial" step="0.01" style="font-size: 1.5rem; text-align: center; width: 80%;" required>
-                        </div>
-                        <button type="submit" class="btn btn-activar" style="width: 80%; margin-top: 20px;">🚀 Abrir Nuevo Ciclo</button>
+                <div class="card" style="max-width: 600px; margin: 0 auto; text-align: center;">
+                    <h2 style="color: var(--primary);">Caja Chica Cerrada</h2>
+                    <form action="/caja-chica/abrir-ciclo" method="POST" style="margin-top:20px;">
+                        <input type="number" name="fondo_inicial" placeholder="Monto Fondo Inicial" step="0.01" style="font-size:1.2rem; text-align:center; margin-bottom:15px; width:80%;" required>
+                        <button type="submit" class="btn btn-activar" style="width:80%;">🚀 Abrir Nuevo Ciclo</button>
                     </form>
                 </div>
-                <div class="card" style="margin-top: 40px;">
-                    <h3>Historial de Ciclos Cerrados</h3>
+                <div class="card" style="margin-top: 30px;">
+                    <h3>Historial de Cierres (Para Administración)</h3>
                     <table class="modern-table">
-                        <thead><tr><th>Inicio</th><th>Cierre</th><th>Fondo</th><th>Gastado</th><th>Reporte</th></tr></thead>
-                        <tbody>${closedCyclesHtml}</tbody>
+                        <thead><tr><th>Fecha Cierre</th><th>Monto Repuesto</th><th>Acción</th></tr></thead>
+                        <tbody>${historyHtml}</tbody>
                     </table>
                 </div>`;
         } else {
-            // --- VISTA CUANDO SÍ HAY CICLO (DISEÑO HORIZONTAL) ---
-            const [suppliersRes, expensesRes] = await Promise.all([
-                client.query('SELECT * FROM suppliers ORDER BY name ASC'),
-                client.query(`SELECT e.*, s.name as supplier_name FROM expenses e JOIN suppliers s ON e.supplier_id = s.id WHERE e.caja_chica_ciclo_id = $1 ORDER BY e.expense_date DESC`, [cycle.id])
+            const [supps, exps] = await Promise.all([
+                client.query("SELECT id, name FROM suppliers ORDER BY name ASC"),
+                client.query("SELECT e.*, s.name as supplier_name FROM expenses e JOIN suppliers s ON e.supplier_id = s.id WHERE e.caja_chica_ciclo_id = $1 ORDER BY e.id DESC", [cycle.id])
             ]);
             
-            const expenses = expensesRes.rows;
-            const totalGastado = expenses.reduce((sum, e) => sum + parseFloat(e.amount), 0);
-            const balance = parseFloat(cycle.fondo_inicial) - totalGastado;
-            const supplierOptions = suppliersRes.rows.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+            const total = exps.rows.reduce((sum, e) => sum + parseFloat(e.amount), 0);
+            const balance = parseFloat(cycle.fondo_inicial) - total;
 
             content = `
                 <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 30px;">
-                    <div class="summary-box" style="border-top: 5px solid var(--primary); text-align: center;">
-                        <small style="text-transform: uppercase; color: var(--primary); font-weight: bold;">Fondo Inicial</small>
-                        <div class="amount" style="font-size: 1.8rem;">RD$ ${parseFloat(cycle.fondo_inicial).toFixed(2)}</div>
-                    </div>
-                    <div class="summary-box" style="border-top: 5px solid var(--danger); text-align: center;">
-                        <small style="text-transform: uppercase; color: var(--danger); font-weight: bold;">Total Gastado</small>
-                        <div class="amount red" style="font-size: 1.8rem;">RD$ ${totalGastado.toFixed(2)}</div>
-                    </div>
-                    <div class="summary-box" style="border-top: 5px solid var(--success); text-align: center;">
-                        <small style="text-transform: uppercase; color: var(--success); font-weight: bold;">Balance Disponible</small>
-                        <div class="amount green" style="font-size: 1.8rem;">RD$ ${balance.toFixed(2)}</div>
-                    </div>
+                    <div class="summary-box" style="border-top: 5px solid var(--primary);"><small>Fondo Inicial</small><div class="amount">RD$ ${parseFloat(cycle.fondo_inicial).toFixed(2)}</div></div>
+                    <div class="summary-box" style="border-top: 5px solid var(--danger);"><small>Total Gastado</small><div class="amount red">RD$ ${total.toFixed(2)}</div></div>
+                    <div class="summary-box" style="border-top: 5px solid var(--success);"><small>Balance</small><div class="amount green">RD$ ${balance.toFixed(2)}</div></div>
+                </div>
+
+                <div style="text-align: center; margin-bottom: 30px; background: #fff; padding: 20px; border-radius: 15px; box-shadow: var(--card-shadow);">
+                    <form action="/caja-chica/cerrar-ciclo" method="POST" onsubmit="return confirm('¿Cerrar ciclo? El total se cargará a Gastos Administrativos para reposición.')">
+                        <input type="hidden" name="cycleId" value="${cycle.id}">
+                        <button type="submit" class="btn" style="background: var(--danger); color: white; padding: 15px 40px; border-radius: 50px; font-weight: bold; font-size: 1.1rem;">
+                            🔒 Cerrar Ciclo y Generar Reporte de Reposición
+                        </button>
+                    </form>
                 </div>
 
                 <div style="display: grid; grid-template-columns: 350px 1fr; gap: 30px;">
                     <div class="form-container">
-                        <h3 style="margin-top:0;">➕ Registrar Gasto</h3>
+                        <h3>➕ Nuevo Gasto</h3>
                         <form action="/caja-chica/nuevo-gasto" method="POST">
                             <input type="hidden" name="cycleId" value="${cycle.id}">
-                            <div class="form-group">
-                                <label>Fecha:</label>
-                                <input type="date" name="expense_date" value="${new Date().toISOString().split('T')[0]}" required>
-                            </div>
-                            <div class="form-group">
-                                <label>Suplidor:</label>
-                                <select name="supplier_id" required><option value="">Seleccione...</option>${supplierOptions}</select>
-                            </div>
-                            <div class="form-group">
-                                <label>Monto (RD$):</label>
-                                <input type="number" name="amount" step="0.01" required>
-                            </div>
-                            <div class="form-group">
-                                <label>Concepto:</label>
-                                <textarea name="description" rows="2" required placeholder="¿Qué se compró?"></textarea>
-                            </div>
-                            <button type="submit" class="btn btn-activar" style="width: 100%; margin-top: 10px;">💾 Guardar Gasto</button>
+                            <div class="form-group"><label>Fecha:</label><input type="date" name="expense_date" value="${new Date().toISOString().split('T')[0]}" required></div>
+                            <div class="form-group"><label>Suplidor:</label><select name="supplier_id" required><option value="">Seleccionar...</option>${supps.rows.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')}</select></div>
+                            <div class="form-group"><label>Monto:</label><input type="number" name="amount" step="0.01" required></div>
+                            <div class="form-group"><label>Concepto:</label><textarea name="description" rows="2" required></textarea></div>
+                            <button type="submit" class="btn btn-activar" style="width:100%;">Guardar Gasto</button>
                         </form>
                     </div>
 
-                    <div class="card" style="padding: 20px;">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-                            <h3 style="margin:0;">Gastos Registrados</h3>
-                            <form action="/caja-chica/cerrar-ciclo" method="POST" onsubmit="return confirm('¿Confirmas el cierre? El total se enviará a Gastos Administrativos.')">
-                                <input type="hidden" name="cycleId" value="${cycle.id}">
-                                <button type="submit" class="btn" style="background: var(--danger); color: white;">🔒 Cerrar Ciclo</button>
-                            </form>
-                        </div>
-                        <table style="width: 100%;">
-                            <thead><tr><th>Fecha</th><th>Detalle</th><th style="text-align:right;">Monto</th></tr></thead>
+                    <div class="card">
+                        <h3>Detalle de Gastos</h3>
+                        <table class="modern-table">
+                            <thead><tr><th>Detalle</th><th style="text-align:right;">Monto</th><th>Ticket</th></tr></thead>
                             <tbody>
-                                ${expenses.map(e => `
-                                    <tr>
-                                        <td>${new Date(e.expense_date).toLocaleDateString()}</td>
-                                        <td><b>${e.supplier_name}</b><br><small style="color:gray;">${e.description}</small></td>
-                                        <td style="text-align:right; font-weight:bold;">RD$ ${parseFloat(e.amount).toFixed(2)}</td>
-                                    </tr>`).join('') || '<tr><td colspan="3" style="text-align:center;">No hay gastos.</td></tr>'}
+                                ${exps.rows.map(e => `<tr>
+                                    <td><b>${e.supplier_name}</b><br><small>${e.description}</small></td>
+                                    <td style="text-align:right; font-weight:bold;">$${parseFloat(e.amount).toFixed(2)}</td>
+                                    <td><button onclick="window.print()" class="btn btn-info" style="padding:4px 8px; font-size:10px;">📄 Vale</button></td>
+                                </tr>`).join('')}
                             </tbody>
                         </table>
                     </div>
                 </div>`;
         }
 
-        res.send(`
-            <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
-                <div class="container" style="max-width: 1200px;">
-                    <div style="margin-bottom: 20px;">${backToDashboardLink}</div>
-                    <h1>Gestión de Caja Chica</h1>
-                    ${content}
-                </div>
-            </body></html>`);
+        res.send(`<!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
+            <div class="container" style="max-width: 1200px;">
+                <div style="margin-bottom: 20px;">${backToDashboardLink}</div>
+                <h1>Gestión de Caja Chica</h1>
+                ${content}
+            </div>
+        </body></html>`);
     } catch (e) { res.status(500).send(e.message); } finally { if (client) client.release(); }
 });
 app.post('/caja-chica/abrir-ciclo', requireLogin, requireAdminOrCoord, async (req, res) => {
