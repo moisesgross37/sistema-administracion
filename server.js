@@ -3752,21 +3752,21 @@ app.post('/procesar-super-nomina', requireLogin, requireAdminOrCoord, async (req
         client = await pool.connect();
         await client.query('BEGIN');
 
+        // Generamos un ID único para esta quincena basado en la fecha y hora
+        const batchPayrollId = Date.now(); 
+
         for (const entry of nomina) {
             for (const extra of entry.extras) {
                 const montoExtra = parseFloat(extra.amount);
-                // Usamos la fecha capturada o la fecha actual si se dejó vacía
                 const fechaActividad = extra.date || new Date().toISOString().split('T')[0];
                 
                 if (extra.quote_id && montoExtra > 0) {
-                    // 1. Guardar con FECHA específica para el recibo tipo Excel
                     await client.query(
-                        `INSERT INTO payroll_extras (employee_id, quote_id, amount, description, payment_date) 
-                         VALUES ($1, $2, $3, $4, $5)`,
-                        [entry.employee_id, extra.quote_id, montoExtra, extra.desc, fechaActividad]
+                        `INSERT INTO payroll_extras (employee_id, quote_id, amount, description, payment_date, payroll_id) 
+                         VALUES ($1, $2, $3, $4, $5, $6)`,
+                        [entry.employee_id, extra.quote_id, montoExtra, extra.desc, fechaActividad, batchPayrollId]
                     );
                     
-                    // 2. Gasto automático en el proyecto
                     await client.query(
                         `INSERT INTO expenses (quote_id, amount, description, expense_date, supplier_id, type) 
                          VALUES ($1, $2, $3, $4, (SELECT id FROM suppliers LIMIT 1), 'Nómina Interna')`,
@@ -3777,13 +3777,114 @@ app.post('/procesar-super-nomina', requireLogin, requireAdminOrCoord, async (req
         }
 
         await client.query('COMMIT');
-        res.json({ success: true });
+        // Devolvemos el ID para poder ir directo a ver los recibos
+        res.json({ success: true, payroll_id: batchPayrollId });
     } catch (e) {
         if (client) await client.query('ROLLBACK');
         res.status(500).json({ success: false, message: e.message });
     } finally {
         if (client) client.release();
     }
+});
+app.get('/ver-recibo/:payroll_id/:employee_id', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { payroll_id, employee_id } = req.params;
+    let client;
+    try {
+        client = await pool.connect();
+        
+        // 1. Obtener datos del empleado
+        const empRes = await client.query("SELECT * FROM employees WHERE id = $1", [employee_id]);
+        const emp = empRes.rows[0];
+        const nombreEmp = emp.nombre || emp.name || "Empleado";
+        const sueldoBase = (parseFloat(emp.salary || emp.sueldo || 0) / 2).toFixed(2);
+
+        // 2. Obtener todos los extras de ese batch de nómina
+        const extrasRes = await client.query(`
+            SELECT pe.*, q.clientname 
+            FROM payroll_extras pe
+            LEFT JOIN quotes q ON pe.quote_id = q.id
+            WHERE pe.payroll_id = $1 AND pe.employee_id = $2
+            ORDER BY pe.payment_date ASC
+        `, [payroll_id, employee_id]);
+        
+        const extras = extrasRes.rows;
+        let totalExtras = 0;
+
+        // 3. Generar las filas de la tabla Excel
+        let filasTabla = extras.map(ex => {
+            totalExtras += parseFloat(ex.amount);
+            return `
+                <tr>
+                    <td>${new Date(ex.payment_date).toLocaleDateString('es-ES')}</td>
+                    <td>${ex.description}</td>
+                    <td>${ex.clientname || 'Administración'}</td>
+                    <td style="text-align:right;">$${parseFloat(ex.amount).toFixed(2)}</td>
+                </tr>`;
+        }).join('');
+
+        const totalPagar = (parseFloat(sueldoBase) + totalExtras).toFixed(2);
+
+        res.send(`
+            <!DOCTYPE html><html lang="es">
+            <head>
+                <meta charset="UTF-8">
+                <title>Recibo de Pago - ${nombreEmp}</title>
+                <style>
+                    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 40px; color: #333; }
+                    .recibo-header { text-align: center; border-bottom: 2px solid #000; padding-bottom: 20px; margin-bottom: 20px; }
+                    .info-grid { display: grid; grid-template-columns: 1fr 1fr; margin-bottom: 30px; }
+                    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+                    th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+                    th { background-color: #f2f2f2; font-weight: bold; }
+                    .total-section { margin-top: 30px; text-align: right; font-size: 1.2em; }
+                    .btn-print { background: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; }
+                    @media print { .btn-print { display: none; } }
+                </style>
+            </head>
+            <body>
+                <button class="btn-print" onclick="window.print()">🖨️ Imprimir Recibo</button>
+                <div class="recibo-header">
+                    <h2>RECIBO DE PAGO DE PERSONAL</h2>
+                    <p>Quincena correspondiente al ${new Date().toLocaleDateString()}</p>
+                </div>
+                
+                <div class="info-grid">
+                    <div><strong>Colaborador:</strong> ${nombreEmp}</div>
+                    <div style="text-align:right;"><strong>ID Pago:</strong> #${payroll_id}</div>
+                </div>
+
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Fecha</th>
+                            <th>Descripción / Concepto</th>
+                            <th>Centro Educativo</th>
+                            <th style="text-align:right;">Monto (RD$)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>${new Date().toLocaleDateString()}</td>
+                            <td>Sueldo Fijo Quincenal</td>
+                            <td>---</td>
+                            <td style="text-align:right;">$${sueldoBase}</td>
+                        </tr>
+                        ${filasTabla}
+                    </tbody>
+                </table>
+
+                <div class="total-section">
+                    <strong>TOTAL NETO A PAGAR:</strong>
+                    <span style="color: #28a745; font-weight: bold; margin-left: 20px; font-size: 1.5em;">$${totalPagar}</span>
+                </div>
+
+                <div style="margin-top: 100px; display: grid; grid-template-columns: 1fr 1fr; gap: 50px;">
+                    <div style="border-top: 1px solid #000; text-align: center; padding-top: 10px;">Firma del Empleador</div>
+                    <div style="border-top: 1px solid #000; text-align: center; padding-top: 10px;">Firma del Colaborador</div>
+                </div>
+            </body></html>`);
+
+    } catch (e) { res.status(500).send(e.message); } finally { if (client) client.release(); }
 });
 app.listen(PORT, () => {
     console.log(`✅ Servidor de Administración corriendo en http://localhost:${PORT}`);
