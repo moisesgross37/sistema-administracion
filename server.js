@@ -1222,128 +1222,138 @@ app.get('/caja-chica', requireLogin, requireAdminOrCoord, async (req, res) => {
     let client;
     try {
         client = await pool.connect();
-        const cycleRes = await client.query("SELECT * FROM caja_chica_ciclos WHERE estado = 'abierto' LIMIT 1");
-        const cycle = cycleRes.rows[0];
+        
+        // Buscamos si hay un ciclo abierto
+        const activeCycleResult = await client.query("SELECT * FROM caja_chica_ciclos WHERE estado = 'abierto' LIMIT 1");
+        const cycle = activeCycleResult.rows[0];
 
-        // Consultamos el historial de cierres para que siempre sea visible
+        // Consultamos el historial de cierres (Siempre visible abajo)
         const historyRes = await client.query("SELECT * FROM caja_chica_ciclos WHERE estado = 'cerrado' ORDER BY fecha_cierre DESC LIMIT 5");
         const historyHtml = historyRes.rows.map(c => `
             <tr>
                 <td>${new Date(c.fecha_cierre).toLocaleDateString()}</td>
                 <td style="font-weight:bold;">RD$ ${parseFloat(c.total_gastado).toFixed(2)}</td>
-                <td><a href="/caja-chica/reporte/${c.id}/pdf" target="_blank" class="btn btn-info" style="padding:4px 10px; font-size:12px;">🖨️ Ver PDF</a></td>
+                <td><a href="/caja-chica/reporte/${c.id}/pdf" target="_blank" class="btn btn-info" style="padding:4px 10px; font-size:12px;">🖨️ Ver Reporte PDF</a></td>
             </tr>`).join('') || '<tr><td colspan="3">No hay cierres recientes.</td></tr>';
 
         let content = "";
 
         if (!cycle) {
+            // PANTALLA SI LA CAJA ESTÁ CERRADA
             content = `
-                <div class="card" style="max-width: 500px; margin: 0 auto; text-align: center;">
+                <div class="card" style="max-width: 500px; margin: 0 auto; text-align: center; padding: 40px;">
                     <h2 style="color: var(--primary);">Caja Chica Cerrada</h2>
-                    <p>Ingresa el fondo inicial para abrir un nuevo ciclo.</p>
+                    <p style="margin-bottom: 25px;">Ingresa el fondo inicial para abrir un nuevo ciclo y empezar a registrar gastos.</p>
                     <form action="/caja-chica/abrir-ciclo" method="POST">
-                        <input type="number" name="fondo_inicial" step="0.01" style="font-size: 1.5rem; text-align: center; width: 80%; margin: 20px 0;" required placeholder="0.00">
-                        <button type="submit" class="btn btn-activar" style="width: 80%;">🚀 Abrir Nuevo Ciclo</button>
+                        <div class="form-group">
+                            <label>Monto del Fondo Inicial (RD$):</label>
+                            <input type="number" name="fondo_inicial" step="0.01" style="font-size: 1.5rem; text-align: center; width: 80%;" required placeholder="0.00">
+                        </div>
+                        <button type="submit" class="btn btn-activar" style="width: 80%; margin-top: 20px;">🚀 Abrir Nuevo Ciclo</button>
                     </form>
                 </div>`;
         } else {
-            const [supps, exps] = await Promise.all([
+            // PANTALLA SI LA CAJA ESTÁ ABIERTA
+            const [supps, expsData] = await Promise.all([
                 client.query("SELECT id, name FROM suppliers ORDER BY name ASC"),
                 client.query("SELECT e.*, s.name as supplier_name FROM expenses e JOIN suppliers s ON e.supplier_id = s.id WHERE e.caja_chica_ciclo_id = $1 ORDER BY e.id DESC", [cycle.id])
             ]);
             
-            const total = exps.rows.reduce((sum, e) => sum + parseFloat(e.amount), 0);
-            const balance = parseFloat(cycle.fondo_inicial) - total;
+            const currentExpenses = expsData.rows;
+            const totalGasto = currentExpenses.reduce((sum, e) => sum + parseFloat(e.amount), 0);
+            const balanceActual = parseFloat(cycle.fondo_inicial) - totalGasto;
 
             content = `
                 <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 30px;">
-                    <div class="summary-box" style="border-top: 5px solid var(--primary);"><small>Fondo</small><div class="amount">RD$ ${parseFloat(cycle.fondo_inicial).toFixed(2)}</div></div>
-                    <div class="summary-box" style="border-top: 5px solid var(--danger);"><small>Gastado</small><div class="amount red">RD$ ${total.toFixed(2)}</div></div>
-                    <div class="summary-box" style="border-top: 5px solid var(--success);"><small>Disponible</small><div class="amount green" id="current-balance">RD$ ${balance.toFixed(2)}</div></div>
+                    <div class="summary-box" style="border-top: 5px solid var(--primary);"><small>FONDO INICIAL</small><div class="amount">RD$ ${parseFloat(cycle.fondo_inicial).toFixed(2)}</div></div>
+                    <div class="summary-box" style="border-top: 5px solid var(--danger);"><small>TOTAL GASTADO</small><div class="amount red">RD$ ${totalGasto.toFixed(2)}</div></div>
+                    <div class="summary-box" style="border-top: 5px solid var(--success);"><small>BALANCE DISPONIBLE</small><div class="amount green">RD$ ${balanceActual.toFixed(2)}</div></div>
                 </div>
 
-                <div style="text-align: center; margin-bottom: 30px;">
-                    <form action="/caja-chica/cerrar-ciclo" method="POST" onsubmit="return confirm('¿Deseas cerrar el ciclo y enviar el total a Gastos Generales?')">
+                <div style="text-align: center; margin-bottom: 30px; background: #fff; padding: 25px; border-radius: 15px; border: 1px dashed var(--danger);">
+                    <form action="/caja-chica/cerrar-ciclo" method="POST" onsubmit="return confirm('¿Deseas cerrar el ciclo ahora? El balance restante se guardará y el gasto total irá a contabilidad.')">
                         <input type="hidden" name="cycleId" value="${cycle.id}">
-                        <button type="submit" class="btn" style="background: var(--danger); color: white; padding: 15px 40px; border-radius: 50px; font-weight: bold;">
+                        <button type="submit" class="btn" style="background: var(--danger); color: white; padding: 15px 50px; border-radius: 50px; font-weight: bold; font-size: 1.1rem; cursor: pointer;">
                             🔒 Cerrar Ciclo y Solicitar Reposición
                         </button>
                     </form>
+                    <p style="font-size: 12px; color: gray; margin-top: 10px;">Puedes cerrar el ciclo en cualquier momento para reponer el fondo.</p>
                 </div>
 
                 <div style="display: grid; grid-template-columns: 350px 1fr; gap: 30px;">
                     <div class="form-container">
-                        <h3>➕ Nuevo Gasto</h3>
-                        <form action="/caja-chica/nuevo-gasto" method="POST" id="expense-form">
+                        <h3 style="margin-top:0;">➕ Registrar Gasto</h3>
+                        <form action="/caja-chica/nuevo-gasto" method="POST" id="form-gasto">
                             <input type="hidden" name="cycleId" value="${cycle.id}">
-                            <div class="form-group"><label>Monto:</label><input type="number" id="input-amount" name="amount" step="0.01" required></div>
+                            <div class="form-group"><label>Fecha:</label><input type="date" name="expense_date" value="${new Date().toISOString().split('T')[0]}" required></div>
                             <div class="form-group"><label>Suplidor:</label><select name="supplier_id" required><option value="">Seleccione...</option>${supps.rows.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')}</select></div>
-                            <div class="form-group"><label>Concepto:</label><textarea name="description" rows="2" required></textarea></div>
-                            <button type="submit" class="btn btn-activar" style="width:100%;">💾 Guardar Gasto</button>
+                            <div class="form-group"><label>Monto (RD$):</label><input type="number" id="monto-gasto" name="amount" step="0.01" required></div>
+                            <div class="form-group"><label>Concepto:</label><textarea name="description" rows="2" required placeholder="¿Qué se compró?"></textarea></div>
+                            <button type="submit" class="btn btn-activar" style="width: 100%; margin-top: 10px;">💾 Guardar Gasto</button>
                         </form>
                     </div>
 
                     <div class="card">
-                        <h3>Detalle de Gastos</h3>
+                        <h3 style="margin-top:0;">Gastos Registrados</h3>
                         <table class="modern-table">
-                            <thead><tr><th>Detalle</th><th style="text-align:right;">Monto</th><th>Acción</th></tr></thead>
+                            <thead><tr><th>Detalle</th><th style="text-align:right;">Monto</th><th>Imprimir</th></tr></thead>
                             <tbody>
-                                ${exps.rows.map(e => `
-                                <tr>
-                                    <td><b>${e.supplier_name}</b><br><small>${e.description}</small></td>
-                                    <td style="text-align:right;">$${parseFloat(e.amount).toFixed(2)}</td>
-                                    <td><button onclick="printVale('${e.supplier_name}', '${e.description}', '${parseFloat(e.amount).toFixed(2)}')" class="btn btn-info" style="padding:4px 8px; font-size:10px;">📄 Vale</button></td>
-                                </tr>`).join('')}
+                                ${currentExpenses.map(e => `
+                                    <tr>
+                                        <td><b>${e.supplier_name}</b><br><small style="color:gray;">${e.description}</small></td>
+                                        <td style="text-align:right; font-weight:bold;">RD$ ${parseFloat(e.amount).toFixed(2)}</td>
+                                        <td><button onclick="printTicket('${e.supplier_name}', '${e.description}', '${parseFloat(e.amount).toFixed(2)}')" class="btn btn-info" style="padding:4px 10px; font-size:11px;">📄 Vale</button></td>
+                                    </tr>`).join('') || '<tr><td colspan="3" style="text-align:center; padding:20px; color:gray;">No hay gastos en este ciclo.</td></tr>'}
                             </tbody>
                         </table>
                     </div>
-                </div>`;
-        }
-
-        res.send(`<!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
-            <div class="container" style="max-width: 1200px;">
-                <div style="margin-bottom: 20px;">${backToDashboardLink}</div>
-                <h1>Gestión de Caja Chica</h1>
-                ${content}
-                <div class="card" style="margin-top:40px; opacity: 0.8;">
-                    <h4>📜 Historial de Cierres Recientes</h4>
-                    <table class="modern-table"><tbody>${historyHtml}</tbody></table>
                 </div>
-            </div>
-            <script>
-                // MEJORA: Validación de Saldo
-                const balance = ${cycle ? (parseFloat(cycle.fondo_inicial) - exps.rows.reduce((sum, e) => sum + parseFloat(e.amount), 0)) : 0};
-                const form = document.getElementById('expense-form');
-                if(form) {
-                    form.onsubmit = function(e) {
-                        const amount = parseFloat(document.getElementById('input-amount').value);
-                        if(amount > balance) {
-                            alert('⚠️ Error: El monto excede el saldo disponible en caja chica.');
+
+                <script>
+                    // Validación de saldo antes de guardar
+                    const saldoDisp = ${balanceActual};
+                    document.getElementById('form-gasto').onsubmit = function(e) {
+                        const m = parseFloat(document.getElementById('monto-gasto').value);
+                        if(m > saldoDisp) {
+                            alert('⚠️ Error: No puedes gastar más de lo que queda en balance (RD$ ' + saldoDisp.toFixed(2) + ')');
                             e.preventDefault();
                         }
                     };
-                }
 
-                // MEJORA: Impresión de Vale con Firmas
-                function printVale(sup, desc, amt) {
-                    const win = window.open('', '', 'width=600,height=400');
-                    win.document.write('<html><body style="font-family:sans-serif; padding:20px; text-align:center;">');
-                    win.document.write('<h2>VALE DE CAJA CHICA</h2><hr>');
-                    win.document.write('<p style="font-size:20px;"><b>Monto: RD$ ' + amt + '</b></p>');
-                    win.document.write('<p><b>Pagado a:</b> ' + sup + '</p>');
-                    win.document.write('<p><b>Concepto:</b> ' + desc + '</p>');
-                    win.document.write('<p>Fecha: ' + new Date().toLocaleDateString() + '</p>');
-                    win.document.write('<div style="margin-top:60px; display:flex; justify-content:space-around;">');
-                    win.document.write('<div style="border-top:1px solid #000; width:150px;">Entregado por</div>');
-                    win.document.write('<div style="border-top:1px solid #000; width:150px;">Recibido por</div>');
-                    win.document.write('</div></body></html>');
-                    win.document.close();
-                    win.print();
-                    win.close();
-                }
-            </script>
-        </body></html>`);
-    } catch (e) { res.status(500).send(e.message); } finally { if (client) client.release(); }
+                    // Función para imprimir vale individual
+                    function printTicket(sup, des, amt) {
+                        const w = window.open('', '', 'width=600,height=400');
+                        w.document.write('<html><body style="font-family:sans-serif; padding:40px; text-align:center; border: 1px solid #eee;">');
+                        w.document.write('<h2>VALE DE CAJA CHICA</h2><hr>');
+                        w.document.write('<p style="font-size:24px;"><b>Monto: RD$ ' + amt + '</b></p>');
+                        w.document.write('<p><b>Pagado a:</b> ' + sup + '</p>');
+                        w.document.write('<p><b>Concepto:</b> ' + des + '</p>');
+                        w.document.write('<p>Fecha: ' + new Date().toLocaleDateString() + '</p>');
+                        w.document.write('<div style="margin-top:80px; display:flex; justify-content:space-around;">');
+                        w.document.write('<div style="border-top:1px solid #000; width:180px; padding-top:10px;">Entregado por</div>');
+                        w.document.write('<div style="border-top:1px solid #000; width:180px; padding-top:10px;">Recibido por</div>');
+                        w.document.write('</div></body></html>');
+                        w.document.close();
+                        w.print();
+                        w.close();
+                    }
+                </script>
+            `;
+        }
+
+        res.send(`
+            <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
+                <div class="container" style="max-width: 1200px;">
+                    <div style="margin-bottom: 20px;">${backToDashboardLink}</div>
+                    <h1>Gestión de Caja Chica</h1>
+                    ${content}
+                    <div class="card" style="margin-top:40px; opacity: 0.9;">
+                        <h4>📜 Historial de Cierres Anteriores</h4>
+                        <table class="modern-table"><tbody>${historyHtml}</tbody></table>
+                    </div>
+                </div>
+            </body></html>`);
+    } catch (e) { res.status(500).send("Error de servidor: " + e.message); } finally { if (client) client.release(); }
 });
 app.post('/caja-chica/abrir-ciclo', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { fondo_inicial } = req.body;
