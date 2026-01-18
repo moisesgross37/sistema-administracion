@@ -303,29 +303,33 @@ app.get('/', requireLogin, requireAdminOrCoord, (req, res) => {
                     </div>
                 </div>
 
-                <div class="module">
-                    <h2>Personal y Pagos</h2>
-                    <div class="dashboard">
-                        <a href="/super-nomina" class="dashboard-card" style="border-top: 5px solid #28a745;">
-                            <h3>💰 Control de Nómina</h3>
-                            <p><b>Ventana Única:</b> Gestiona sueldos, avances y bonos por centro en un solo lugar.</p>
-                        </a>
-                        <a href="/pagar-comisiones" class="dashboard-card">
-                            <h3>💵 Pago de Comisiones</h3>
-                            <p>Revisa y paga las comisiones pendientes de asesores y ventas.</p>
-                        </a>
-                        <a href="/empleados" class="dashboard-card">
-                            <h3>👥 Gestión de Equipo</h3>
-                            <p>Configura datos de empleados, asesores y parámetros de pago.</p>
-                        </a>
-                        <a href="/historial-nomina" class="dashboard-card">
-                            <h3>📂 Historial de Pagos</h3>
-                            <p>Consulta registros de nóminas anteriores y recibos generados.</p>
-                        </a>
-                    </div>
-                </div>
-            </div>
-        </body></html>
+               // SECCIÓN PERSONAL Y PAGOS CON 5 BOTONES
+<div class="module">
+    <h2>Personal y Pagos</h2>
+    <div class="dashboard">
+        <a href="/super-nomina" class="dashboard-card" style="border-top: 5px solid #28a745;">
+            <h3>💰 Control de Nómina</h3>
+            <p>Gestiona sueldos, extras y descuentos quincenales.</p>
+        </a>
+        <a href="/gestionar-prestamos" class="dashboard-card" style="border-top: 5px solid #dc3545;">
+            <h3>🏦 Gestión de Préstamos</h3>
+            <p>Registra nuevos préstamos y abonos en efectivo (Como Isolina).</p>
+        </a>
+        <a href="/pagar-comisiones" class="dashboard-card">
+            <h3>💵 Pago de Comisiones</h3>
+            <p>Revisa y paga las comisiones de tus asesores.</p>
+        </a>
+        <a href="/empleados" class="dashboard-card">
+            <h3>👥 Gestión de Equipo</h3>
+            <p>Configura datos de empleados y asesores.</p>
+        </a>
+        <a href="/historial-nomina" class="dashboard-card">
+            <h3>📂 Historial de Pagos</h3>
+            <p>Consulta registros y recibos de nóminas anteriores.</p>
+        </a>
+    </div>
+</div>
+</body></html>
     `);
 });
 app.get('/todos-los-centros', requireLogin, requireAdminOrCoord, async (req, res) => {
