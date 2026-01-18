@@ -3730,37 +3730,71 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
                     // Nota: Asegúrate de que la función procesarNomina() recoja el .extra-date
 
                     async function procesarNomina() {
-                        if(!confirm("¿Deseas guardar esta nómina y afectar la rentabilidad de los centros?")) return;
                         const rows = document.querySelectorAll('.employee-row');
                         const payload = [];
-                        
+                        let resumenTexto = "RESUMEN DE QUINCENA:\n\n";
+                        let hayDatos = false;
+
                         rows.forEach(row => {
                             const empId = row.dataset.employeeId;
+                            const nombreEmp = row.querySelector('td').innerText;
+                            const sueldoBase = parseFloat(row.dataset.salary) || 0;
                             const extras = [];
+                            let totalExtrasEmp = 0;
+
                             row.querySelectorAll('.extra-row').forEach(ex => {
-                                extras.push({
-                                    quote_id: ex.querySelector('.extra-project').value,
-                                    desc: ex.querySelector('.extra-desc').value,
-                                    amount: ex.querySelector('.extra-amount').value
-                                });
+                                const fecha = ex.querySelector('.extra-date').value;
+                                const monto = parseFloat(ex.querySelector('.extra-amount').value) || 0;
+                                
+                                if (monto > 0) {
+                                    extras.push({
+                                        date: fecha,
+                                        quote_id: ex.querySelector('.extra-project').value,
+                                        desc: ex.querySelector('.extra-desc').value,
+                                        amount: monto
+                                    });
+                                    totalExtrasEmp += monto;
+                                    hayDatos = true;
+                                }
                             });
-                            payload.push({ employee_id: empId, salary: row.dataset.salary, extras: extras });
+
+                            if (extras.length > 0 || sueldoBase > 0) {
+                                payload.push({ employee_id: empId, salary: sueldoBase, extras: extras });
+                                resumenTexto += `- ${nombreEmp}: $${sueldoBase} (Base) + $${totalExtrasEmp.toFixed(2)} (Extras) = $${(sueldoBase + totalExtrasEmp).toFixed(2)}\n`;
+                            }
                         });
 
-                        try {
-                            const res = await fetch('/procesar-super-nomina', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ nomina: payload })
-                            });
-                            const result = await res.json();
-                            if(result.success) { alert("¡Nómina procesada con éxito!"); window.location.href = "/dashboard"; }
-                            else { alert("Error: " + result.message); }
-                        } catch(e) { alert("Error de conexión"); }
+                        if (!hayDatos && payload.length === 0) return alert("No has ingresado ninguna actividad para procesar.");
+
+                        const confirmar = confirm(resumenTexto + "\n¿Deseas guardar estos pagos y afectar la rentabilidad de los centros?");
+                        
+                        if (confirmar) {
+                            try {
+                                const res = await fetch('/procesar-super-nomina', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ nomina: payload })
+                                });
+                                const result = await res.json();
+                                if (result.success) {
+                                    alert("¡Nómina procesada con éxito y gastos aplicados a los centros!");
+                                    window.location.href = "/dashboard";
+                                } else {
+                                    alert("Error: " + result.message);
+                                }
+                            } catch (e) {
+                                alert("Error de conexión con el servidor.");
+                            }
+                        }
                     }
                 </script>
             </body></html>`);
-    } catch (e) { res.status(500).send(e.message); } finally { if (client) client.release(); }
+    } catch (e) { 
+        console.error(e);
+        res.status(500).send("Error en el servidor: " + e.message); 
+    } finally { 
+        if (client) client.release(); 
+    }
 });
 app.post('/procesar-super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { nomina } = req.body;
