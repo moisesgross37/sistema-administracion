@@ -118,227 +118,158 @@ app.post('/descartar-cotizacion/:id', requireLogin, requireAdminOrCoord, async (
         console.error("Error al descartar cotización:", error);
         res.status(500).send('Error al procesar la solicitud.');
     }
-});
-// =======================================================
-// ============== ESTILOS Y MENÚS DE NAVEGACIÓN ==============
+});// =======================================================
+// ============== ESTILOS Y DISEÑO PROFESIONAL 2026 ==============
 // =======================================================
 
 const commonHtmlHead = `
     <meta charset="UTF-8">
-    <title>Panel de Administración</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PCOE - Panel de Control</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
     <style>
         :root {
-            --primary: #0056b3;
-            --success: #28a745;
-            --danger: #dc3545;
-            --warning: #ffc107;
-            --info: #17a2b8;
-            --dark: #2c3e50;
-            --light: #f8f9fa;
-            --gray: #6c757d;
-            --shadow: 0 4px 6px rgba(0,0,0,0.1);
+            /* Paleta de Colores Moderna */
+            --primary: #4e73df;
+            --primary-dark: #224abe;
+            --success: #1cc88a;
+            --danger: #e74a3b;
+            --warning: #f6c23e;
+            --info: #36b9cc;
+            --bg-body: #f8f9fc;
+            --text-main: #5a5c69;
+            --text-bold: #2e2f37;
+            --white: #ffffff;
+            --shadow-soft: 0 0.15rem 1.75rem 0 rgba(58, 59, 69, 0.1);
         }
 
         body { 
-            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; 
-            margin: 0; 
-            background-color: #f0f2f5; 
-            color: #333; 
-            line-height: 1.5;
+            font-family: 'Inter', system-ui, -apple-system, sans-serif; 
+            background-color: var(--bg-body); 
+            color: var(--text-main);
+            margin: 0;
+            line-height: 1.6;
         }
 
-        .container { max-width: 1200px; margin: 20px auto; padding: 20px; }
-        
-        h1, h2 { color: var(--primary); font-weight: 700; }
+        .container { max-width: 1200px; margin: 40px auto; padding: 0 20px; }
 
-        /* Navegación y Header */
+        /* Títulos */
+        h1, h2, h3 { color: var(--text-bold); font-weight: 700; letter-spacing: -0.5px; }
+
+        /* Navegación Estilo App */
         nav { 
             display: flex; 
             justify-content: space-between; 
             align-items: center; 
-            margin-bottom: 30px; 
-            background-color: #fff; 
-            padding: 15px 25px; 
-            border-radius: 12px; 
-            box-shadow: var(--shadow); 
+            padding: 1rem 2rem; 
+            background: var(--white);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            margin-bottom: 2rem;
         }
-        nav .links a { margin-right: 25px; text-decoration: none; font-weight: 600; color: var(--primary); transition: color 0.2s; }
-        nav .links a:hover { color: #004494; }
-        .logout-form button { background: var(--danger); color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: 600; }
-
-        /* Dashboard Cards */
-        .dashboard { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 25px; }
-        .dashboard-card { 
-            background-color: #fff; 
-            border-radius: 12px; 
-            box-shadow: var(--shadow); 
-            padding: 25px; 
+        nav .links a { 
             text-decoration: none; 
-            color: inherit; 
-            display: block; 
-            transition: transform 0.3s, box-shadow 0.3s; 
-            border-top: 5px solid var(--primary);
+            color: var(--text-main); 
+            font-weight: 500; 
+            margin-right: 20px;
+            padding: 8px 12px;
+            border-radius: 8px;
+            transition: all 0.2s;
         }
-        .dashboard-card:hover { transform: translateY(-8px); box-shadow: 0 12px 20px rgba(0,0,0,0.15); }
-        .dashboard-card h3 { margin: 0 0 12px; color: var(--primary); }
+        nav .links a:hover { background: #f1f3f9; color: var(--primary); }
 
-        /* Tablas Profesionales (Efecto de filas flotantes) */
-        table { 
-            width: 100%; 
-            border-collapse: separate; 
-            border-spacing: 0 10px; 
-            margin-top: 20px; 
+        /* Tarjetas de Dashboard (Cards) */
+        .dashboard { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1.5rem; }
+        .dashboard-card { 
+            background: var(--white); 
+            border-radius: 12px; 
+            padding: 24px; 
+            text-decoration: none; 
+            border-left: 4px solid var(--primary);
+            box-shadow: var(--shadow-soft);
+            transition: all 0.3s cubic-bezier(0.165, 0.84, 0.44, 1);
         }
+        .dashboard-card:hover { transform: translateY(-5px); box-shadow: 0 1rem 3rem rgba(0,0,0,0.1); }
+        .dashboard-card h3 { margin: 0 0 8px; font-size: 0.9rem; text-transform: uppercase; color: var(--primary); }
+        .dashboard-card p { margin: 0; font-size: 1.1rem; font-weight: 700; color: var(--text-bold); }
+
+        /* Tablas Modernas (Efecto Flotante) */
+        table { width: 100%; border-collapse: separate; border-spacing: 0 12px; margin-top: 10px; }
         th { 
-            background-color: transparent; 
-            color: var(--gray); 
-            padding: 15px; 
+            padding: 0 15px; 
             text-align: left; 
-            text-transform: uppercase; 
             font-size: 0.75rem; 
-            letter-spacing: 1px;
-            border: none;
+            text-transform: uppercase; 
+            font-weight: 700; 
+            color: #b7b9cc; 
         }
         td { 
-            background-color: white; 
-            padding: 18px 15px; 
-            border-top: 1px solid #edf2f7; 
-            border-bottom: 1px solid #edf2f7;
-            vertical-align: middle;
-        }
-        td:first-child { border-left: 1px solid #edf2f7; border-radius: 10px 0 0 10px; }
-        td:last-child { border-right: 1px solid #edf2f7; border-radius: 0 10px 10px 0; }
-        
-        tr:hover td { background-color: #fdfdfd; transform: scale(1.002); transition: 0.2s; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }
-
-        /* Botones y Badges */
-        .btn { 
-            padding: 10px 20px; 
-            border-radius: 8px; 
-            cursor: pointer; 
-            font-weight: 600; 
-            text-decoration: none; 
-            display: inline-flex; 
-            align-items: center; 
-            transition: all 0.2s;
+            background: var(--white); 
+            padding: 1.25rem 1rem; 
             border: none;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+        }
+        td:first-child { border-radius: 12px 0 0 12px; border-left: 1px solid #e3e6f0; }
+        td:last-child { border-radius: 0 12px 12px 0; border-right: 1px solid #e3e6f0; }
+        tr:hover td { background-color: #fcfdfe; transform: scale(1.005); transition: 0.2s ease-in-out; }
+
+        /* Formularios Estilizados */
+        .form-container { 
+            background: var(--white); 
+            padding: 30px; 
+            border-radius: 15px; 
+            box-shadow: var(--shadow-soft);
+            border: 1px solid #e3e6f0;
+        }
+        .form-group label { display: block; margin-bottom: 8px; font-size: 0.85rem; font-weight: 700; color: var(--text-bold); }
+        input[type="text"], input[type="number"], input[type="date"], select, textarea {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #d1d3e2;
+            border-radius: 8px;
+            background-color: #fdfdfd;
+            transition: border-color 0.15s ease-in-out;
+        }
+        input:focus { border-color: var(--primary); outline: none; background: white; }
+
+        /* Botones Profesionales con Degradado */
+        .btn { 
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 10px 20px; 
+            font-weight: 600; 
+            border-radius: 8px; 
+            border: none;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-decoration: none;
             font-size: 14px;
         }
-        .btn-activar { background-color: var(--success); color: white; box-shadow: 0 2px 4px rgba(40, 167, 69, 0.3); }
-        .btn-activar:hover { background-color: #218838; transform: translateY(-1px); }
+        .btn:active { transform: scale(0.98); }
+
+        .btn-activar { background: linear-gradient(180deg, var(--success) 10%, #169b6b 100%); color: white; }
+        .btn-activar:hover { opacity: 0.9; }
         
-        /* Nuevo botón para Descartar/Ocultar */
-        .btn-discard { background-color: #f1f3f5; color: var(--gray); margin-left: 8px; }
-        .btn-discard:hover { background-color: #e9ecef; color: var(--danger); }
+        .btn-danger { background: var(--danger); color: white; }
+        .btn-info { background: var(--info); color: white; }
 
-        /* Badges para Asesores */
-        .advisor-badge {
-            background-color: #e7f1ff;
-            color: var(--primary);
-            padding: 5px 12px;
-            border-radius: 20px;
-            font-size: 0.85rem;
-            font-weight: 600;
-            display: inline-block;
+        /* Badges y Resúmenes */
+        .summary-box { 
+            background: var(--white); 
+            padding: 2rem; 
+            border-radius: 15px; 
+            text-align: center;
+            box-shadow: var(--shadow-soft);
+            border-top: 4px solid var(--primary);
         }
-
-        /* Formularios y otros */
-        .form-container { background: white; padding: 25px; border-radius: 12px; box-shadow: var(--shadow); margin-top: 20px; }
-        .form-group label { display: block; margin-bottom: 8px; font-weight: 600; color: var(--dark); }
-        textarea { border: 1px solid #e0e0e0; border-radius: 8px; padding: 12px; transition: border-color 0.2s; }
-        textarea:focus { border-color: var(--primary); outline: none; }
-
-        .summary-box { background-color: white; padding: 25px; border-radius: 12px; box-shadow: var(--shadow); border-bottom: 4px solid var(--primary); }
-        .summary-box .amount { font-size: 28px; letter-spacing: -1px; }
+        .amount { font-size: 2rem; font-weight: 700; color: var(--text-bold); }
+        .amount.green { color: var(--success); }
+        .amount.red { color: var(--danger); }
         
-        .back-link { 
-            text-decoration: none; 
-            color: var(--gray); 
-            font-weight: 600; 
-            display: inline-flex; 
-            align-items: center; 
-            margin-bottom: 20px; 
-            transition: color 0.2s;
-        }
-        .back-link:hover { color: var(--primary); }
+        .back-link { color: var(--primary); font-weight: 600; text-decoration: none; margin-bottom: 20px; display: inline-block; }
+        .back-link:hover { text-decoration: underline; }
     </style>
-    <style>
-    :root {
-        --primary: #0061f2;
-        --success: #00ac69;
-        --danger: #e81500;
-        --bg-light: #f2f5f9;
-        --card-shadow: 0 0.15rem 1.75rem 0 rgba(33, 40, 50, 0.15);
-    }
-
-    body {
-        font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        background-color: var(--bg-light);
-        color: #2c3e50;
-    }
-
-    /* Transformación de las Tarjetas (Cards) */
-    .container, .form-container, .summary-box {
-        background: white !important;
-        border: none !important;
-        border-radius: 15px !important;
-        box-shadow: var(--card-shadow) !important;
-        padding: 30px !important;
-        margin-bottom: 25px;
-    }
-
-    /* Modernización de Tablas */
-    table {
-        border-collapse: separate;
-        border-spacing: 0 10px;
-        width: 100%;
-    }
-
-    tr {
-        background: white;
-        transition: transform 0.2s;
-    }
-
-    tr:hover {
-        transform: scale(1.01);
-        box-shadow: 0 5px 15px rgba(0,0,0,0.05);
-    }
-
-    th {
-        text-transform: uppercase;
-        font-size: 11px;
-        letter-spacing: 1px;
-        color: #a0aec0;
-        border: none !important;
-        padding: 15px !important;
-    }
-
-    td {
-        padding: 15px !important;
-        border: none !important;
-        border-top: 1px solid #f1f4f8 !important;
-    }
-
-    /* Botones Modernos */
-    .btn {
-        border-radius: 10px !important;
-        padding: 12px 25px !important;
-        font-weight: 600 !important;
-        letter-spacing: 0.5px;
-        transition: all 0.3s ease !important;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        border: none !important;
-        text-transform: none !important;
-    }
-
-    .btn:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 7px 14px rgba(0,0,0,0.15);
-    }
-
-    .btn-activar { background: linear-gradient(135deg, #00ac69 0%, #008a54 100%) !important; }
-    .btn-procesar { background: linear-gradient(135deg, #0061f2 0%, #0045ab 100%) !important; }
-</style>
 `;
 const dashboardHeader = (user) => `
     <header class="dashboard-header">
