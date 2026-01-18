@@ -3734,34 +3734,37 @@ app.post('/procesar-super-nomina', requireLogin, requireAdminOrCoord, async (req
     let client;
     try {
         client = await pool.connect();
-        await client.query('BEGIN'); // Iniciamos una transacción para seguridad
+        await client.query('BEGIN'); // Iniciamos transacción de seguridad
 
         for (const entry of nomina) {
-            // 1. Guardar cada extra vinculado a su proyecto
+            // Procesamos los extras vinculados a centros
             for (const extra of entry.extras) {
-                if (extra.quote_id && parseFloat(extra.amount) > 0) {
+                const montoExtra = parseFloat(extra.amount);
+                
+                if (extra.quote_id && montoExtra > 0) {
+                    // 1. Guardar el detalle para el recibo futuro
                     await client.query(
                         `INSERT INTO payroll_extras (employee_id, quote_id, amount, description) 
                          VALUES ($1, $2, $3, $4)`,
-                        [entry.employee_id, extra.quote_id, extra.amount, extra.desc]
+                        [entry.employee_id, extra.quote_id, montoExtra, extra.desc]
                     );
                     
-                    // 2. Automáticamente crear un GASTO en el proyecto para afectar rentabilidad
+                    // 2. Crear gasto automático en el proyecto (Rentabilidad)
+                    // Usamos una descripción clara para que sepas de dónde viene el gasto
                     await client.query(
-                        `INSERT INTO expenses (quote_id, amount, description, expense_date, supplier_id) 
-                         VALUES ($1, $2, $3, CURRENT_DATE, (SELECT id FROM suppliers LIMIT 1))`,
-                        [extra.quote_id, extra.amount, `Pago Nómina: ${extra.desc}`]
+                        `INSERT INTO expenses (quote_id, amount, description, expense_date, supplier_id, type) 
+                         VALUES ($1, $2, $3, CURRENT_DATE, (SELECT id FROM suppliers LIMIT 1), 'Nómina Interna')`,
+                        [extra.quote_id, montoExtra, `Nómina: ${extra.desc}`]
                     );
                 }
             }
-            // Aquí podrías añadir el insert a tu tabla de historial de nómina general si la tienes
         }
 
-        await client.query('COMMIT');
+        await client.query('COMMIT'); // Guardado permanente
         res.json({ success: true });
     } catch (e) {
-        if (client) await client.query('ROLLBACK');
-        console.error(e);
+        if (client) await client.query('ROLLBACK'); // Cancelar todo en caso de error
+        console.error("Error al procesar nómina:", e.message);
         res.status(500).json({ success: false, message: e.message });
     } finally {
         if (client) client.release();
