@@ -1388,23 +1388,41 @@ app.post('/caja-chica/nuevo-gasto', requireLogin, requireAdminOrCoord, async (re
 
 // --- RUTA PARA CERRAR EL CICLO ---
 app.post('/caja-chica/cerrar-ciclo', requireLogin, requireAdminOrCoord, async (req, res) => {
-    const { cycleId, total_gastado, balance_final } = req.body;
+    const { cycleId } = req.body;
+    let client;
     try {
-        const client = await pool.connect();
+        client = await pool.connect();
+        await client.query('BEGIN');
+
+        // 1. Calculamos el total real de los gastos vinculados a este ciclo
+        const totalsRes = await client.query(
+            "SELECT SUM(amount) as total FROM expenses WHERE caja_chica_ciclo_id = $1", 
+            [cycleId]
+        );
+        const totalGastado = parseFloat(totalsRes.rows[0].total || 0);
+
+        // 2. Obtenemos el fondo inicial para calcular el balance final
+        const cycleRes = await client.query("SELECT fondo_inicial FROM caja_chica_ciclos WHERE id = $1", [cycleId]);
+        const fondoInicial = parseFloat(cycleRes.rows[0].fondo_inicial);
+        const balanceFinal = fondoInicial - totalGastado;
+
+        // 3. Cerramos el ciclo con los datos calculados por el servidor
         await client.query(
             `UPDATE caja_chica_ciclos 
              SET fecha_cierre = NOW(), estado = 'cerrado', total_gastado = $1, balance_final = $2 
              WHERE id = $3`,
-            [total_gastado, balance_final, cycleId]
+            [totalGastado, balanceFinal, cycleId]
         );
-        client.release();
+
+        await client.query('COMMIT');
         res.redirect('/caja-chica');
     } catch (error) {
-        console.error("Error al cerrar el ciclo de caja chica:", error);
-        res.status(500).send('<h1>Error al cerrar el ciclo ❌</h1>');
+        if (client) await client.query('ROLLBACK');
+        res.status(500).send('Error al cerrar el ciclo con seguridad.');
+    } finally {
+        if (client) client.release();
     }
 });
-
 // --- RUTA PARA GENERAR EL REPORTE PDF DEL CIERRE ---
 app.get('/caja-chica/reporte/:cycleId/pdf', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { cycleId } = req.params;
