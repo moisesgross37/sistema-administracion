@@ -3711,7 +3711,7 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
     try {
         client = await pool.connect();
         
-        // 1. Buscamos empleados y sus balances de préstamos activos
+        // 1. Buscamos TODOS los empleados que participan en nómina, sin importar su sueldo
         const employeesRes = await client.query(`
             SELECT e.*, 
                    COALESCE(l.balance, 0) as balance_prestamo,
@@ -3723,10 +3723,11 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
                 FROM loans
                 WHERE status = 'activo'
             ) l ON e.id = l.employee_id
+            WHERE e.participa_en_nomina = true OR e.participa_nomina = true
             ORDER BY e.id ASC
         `);
 
-        const employees = employeesRes.rows.filter(e => e.participa_en_nomina === true || e.participa_nomina === true);
+        const employees = employeesRes.rows;
         const quotesRes = await client.query("SELECT id, clientname FROM quotes WHERE status = 'activa' ORDER BY clientname ASC");
         const activeProjects = quotesRes.rows;
         const projectOptions = activeProjects.map(p => `<option value="${p.id}">${p.clientname}</option>`).join('');
@@ -3735,18 +3736,25 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
             const nameKey = Object.keys(emp).find(k => k.toLowerCase().includes('nom') || k.toLowerCase().includes('name'));
             const salaryKey = Object.keys(emp).find(k => k.toLowerCase().includes('sal') || k.toLowerCase().includes('suel'));
             const nombreEmpleado = emp[nameKey] || "No identificado";
-            const sueldoQuincenal = (parseFloat(emp[salaryKey] || 0) / 2).toFixed(2);
+            
+            // Si el sueldo es 0 o nulo, mostramos 0.00 de forma amigable
+            const sueldoOriginal = parseFloat(emp[salaryKey] || 0);
+            const sueldoQuincenal = (sueldoOriginal / 2).toFixed(2);
             const balancePrestamo = parseFloat(emp.balance_prestamo || 0);
 
             return `
             <tr class="employee-row" data-employee-id="${emp.id}" data-salary="${sueldoQuincenal}" data-loan-id="${emp.loan_id || ''}">
                 <td style="font-weight:bold; padding: 15px;">${nombreEmpleado}</td>
-                <td style="color: #28a745; font-weight: bold;">RD$ ${sueldoQuincenal}</td>
+                <td style="padding: 15px;">
+                    ${sueldoOriginal > 0 ? 
+                        `<span style="color: #28a745; font-weight: bold;">RD$ ${sueldoQuincenal}</span>` : 
+                        `<span style="color: #6c757d; font-style: italic;">Sin sueldo fijo (RD$ 0.00)</span>`}
+                </td>
                 <td style="background: #fff5f5; border-radius: 8px; padding: 10px;">
                     ${balancePrestamo > 0 ? `
-                        <div style="color: #dc3545; font-size: 12px; font-weight: bold;">Debe: RD$ ${balancePrestamo.toFixed(2)}</div>
+                        <div style="color: #dc3545; font-size: 11px; font-weight: bold;">Balance: RD$ ${balancePrestamo.toFixed(2)}</div>
                         <input type="number" class="loan-deduction" placeholder="Descuento" step="0.01" style="width: 100px; margin-top: 5px; padding: 5px; border: 1px solid #dc3545; border-radius: 4px;">
-                    ` : '<span style="color:gray; font-size: 12px;">Sin deuda</span>'}
+                    ` : '<span style="color:gray; font-size: 11px;">Sin deuda</span>'}
                 </td>
                 <td class="extras-container" id="extras-container-${emp.id}" style="padding: 10px;">
                     <div class="no-extras-msg" style="color:gray; font-size:12px; font-style: italic;">Sin actividades adicionales</div>
@@ -3776,7 +3784,7 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
                         <thead>
                             <tr>
                                 <th>Colaborador</th>
-                                <th>Sueldo (1/2)</th>
+                                <th>Sueldo Fijo (1/2)</th>
                                 <th>Préstamo Activo</th>
                                 <th>Detalle Actividades (Fecha - Centro - Descripción - Monto)</th>
                                 <th>Acción</th>
@@ -3834,7 +3842,7 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
                                 }
                             });
 
-                            if(sueldo > 0 || totalExtras > 0) {
+                            if(sueldo > 0 || totalExtras > 0 || deduccion > 0) {
                                 payload.push({ 
                                     employee_id: empId, 
                                     salary: sueldo, 
@@ -3846,15 +3854,21 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
                             }
                         });
 
-                        if(confirm(resumen + "\\n¿Confirmas el procesamiento?")) {
+                        if(payload.length === 0) return alert("No hay datos para procesar.");
+
+                        if(confirm(resumen + "\\n¿Confirmas el procesamiento de estos pagos?")) {
                             const res = await fetch('/procesar-super-nomina', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ nomina: payload })
                             });
                             const result = await res.json();
-                            if(result.success) { alert("¡Nómina procesada!"); window.location.href = "/historial-nomina"; }
-                            else { alert("Error: " + result.message); }
+                            if(result.success) { 
+                                alert("¡Nómina procesada con éxito!"); 
+                                window.location.href = "/historial-nomina"; 
+                            } else { 
+                                alert("Error: " + result.message); 
+                            }
                         }
                     }
                 </script>
