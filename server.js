@@ -3660,9 +3660,32 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
             <head>
                 ${commonHtmlHead.replace('<title>Panel de Administración</title>', '<title>Super Nómina</title>')}
                 <style>
-                    .extra-row { display: grid; grid-template-columns: 1.5fr 1.5fr 1fr 40px; gap: 8px; margin-bottom: 8px; background: #fdfdfd; padding: 8px; border-radius: 8px; border: 1px solid #eaeaea; }
-                    .extra-row select, .extra-row input { padding: 6px; font-size: 12px; border: 1px solid #ddd; border-radius: 5px; }
-                    .btn-delete { color: #ff4d4d; cursor: pointer; font-size: 20px; text-align: center; }
+                    .extra-row { 
+                        display: grid; 
+                        grid-template-columns: 140px 1.8fr 1.8fr 110px 30px; 
+                        gap: 10px; 
+                        margin-bottom: 8px; 
+                        background: #fdfdfd; 
+                        padding: 10px; 
+                        border-radius: 8px; 
+                        border: 1px solid #eaeaea; 
+                        align-items: center;
+                        box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+                    }
+                    .extra-row input, .extra-row select { 
+                        padding: 8px; 
+                        font-size: 13px; 
+                        border: 1px solid #ddd; 
+                        border-radius: 5px; 
+                        width: 100%;
+                    }
+                    .btn-delete { 
+                        color: #ff4d4d; 
+                        cursor: pointer; 
+                        font-size: 22px; 
+                        font-weight: bold;
+                        text-align: center;
+                    }
                 </style>
             </head>
             <body>
@@ -3671,7 +3694,12 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
                     <h1>Super Nómina Quincenal</h1>
                     <table id="nomina-table">
                         <thead>
-                            <tr><th>Colaborador</th><th>Sueldo Base (1/2)</th><th>Detalle Actividades (Centro - Descripción - Monto)</th><th>Acción</th></tr>
+                            <tr>
+                                <th>Colaborador</th>
+                                <th>Sueldo Base (1/2)</th>
+                                <th style="width: 60%;">Detalle Actividades (Fecha - Centro - Descripción - Monto)</th>
+                                <th>Acción</th>
+                            </tr>
                         </thead>
                         <tbody>${employeesRows}</tbody>
                     </table>
@@ -3683,22 +3711,23 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
                 </div>
                 <script>
                     const projectOptionsHtml = '${projectOptions}';
-                    // Busca esta función dentro del script al final del app.get('/super-nomina')
-function addExtraRow(empId) {
-    const container = document.getElementById('extras-container-' + empId);
-    const noExtrasMsg = container.querySelector('.no-extras-msg');
-    if (noExtrasMsg) noExtrasMsg.remove();
 
-    const div = document.createElement('div');
-    div.className = 'extra-row';
-    // Se añade el input de tipo DATE al inicio de la fila
-    div.innerHTML = '<input type="date" class="extra-date" style="width:120px;">' +
-        '<select class="extra-project"><option value="">-- Centro --</option>' + projectOptionsHtml + '</select>' +
-        '<input type="text" class="extra-desc" placeholder="¿Qué hizo? (Asistencia, Montaje...)">' +
-        '<input type="number" class="extra-amount" value="0" step="0.01">' +
-        '<div class="btn-delete" onclick="this.parentElement.remove()">×</div>';
-    container.appendChild(div);
-}
+                    function addExtraRow(empId) {
+                        const container = document.getElementById('extras-container-' + empId);
+                        const noExtrasMsg = container.querySelector('.no-extras-msg');
+                        if (noExtrasMsg) noExtrasMsg.remove();
+
+                        const div = document.createElement('div');
+                        div.className = 'extra-row';
+                        div.innerHTML = '<input type="date" class="extra-date">' +
+                            '<select class="extra-project"><option value="">-- Centro --</option>' + projectOptionsHtml + '</select>' +
+                            '<input type="text" class="extra-desc" placeholder="¿Qué hizo?">' +
+                            '<input type="number" class="extra-amount" placeholder="0.00" step="0.01">' +
+                            '<div class="btn-delete" onclick="this.parentElement.remove()">×</div>';
+                        container.appendChild(div);
+                    }
+                    
+                    // Nota: Asegúrate de que la función procesarNomina() recoja el .extra-date
 
                     async function procesarNomina() {
                         if(!confirm("¿Deseas guardar esta nómina y afectar la rentabilidad de los centros?")) return;
