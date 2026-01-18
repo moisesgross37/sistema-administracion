@@ -3795,7 +3795,6 @@ app.post('/procesar-super-nomina', requireLogin, requireAdminOrCoord, async (req
         client = await pool.connect();
         await client.query('BEGIN');
 
-        // Generamos un ID único para esta quincena basado en la fecha y hora
         const batchPayrollId = Date.now(); 
 
         for (const entry of nomina) {
@@ -3803,27 +3802,40 @@ app.post('/procesar-super-nomina', requireLogin, requireAdminOrCoord, async (req
                 const montoExtra = parseFloat(extra.amount);
                 const fechaActividad = extra.date || new Date().toISOString().split('T')[0];
                 
-                if (extra.quote_id && montoExtra > 0) {
+                if (montoExtra > 0) {
+                    // 1. Guardar siempre en el historial de nómina del empleado
                     await client.query(
                         `INSERT INTO payroll_extras (employee_id, quote_id, amount, description, payment_date, payroll_id) 
                          VALUES ($1, $2, $3, $4, $5, $6)`,
-                        [entry.employee_id, extra.quote_id, montoExtra, extra.desc, fechaActividad, batchPayrollId]
+                        [entry.employee_id, extra.quote_id || null, montoExtra, extra.desc, fechaActividad, batchPayrollId]
                     );
                     
-                    await client.query(
-                        `INSERT INTO expenses (quote_id, amount, description, expense_date, supplier_id, type) 
-                         VALUES ($1, $2, $3, $4, (SELECT id FROM suppliers LIMIT 1), 'Nómina Interna')`,
-                        [extra.quote_id, montoExtra, `Nómina (${fechaActividad}): ${extra.desc}`, fechaActividad]
-                    );
+                    // 2. Lógica Contable Inteligente
+                    if (extra.quote_id) {
+                        // SI TIENE CENTRO: Afecta rentabilidad del proyecto
+                        await client.query(
+                            `INSERT INTO expenses (quote_id, amount, description, expense_date, supplier_id, type) 
+                             VALUES ($1, $2, $3, $4, (SELECT id FROM suppliers LIMIT 1), 'Nómina Interna')`,
+                            [extra.quote_id, montoExtra, `Nómina (${fechaActividad}): ${extra.desc}`, fechaActividad]
+                        );
+                    } else {
+                        // SI NO TIENE CENTRO: Se registra como Gasto Administrativo General
+                        // Nota: Aquí se asocia a un quote_id NULL o 0 para que aparezca en tus reportes de gastos de oficina
+                        await client.query(
+                            `INSERT INTO expenses (quote_id, amount, description, expense_date, supplier_id, type) 
+                             VALUES (NULL, $1, $2, $3, (SELECT id FROM suppliers LIMIT 1), 'Gasto Administrativo')`,
+                            [montoExtra, `Pago Administrativo: ${extra.desc}`, fechaActividad]
+                        );
+                    }
                 }
             }
         }
 
         await client.query('COMMIT');
-        // Devolvemos el ID para poder ir directo a ver los recibos
         res.json({ success: true, payroll_id: batchPayrollId });
     } catch (e) {
         if (client) await client.query('ROLLBACK');
+        console.error("Error contable:", e.message);
         res.status(500).json({ success: false, message: e.message });
     } finally {
         if (client) client.release();
