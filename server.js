@@ -1269,12 +1269,9 @@ app.get('/caja-chica', requireLogin, requireAdminOrCoord, async (req, res) => {
     let client;
     try {
         client = await pool.connect();
-        
-        // Buscamos si hay un ciclo abierto
         const activeCycleResult = await client.query("SELECT * FROM caja_chica_ciclos WHERE estado = 'abierto' LIMIT 1");
         const cycle = activeCycleResult.rows[0];
 
-        // Consultamos el historial de cierres (Siempre visible abajo)
         const historyRes = await client.query("SELECT * FROM caja_chica_ciclos WHERE estado = 'cerrado' ORDER BY fecha_cierre DESC LIMIT 5");
         const historyHtml = historyRes.rows.map(c => `
             <tr>
@@ -1286,11 +1283,10 @@ app.get('/caja-chica', requireLogin, requireAdminOrCoord, async (req, res) => {
         let content = "";
 
         if (!cycle) {
-            // PANTALLA SI LA CAJA ESTÁ CERRADA
             content = `
                 <div class="card" style="max-width: 500px; margin: 0 auto; text-align: center; padding: 40px;">
                     <h2 style="color: var(--primary);">Caja Chica Cerrada</h2>
-                    <p style="margin-bottom: 25px;">Ingresa el fondo inicial para abrir un nuevo ciclo y empezar a registrar gastos.</p>
+                    <p style="margin-bottom: 25px;">Ingresa el fondo inicial para abrir un nuevo ciclo.</p>
                     <form action="/caja-chica/abrir-ciclo" method="POST">
                         <div class="form-group">
                             <label>Monto del Fondo Inicial (RD$):</label>
@@ -1300,7 +1296,6 @@ app.get('/caja-chica', requireLogin, requireAdminOrCoord, async (req, res) => {
                     </form>
                 </div>`;
         } else {
-            // PANTALLA SI LA CAJA ESTÁ ABIERTA
             const [supps, expsData] = await Promise.all([
                 client.query("SELECT id, name FROM suppliers ORDER BY name ASC"),
                 client.query("SELECT e.*, s.name as supplier_name FROM expenses e JOIN suppliers s ON e.supplier_id = s.id WHERE e.caja_chica_ciclo_id = $1 ORDER BY e.id DESC", [cycle.id])
@@ -1318,13 +1313,10 @@ app.get('/caja-chica', requireLogin, requireAdminOrCoord, async (req, res) => {
                 </div>
 
                 <div style="text-align: center; margin-bottom: 30px; background: #fff; padding: 25px; border-radius: 15px; border: 1px dashed var(--danger);">
-                    <form action="/caja-chica/cerrar-ciclo" method="POST" onsubmit="return confirm('¿Deseas cerrar el ciclo ahora? El balance restante se guardará y el gasto total irá a contabilidad.')">
+                    <form action="/caja-chica/cerrar-ciclo" method="POST" onsubmit="return confirm('¿Cerrar ciclo ahora?')">
                         <input type="hidden" name="cycleId" value="${cycle.id}">
-                        <button type="submit" class="btn" style="background: var(--danger); color: white; padding: 15px 50px; border-radius: 50px; font-weight: bold; font-size: 1.1rem; cursor: pointer;">
-                            🔒 Cerrar Ciclo y Solicitar Reposición
-                        </button>
+                        <button type="submit" class="btn" style="background: var(--danger); color: white; padding: 15px 50px; border-radius: 50px; font-weight: bold;">🔒 Cerrar Ciclo y Reponer</button>
                     </form>
-                    <p style="font-size: 12px; color: gray; margin-top: 10px;">Puedes cerrar el ciclo en cualquier momento para reponer el fondo.</p>
                 </div>
 
                 <div style="display: grid; grid-template-columns: 350px 1fr; gap: 30px;">
@@ -1335,61 +1327,65 @@ app.get('/caja-chica', requireLogin, requireAdminOrCoord, async (req, res) => {
                             <div class="form-group"><label>Fecha:</label><input type="date" name="expense_date" value="${new Date().toISOString().split('T')[0]}" required></div>
                             <div class="form-group"><label>Suplidor:</label><select name="supplier_id" required><option value="">Seleccione...</option>${supps.rows.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')}</select></div>
                             <div class="form-group"><label>Monto (RD$):</label><input type="number" id="monto-gasto" name="amount" step="0.01" required></div>
-                            <div class="form-group"><label>Concepto:</label><textarea name="description" rows="2" required placeholder="¿Qué se compró?"></textarea></div>
-                            <button type="submit" class="btn btn-activar" style="width: 100%; margin-top: 10px;">💾 Guardar Gasto</button>
+                            <div class="form-group"><label>Concepto:</label><textarea name="description" rows="2" required></textarea></div>
+                            <button type="submit" class="btn btn-activar" style="width: 100%;">💾 Guardar Gasto</button>
                         </form>
                     </div>
 
                     <div class="card">
-                        <h3 style="margin-top:0;">Gastos Registrados</h3>
                         <table class="modern-table">
-                            <thead><tr><th>Detalle</th><th style="text-align:right;">Monto</th><th>Imprimir</th></tr></thead>
+                            <thead><tr><th>Detalle</th><th style="text-align:right;">Monto</th><th>Vale</th></tr></thead>
                             <tbody>
                                 ${currentExpenses.map(e => `
                                     <tr>
                                         <td><b>${e.supplier_name}</b><br><small style="color:gray;">${e.description}</small></td>
                                         <td style="text-align:right; font-weight:bold;">RD$ ${parseFloat(e.amount).toFixed(2)}</td>
                                         <td><button onclick="printTicket('${e.supplier_name}', '${e.description}', '${parseFloat(e.amount).toFixed(2)}')" class="btn btn-info" style="padding:4px 10px; font-size:11px;">📄 Vale</button></td>
-                                    </tr>`).join('') || '<tr><td colspan="3" style="text-align:center; padding:20px; color:gray;">No hay gastos en este ciclo.</td></tr>'}
+                                    </tr>`).join('')}
                             </tbody>
                         </table>
                     </div>
                 </div>
 
                 <script>
-                    // Validación de saldo antes de guardar
                     const saldoDisp = ${balanceActual};
+                    const inputM = document.getElementById('monto-gasto');
+                    
+                    // MEJORA: Cambio de color en tiempo real
+                    inputM.addEventListener('input', function() {
+                        if (parseFloat(this.value) > saldoDisp) {
+                            this.style.border = '2px solid red';
+                            this.style.backgroundColor = '#fff0f0';
+                        } else {
+                            this.style.border = '1px solid #ddd';
+                            this.style.backgroundColor = '#fff';
+                        }
+                    });
+
                     document.getElementById('form-gasto').onsubmit = function(e) {
-                        const m = parseFloat(document.getElementById('monto-gasto').value);
-                        if(m > saldoDisp) {
-                            alert('⚠️ Error: No puedes gastar más de lo que queda en balance (RD$ ' + saldoDisp.toFixed(2) + ')');
+                        if(parseFloat(inputM.value) > saldoDisp) {
+                            alert('🛑 Error: Saldo insuficiente (RD$ ' + saldoDisp.toFixed(2) + ')');
                             e.preventDefault();
                         }
                     };
 
-                    // Función para imprimir vale individual
                     function printTicket(sup, des, amt) {
-    const w = window.open('', '', 'width=600,height=450');
-    w.document.write('<html><body style="font-family:sans-serif; padding:30px; border: 2px solid #000;">');
-    w.document.write('<div style="text-align:center;"><h2>PCOE - VALE DE CAJA CHICA</h2><p>Comprobante de Egreso</p></div><hr>');
-    w.document.write('<div style="margin: 20px 0; font-size: 18px;">');
-    w.document.write('<p><b>Fecha:</b> ' + new Date().toLocaleDateString() + '</p>');
-    w.document.write('<p><b>Pagado a:</b> ' + sup + '</p>');
-    w.document.write('<p><b>Monto:</b> <span style="font-size:24px;">RD$ ' + amt + '</span></p>');
-    w.document.write('<p><b>Concepto:</b> ' + des + '</p></div>');
-    w.document.write('<div style="margin-top:100px; display:flex; justify-content:space-between;">');
-    w.document.write('<div style="text-align:center; width:200px; border-top:1px solid #000; padding-top:10px;">Entregado por (Secretaría)</div>');
-    w.document.write('<div style="text-align:center; width:200px; border-top:1px solid #000; padding-top:10px;">Recibido por (Suplidor)</div>');
-    w.document.write('</div>');
-    w.document.write('<p style="margin-top:40px; font-size:10px; text-align:center; color:gray;">Documento interno para reposición de fondos</p>');
-    w.document.write('</body></html>');
-    w.document.close();
-    w.print();
-    w.close();
-}
+                        const w = window.open('', '', 'width=600,height=450');
+                        w.document.write('<html><body style="font-family:sans-serif; padding:30px; border: 2px solid #000;">');
+                        w.document.write('<div style="text-align:center;"><h2>PCOE - VALE DE CAJA CHICA</h2><p>Comprobante de Egreso</p></div><hr>');
+                        w.document.write('<p><b>Fecha:</b> ' + new Date().toLocaleDateString() + '</p>');
+                        w.document.write('<p><b>Pagado a:</b> ' + sup + '</p>');
+                        w.document.write('<p><b>Monto:</b> <span style="font-size:24px;">RD$ ' + amt + '</span></p>');
+                        w.document.write('<p><b>Concepto:</b> ' + des + '</p>');
+                        w.document.write('<div style="margin-top:80px; display:flex; justify-content:space-between;">');
+                        w.document.write('<div style="border-top:1px solid #000; width:180px; text-align:center; padding-top:10px;">Entregado por</div>');
+                        w.document.write('<div style="border-top:1px solid #000; width:180px; text-align:center; padding-top:10px;">Recibido por</div>');
+                        w.document.write('</div></body></html>');
+                        w.document.close();
+                        w.print();
+                        w.close();
                     }
-                </script>
-            `;
+                </script>`;
         }
 
         res.send(`
@@ -1404,7 +1400,7 @@ app.get('/caja-chica', requireLogin, requireAdminOrCoord, async (req, res) => {
                     </div>
                 </div>
             </body></html>`);
-    } catch (e) { res.status(500).send("Error de servidor: " + e.message); } finally { if (client) client.release(); }
+    } catch (e) { res.status(500).send(e.message); } finally { if (client) client.release(); }
 });
 app.post('/caja-chica/abrir-ciclo', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { fondo_inicial } = req.body;
@@ -1427,57 +1423,45 @@ app.post('/caja-chica/abrir-ciclo', requireLogin, requireAdminOrCoord, async (re
 
 app.post('/caja-chica/nuevo-gasto', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { cycleId, expense_date, supplier_id, amount, description } = req.body;
-    if (!cycleId || !expense_date || !supplier_id || !amount || !description) {
-        return res.status(400).send("Todos los campos son obligatorios.");
-    }
-    try {
-        const client = await pool.connect();
-        await client.query(
-            `INSERT INTO expenses (expense_date, supplier_id, amount, description, type, caja_chica_ciclo_id) 
-             VALUES ($1, $2, $3, $4, 'Sin Valor Fiscal', $5)`,
-            [expense_date, supplier_id, amount, description, cycleId]
-        );
-        client.release();
-        res.redirect('/caja-chica');
-    } catch (error) {
-        console.error("Error al registrar gasto de caja chica:", error);
-        res.status(500).send('<h1>Error al registrar el gasto ❌</h1>');
-    }
-});
-
-// --- RUTA PARA CERRAR EL CICLO ---
-app.post('/caja-chica/cerrar-ciclo', requireLogin, requireAdminOrCoord, async (req, res) => {
-    const { cycleId } = req.body;
     let client;
     try {
         client = await pool.connect();
         await client.query('BEGIN');
 
-        // 1. Calculamos el total real de los gastos vinculados a este ciclo
-        const totalsRes = await client.query(
-            "SELECT SUM(amount) as total FROM expenses WHERE caja_chica_ciclo_id = $1", 
-            [cycleId]
-        );
-        const totalGastado = parseFloat(totalsRes.rows[0].total || 0);
-
-        // 2. Obtenemos el fondo inicial para calcular el balance final
+        // 1. Obtener el fondo inicial y los gastos actuales de este ciclo
         const cycleRes = await client.query("SELECT fondo_inicial FROM caja_chica_ciclos WHERE id = $1", [cycleId]);
+        const expensesRes = await client.query("SELECT SUM(amount) as total FROM expenses WHERE caja_chica_ciclo_id = $1", [cycleId]);
+        
         const fondoInicial = parseFloat(cycleRes.rows[0].fondo_inicial);
-        const balanceFinal = fondoInicial - totalGastado;
+        const totalGastado = parseFloat(expensesRes.rows[0].total || 0);
+        const montoNuevoGasto = parseFloat(amount);
+        
+        const balanceDisponible = fondoInicial - totalGastado;
 
-        // 3. Cerramos el ciclo con los datos calculados por el servidor
+        // 2. VALIDACIÓN CRÍTICA: ¿Hay dinero suficiente?
+        if (montoNuevoGasto > balanceDisponible) {
+            await client.query('ROLLBACK');
+            return res.send(`
+                <script>
+                    alert('⚠️ OPERACIÓN RECHAZADA: El monto (RD$ ${montoNuevoGasto.toFixed(2)}) excede el saldo disponible en caja (RD$ ${balanceDisponible.toFixed(2)}).');
+                    window.history.back();
+                </script>
+            `);
+        }
+
+        // 3. Si hay dinero, procedemos a guardar
         await client.query(
-            `UPDATE caja_chica_ciclos 
-             SET fecha_cierre = NOW(), estado = 'cerrado', total_gastado = $1, balance_final = $2 
-             WHERE id = $3`,
-            [totalGastado, balanceFinal, cycleId]
+            `INSERT INTO expenses (caja_chica_ciclo_id, expense_date, supplier_id, amount, description, type) 
+             VALUES ($1, $2, $3, $4, $5, 'Caja Chica')`,
+            [cycleId, expense_date, supplier_id, montoNuevoGasto, description]
         );
 
         await client.query('COMMIT');
         res.redirect('/caja-chica');
     } catch (error) {
         if (client) await client.query('ROLLBACK');
-        res.status(500).send('Error al cerrar el ciclo con seguridad.');
+        console.error(error);
+        res.status(500).send("Error al registrar el gasto.");
     } finally {
         if (client) client.release();
     }
