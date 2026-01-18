@@ -3673,7 +3673,22 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
     let client;
     try {
         client = await pool.connect();
-        const employeesRes = await client.query("SELECT * FROM employees ORDER BY id ASC");
+        
+        // 1. Buscamos empleados y sus balances de préstamos activos
+        const employeesRes = await client.query(`
+            SELECT e.*, 
+                   COALESCE(l.balance, 0) as balance_prestamo,
+                   l.loan_id
+            FROM employees e
+            LEFT JOIN (
+                SELECT employee_id, id as loan_id,
+                       (loan_amount - (SELECT COALESCE(SUM(amount_paid), 0) FROM loan_payments WHERE loan_id = loans.id)) as balance
+                FROM loans
+                WHERE status = 'activo'
+            ) l ON e.id = l.employee_id
+            ORDER BY e.id ASC
+        `);
+
         const employees = employeesRes.rows.filter(e => e.participa_en_nomina === true || e.participa_nomina === true);
         const quotesRes = await client.query("SELECT id, clientname FROM quotes WHERE status = 'activa' ORDER BY clientname ASC");
         const activeProjects = quotesRes.rows;
@@ -3684,11 +3699,18 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
             const salaryKey = Object.keys(emp).find(k => k.toLowerCase().includes('sal') || k.toLowerCase().includes('suel'));
             const nombreEmpleado = emp[nameKey] || "No identificado";
             const sueldoQuincenal = (parseFloat(emp[salaryKey] || 0) / 2).toFixed(2);
-            
+            const balancePrestamo = parseFloat(emp.balance_prestamo || 0);
+
             return `
-            <tr class="employee-row" data-employee-id="${emp.id}" data-salary="${sueldoQuincenal}">
+            <tr class="employee-row" data-employee-id="${emp.id}" data-salary="${sueldoQuincenal}" data-loan-id="${emp.loan_id || ''}">
                 <td style="font-weight:bold; padding: 15px;">${nombreEmpleado}</td>
-                <td style="color: #28a745; font-weight: bold;">$${sueldoQuincenal}</td>
+                <td style="color: #28a745; font-weight: bold;">RD$ ${sueldoQuincenal}</td>
+                <td style="background: #fff5f5; border-radius: 8px; padding: 10px;">
+                    ${balancePrestamo > 0 ? `
+                        <div style="color: #dc3545; font-size: 12px; font-weight: bold;">Debe: RD$ ${balancePrestamo.toFixed(2)}</div>
+                        <input type="number" class="loan-deduction" placeholder="Descuento" step="0.01" style="width: 100px; margin-top: 5px; padding: 5px; border: 1px solid #dc3545; border-radius: 4px;">
+                    ` : '<span style="color:gray; font-size: 12px;">Sin deuda</span>'}
+                </td>
                 <td class="extras-container" id="extras-container-${emp.id}" style="padding: 10px;">
                     <div class="no-extras-msg" style="color:gray; font-size:12px; font-style: italic;">Sin actividades adicionales</div>
                 </td>
@@ -3703,18 +3725,25 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
             <head>
                 ${commonHtmlHead.replace('<title>Panel de Administración</title>', '<title>Super Nómina</title>')}
                 <style>
-                    .extra-row { display: grid; grid-template-columns: 140px 1.8fr 1.8fr 110px 30px; gap: 10px; margin-bottom: 8px; background: #fdfdfd; padding: 10px; border-radius: 8px; border: 1px solid #eaeaea; align-items: center; }
-                    .extra-row input, .extra-row select { padding: 8px; font-size: 13px; border: 1px solid #ddd; border-radius: 5px; width: 100%; }
-                    .btn-delete { color: #ff4d4d; cursor: pointer; font-size: 22px; font-weight: bold; text-align: center; }
+                    .extra-row { display: grid; grid-template-columns: 140px 1.5fr 1.5fr 100px 30px; gap: 8px; margin-bottom: 8px; background: #fdfdfd; padding: 8px; border-radius: 8px; border: 1px solid #eaeaea; align-items: center; }
+                    .extra-row input, .extra-row select { padding: 6px; font-size: 12px; border: 1px solid #ddd; border-radius: 5px; }
+                    .btn-delete { color: #ff4d4d; cursor: pointer; font-size: 20px; text-align: center; }
+                    th { text-align: left; padding: 10px; background: #f8f9fa; }
                 </style>
             </head>
             <body>
-                <div class="container" style="max-width: 1200px; margin-top: 40px;">
+                <div class="container" style="max-width: 1300px; margin-top: 40px;">
                     <div style="margin-bottom: 20px;">${backToDashboardLink}</div>
                     <h1>Super Nómina Quincenal</h1>
-                    <table id="nomina-table">
+                    <table id="nomina-table" style="width: 100%; border-collapse: collapse;">
                         <thead>
-                            <tr><th>Colaborador</th><th>Sueldo Base (1/2)</th><th>Detalle Actividades (Fecha - Centro - Descripción - Monto)</th><th>Acción</th></tr>
+                            <tr>
+                                <th>Colaborador</th>
+                                <th>Sueldo (1/2)</th>
+                                <th>Préstamo Activo</th>
+                                <th>Detalle Actividades (Fecha - Centro - Descripción - Monto)</th>
+                                <th>Acción</th>
+                            </tr>
                         </thead>
                         <tbody>${employeesRows}</tbody>
                     </table>
@@ -3726,7 +3755,6 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
                 </div>
                 <script>
                     const projectOptionsHtml = '${projectOptions}';
-
                     function addExtraRow(empId) {
                         const container = document.getElementById('extras-container-' + empId);
                         const noExtrasMsg = container.querySelector('.no-extras-msg');
@@ -3734,9 +3762,9 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
                         const div = document.createElement('div');
                         div.className = 'extra-row';
                         div.innerHTML = '<input type="date" class="extra-date">' +
-                            '<select class="extra-project"><option value="">-- Centro --</option>' + projectOptionsHtml + '</select>' +
+                            '<select class="extra-project"><option value="">-- Oficina --</option>' + projectOptionsHtml + '</select>' +
                             '<input type="text" class="extra-desc" placeholder="¿Qué hizo?">' +
-                            '<input type="number" class="extra-amount" placeholder="0.00" step="0.01">' +
+                            '<input type="number" class="extra-amount" value="0" step="0.01">' +
                             '<div class="btn-delete" onclick="this.parentElement.remove()">×</div>';
                         container.appendChild(div);
                     }
@@ -3744,102 +3772,57 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
                     async function procesarNomina() {
                         const rows = document.querySelectorAll('.employee-row');
                         const payload = [];
-                        let resumenTexto = "RESUMEN DE QUINCENA:\\n\\n";
-                        let hayDatos = false;
+                        let resumen = "RESUMEN DE PAGO:\\n\\n";
 
                         rows.forEach(row => {
                             const empId = row.dataset.employeeId;
-                            const nombreEmp = row.querySelector('td').innerText;
-                            const sueldoBase = parseFloat(row.dataset.salary) || 0;
+                            const loanId = row.dataset.loanId;
+                            const nombre = row.querySelector('td').innerText;
+                            const sueldo = parseFloat(row.dataset.salary);
+                            const inputDeduccion = row.querySelector('.loan-deduction');
+                            const deduccion = inputDeduccion ? parseFloat(inputDeduccion.value) || 0 : 0;
+                            
                             const extras = [];
-                            let totalExtrasEmp = 0;
-
+                            let totalExtras = 0;
                             row.querySelectorAll('.extra-row').forEach(ex => {
-                                const fecha = ex.querySelector('.extra-date').value;
                                 const monto = parseFloat(ex.querySelector('.extra-amount').value) || 0;
-                                if (monto > 0) {
-                                    extras.push({ date: fecha, quote_id: ex.querySelector('.extra-project').value, desc: ex.querySelector('.extra-desc').value, amount: monto });
-                                    totalExtrasEmp += monto;
-                                    hayDatos = true;
+                                if(monto > 0) {
+                                    extras.push({
+                                        date: ex.querySelector('.extra-date').value,
+                                        quote_id: ex.querySelector('.extra-project').value,
+                                        desc: ex.querySelector('.extra-desc').value,
+                                        amount: monto
+                                    });
+                                    totalExtras += monto;
                                 }
                             });
 
-                            if (extras.length > 0 || sueldoBase > 0) {
-                                payload.push({ employee_id: empId, salary: sueldoBase, extras: extras });
-                                resumenTexto += "- " + nombreEmp + ": $" + sueldoBase + " (Base) + $" + totalExtrasEmp.toFixed(2) + " (Extras) = $" + (sueldoBase + totalExtrasEmp).toFixed(2) + "\\n";
+                            if(sueldo > 0 || totalExtras > 0) {
+                                payload.push({ 
+                                    employee_id: empId, 
+                                    salary: sueldo, 
+                                    loan_id: loanId, 
+                                    loan_deduction: deduccion,
+                                    extras: extras 
+                                });
+                                resumen += "- " + nombre + ": RD$ " + (sueldo + totalExtras - deduccion).toFixed(2) + "\\n";
                             }
                         });
 
-                        if (!hayDatos && payload.length === 0) return alert("No has ingresado ninguna actividad.");
-                        if (confirm(resumenTexto + "\\n¿Deseas guardar estos pagos?")) {
-                            try {
-                                const res = await fetch('/procesar-super-nomina', {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ nomina: payload })
-                                });
-                                const result = await res.json();
-                                if (result.success) { alert("¡Nómina procesada!"); window.location.href = "/dashboard"; }
-                                else { alert("Error: " + result.message); }
-                            } catch (e) { alert("Error de conexión"); }
+                        if(confirm(resumen + "\\n¿Confirmas el procesamiento?")) {
+                            const res = await fetch('/procesar-super-nomina', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ nomina: payload })
+                            });
+                            const result = await res.json();
+                            if(result.success) { alert("¡Nómina procesada!"); window.location.href = "/historial-nomina"; }
+                            else { alert("Error: " + result.message); }
                         }
                     }
                 </script>
             </body></html>`);
-    } catch (e) { res.status(500).send("Error: " + e.message); } finally { if (client) client.release(); }
-});
-app.post('/procesar-super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => {
-    const { nomina } = req.body;
-    let client;
-    try {
-        client = await pool.connect();
-        await client.query('BEGIN');
-
-        const batchPayrollId = Date.now(); 
-
-        for (const entry of nomina) {
-            for (const extra of entry.extras) {
-                const montoExtra = parseFloat(extra.amount);
-                const fechaActividad = extra.date || new Date().toISOString().split('T')[0];
-                
-                if (montoExtra > 0) {
-                    // 1. Guardar siempre en el historial de nómina del empleado
-                    await client.query(
-                        `INSERT INTO payroll_extras (employee_id, quote_id, amount, description, payment_date, payroll_id) 
-                         VALUES ($1, $2, $3, $4, $5, $6)`,
-                        [entry.employee_id, extra.quote_id || null, montoExtra, extra.desc, fechaActividad, batchPayrollId]
-                    );
-                    
-                    // 2. Lógica Contable Inteligente
-                    if (extra.quote_id) {
-                        // SI TIENE CENTRO: Afecta rentabilidad del proyecto
-                        await client.query(
-                            `INSERT INTO expenses (quote_id, amount, description, expense_date, supplier_id, type) 
-                             VALUES ($1, $2, $3, $4, (SELECT id FROM suppliers LIMIT 1), 'Nómina Interna')`,
-                            [extra.quote_id, montoExtra, `Nómina (${fechaActividad}): ${extra.desc}`, fechaActividad]
-                        );
-                    } else {
-                        // SI NO TIENE CENTRO: Se registra como Gasto Administrativo General
-                        // Nota: Aquí se asocia a un quote_id NULL o 0 para que aparezca en tus reportes de gastos de oficina
-                        await client.query(
-                            `INSERT INTO expenses (quote_id, amount, description, expense_date, supplier_id, type) 
-                             VALUES (NULL, $1, $2, $3, (SELECT id FROM suppliers LIMIT 1), 'Gasto Administrativo')`,
-                            [montoExtra, `Pago Administrativo: ${extra.desc}`, fechaActividad]
-                        );
-                    }
-                }
-            }
-        }
-
-        await client.query('COMMIT');
-        res.json({ success: true, payroll_id: batchPayrollId });
-    } catch (e) {
-        if (client) await client.query('ROLLBACK');
-        console.error("Error contable:", e.message);
-        res.status(500).json({ success: false, message: e.message });
-    } finally {
-        if (client) client.release();
-    }
+    } catch (e) { res.status(500).send(e.message); } finally { if (client) client.release(); }
 });
 app.get('/ver-recibo/:payroll_id/:employee_id', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { payroll_id, employee_id } = req.params;
@@ -3940,6 +3923,75 @@ app.get('/ver-recibo/:payroll_id/:employee_id', requireLogin, requireAdminOrCoor
             </body></html>`);
 
     } catch (e) { res.status(500).send(e.message); } finally { if (client) client.release(); }
+});
+app.post('/procesar-super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { nomina } = req.body;
+    let client;
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN');
+
+        const batchPayrollId = Date.now(); 
+
+        for (const entry of nomina) {
+            // 1. Registrar Descuento de Préstamo (si existe)
+            if (entry.loan_id && entry.loan_deduction > 0) {
+                await client.query(
+                    `INSERT INTO loan_payments (loan_id, payment_date, amount_paid, payment_method, notes) 
+                     VALUES ($1, CURRENT_DATE, $2, 'Descuento Nómina', 'Descuento automático Quincena ID: ${batchPayrollId}')`,
+                    [entry.loan_id, entry.loan_deduction]
+                );
+
+                // Verificar si se saldó el préstamo
+                const checkRes = await client.query(
+                    `SELECT loan_amount, (SELECT COALESCE(SUM(amount_paid), 0) FROM loan_payments WHERE loan_id = $1) as pagado 
+                     FROM loans WHERE id = $1`, [entry.loan_id]
+                );
+                if (parseFloat(checkRes.rows[0].pagado) >= parseFloat(checkRes.rows[0].loan_amount)) {
+                    await client.query("UPDATE loans SET status = 'pagado' WHERE id = $1", [entry.loan_id]);
+                }
+            }
+
+            // 2. Registrar Extras y Gastos (Centro u Oficina)
+            for (const extra of entry.extras) {
+                const montoExtra = parseFloat(extra.amount);
+                const fechaActividad = extra.date || new Date().toISOString().split('T')[0];
+                
+                if (montoExtra > 0) {
+                    await client.query(
+                        `INSERT INTO payroll_extras (employee_id, quote_id, amount, description, payment_date, payroll_id) 
+                         VALUES ($1, $2, $3, $4, $5, $6)`,
+                        [entry.employee_id, extra.quote_id || null, montoExtra, extra.desc, fechaActividad, batchPayrollId]
+                    );
+                    
+                    if (extra.quote_id) {
+                        // Gasto por Centro
+                        await client.query(
+                            `INSERT INTO expenses (quote_id, amount, description, expense_date, supplier_id, type) 
+                             VALUES ($1, $2, $3, $4, (SELECT id FROM suppliers LIMIT 1), 'Nómina Interna')`,
+                            [extra.quote_id, montoExtra, `Nómina (${fechaActividad}): ${extra.desc}`, fechaActividad]
+                        );
+                    } else {
+                        // Gasto Administrativo (Oficina)
+                        await client.query(
+                            `INSERT INTO expenses (quote_id, amount, description, expense_date, supplier_id, type) 
+                             VALUES (NULL, $1, $2, $3, (SELECT id FROM suppliers LIMIT 1), 'Gasto Administrativo')`,
+                            [montoExtra, `Pago Administrativo: ${extra.desc}`, fechaActividad]
+                        );
+                    }
+                }
+            }
+        }
+
+        await client.query('COMMIT');
+        res.json({ success: true, payroll_id: batchPayrollId });
+    } catch (e) {
+        if (client) await client.query('ROLLBACK');
+        console.error("Error contable:", e.message);
+        res.status(500).json({ success: false, message: e.message });
+    } finally {
+        if (client) client.release();
+    }
 });
 app.listen(PORT, () => {
     console.log(`✅ Servidor de Administración corriendo en http://localhost:${PORT}`);
