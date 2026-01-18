@@ -262,6 +262,83 @@ const commonHtmlHead = `
         }
         .back-link:hover { color: var(--primary); }
     </style>
+    <style>
+    :root {
+        --primary: #0061f2;
+        --success: #00ac69;
+        --danger: #e81500;
+        --bg-light: #f2f5f9;
+        --card-shadow: 0 0.15rem 1.75rem 0 rgba(33, 40, 50, 0.15);
+    }
+
+    body {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background-color: var(--bg-light);
+        color: #2c3e50;
+    }
+
+    /* Transformación de las Tarjetas (Cards) */
+    .container, .form-container, .summary-box {
+        background: white !important;
+        border: none !important;
+        border-radius: 15px !important;
+        box-shadow: var(--card-shadow) !important;
+        padding: 30px !important;
+        margin-bottom: 25px;
+    }
+
+    /* Modernización de Tablas */
+    table {
+        border-collapse: separate;
+        border-spacing: 0 10px;
+        width: 100%;
+    }
+
+    tr {
+        background: white;
+        transition: transform 0.2s;
+    }
+
+    tr:hover {
+        transform: scale(1.01);
+        box-shadow: 0 5px 15px rgba(0,0,0,0.05);
+    }
+
+    th {
+        text-transform: uppercase;
+        font-size: 11px;
+        letter-spacing: 1px;
+        color: #a0aec0;
+        border: none !important;
+        padding: 15px !important;
+    }
+
+    td {
+        padding: 15px !important;
+        border: none !important;
+        border-top: 1px solid #f1f4f8 !important;
+    }
+
+    /* Botones Modernos */
+    .btn {
+        border-radius: 10px !important;
+        padding: 12px 25px !important;
+        font-weight: 600 !important;
+        letter-spacing: 0.5px;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        border: none !important;
+        text-transform: none !important;
+    }
+
+    .btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 7px 14px rgba(0,0,0,0.15);
+    }
+
+    .btn-activar { background: linear-gradient(135deg, #00ac69 0%, #008a54 100%) !important; }
+    .btn-procesar { background: linear-gradient(135deg, #0061f2 0%, #0045ab 100%) !important; }
+</style>
 `;
 const dashboardHeader = (user) => `
     <header class="dashboard-header">
