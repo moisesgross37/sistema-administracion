@@ -1732,7 +1732,7 @@ app.get('/reporte-gastos', requireLogin, requireAdminOrCoord, async (req, res) =
         const totals = chartRes.rows.map(r => parseFloat(r.total));
         const granTotal = totals.reduce((a, b) => a + b, 0);
 
-        res.send(`
+res.send(`
             <!DOCTYPE html><html lang="es"><head>
                 ${commonHtmlHead}
                 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -1760,7 +1760,7 @@ app.get('/reporte-gastos', requireLogin, requireAdminOrCoord, async (req, res) =
                             </div>
                         </div>
 
-                        <div style="background:#f8f9fc; padding:20px; border-radius:12px; display:grid; grid-template-columns: repeat(4, 1fr) auto; gap:15px; align-items:end;">
+                        <div style="background:#f8f9fc; padding:20px; border-radius:12px; display:grid; grid-template-columns: repeat(4, 1fr) auto auto; gap:15px; align-items:end; margin-bottom:20px;">
                             <div class="form-group"><label>Desde:</label><input type="date" id="startDate" value="${startDate || ''}"></div>
                             <div class="form-group"><label>Hasta:</label><input type="date" id="endDate" value="${endDate || ''}"></div>
                             <div class="form-group"><label>Ciclo:</label><select id="cycleId"><option value="">-- Todos --</option>${cycleOptions}</select></div>
@@ -1772,6 +1772,7 @@ app.get('/reporte-gastos', requireLogin, requireAdminOrCoord, async (req, res) =
                                 </select>
                             </div>
                             <button class="btn btn-primary" onclick="filtrar()">🔍 Filtrar</button>
+                            <button class="btn" style="background: #1cc88a; color: white;" onclick="exportarExcel()">📊 Excel</button>
                         </div>
                     </div>
 
@@ -1810,6 +1811,14 @@ app.get('/reporte-gastos', requireLogin, requireAdminOrCoord, async (req, res) =
                         const c = document.getElementById('cycleId').value;
                         const m = document.getElementById('missingDesc').value;
                         window.location.href = \`/reporte-gastos?startDate=\${s}&endDate=\${e}&cycleId=\${c}&missingDesc=\${m}\`;
+                    }
+
+                    function exportarExcel() {
+                        const s = document.getElementById('startDate').value;
+                        const e = document.getElementById('endDate').value;
+                        const c = document.getElementById('cycleId').value;
+                        const m = document.getElementById('missingDesc').value;
+                        window.location.href = \`/reporte-gastos/excel?startDate=\${s}&endDate=\${e}&cycleId=\${c}&missingDesc=\${m}\`;
                     }
 
                     const ctx = document.getElementById('myChart').getContext('2d');
@@ -4384,6 +4393,57 @@ app.post('/cuentas-por-pagar/abonar', requireLogin, requireAdminOrCoord, async (
     } catch (e) {
         if (client) await client.query('ROLLBACK');
         res.status(500).send(e.message);
+    } finally {
+        if (client) client.release();
+    }
+});
+app.get('/reporte-gastos/excel', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { startDate, endDate, cycleId, missingDesc } = req.query;
+    let client;
+    try {
+        client = await pool.connect();
+        
+        // Usamos la misma lógica de filtros que en el reporte visual
+        let whereClause = "WHERE 1=1";
+        const params = [];
+        if (startDate) { params.push(startDate); whereClause += ` AND e.expense_date >= $${params.length}`; }
+        if (endDate) { params.push(endDate); whereClause += ` AND e.expense_date <= $${params.length}`; }
+        if (cycleId) { params.push(cycleId); whereClause += ` AND e.caja_chica_ciclo_id = $${params.length}`; }
+        if (missingDesc === 'true') { whereClause += ` AND (e.description IS NULL OR e.description = '')`; }
+
+        const queryText = `
+            SELECT e.expense_date, s.name as supplier, e.description, e.amount, e.status
+            FROM expenses e 
+            LEFT JOIN suppliers s ON e.supplier_id = s.id 
+            ${whereClause} 
+            ORDER BY e.expense_date ASC`;
+            
+        const result = await client.query(queryText, params);
+
+        // CREACIÓN DEL CONTENIDO EXCEL (CSV)
+        // Definimos los encabezados
+        let csvContent = "Fecha,Suplidor,Descripcion,Monto (RD$),Estado\n";
+
+        // Agregamos cada fila
+        result.rows.forEach(row => {
+            const fecha = new Date(row.expense_date).toLocaleDateString();
+            const suplidor = (row.supplier || 'Gasto General').replace(/,/g, ''); // Quitamos comas para no romper el CSV
+            const desc = (row.description || 'Sin detalle').replace(/,/g, '');
+            const monto = parseFloat(row.amount).toFixed(2);
+            const estado = row.status || 'Pendiente';
+            
+            csvContent += `${fecha},${suplidor},${desc},${monto},${estado}\n`;
+        });
+
+        // Configuración para que el navegador lo detecte como descarga de Excel
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', 'attachment; filename=Reporte_Gastos_PCOE.csv');
+        
+        // Enviamos el contenido con el BOM (Byte Order Mark) para que Excel reconozca los acentos correctamente
+        res.send("\uFEFF" + csvContent);
+
+    } catch (e) {
+        res.status(500).send("Error al exportar: " + e.message);
     } finally {
         if (client) client.release();
     }
