@@ -4361,8 +4361,8 @@ app.post('/cuentas-por-pagar/abonar', requireLogin, requireAdminOrCoord, async (
 
         // 1. Registrar el abono en el historial
         await client.query(
-            "INSERT INTO payment_history (expense_id, amount_paid, payment_method) VALUES ($1, $2, $3)",
-            [expenseId, paymentAmount, paymentMethod || 'Efectivo']
+            "INSERT INTO payment_history (expense_id, amount_paid, payment_method, fund_source) VALUES ($1, $2, $3, $4)",
+[expenseId, paymentAmount, paymentMethod || 'Efectivo', fundSource || 'Banco']
         );
 
         // 2. Actualizar el monto pagado acumulado en la factura
