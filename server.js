@@ -543,23 +543,18 @@ app.post('/restaurar-cotizacion/:id', requireLogin, requireAdminOrCoord, async (
         res.status(500).send('Error al procesar la solicitud.');
     }
 });
-// =======================================================
-//   NUEVAS RUTAS PARA CUENTAS POR PAGAR
-// =======================================================
-
-// --- PÁGINA PRINCIPAL DE CUENTAS POR PAGAR ---
 app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { supplierId } = req.query;
     let client;
     try {
         client = await pool.connect();
 
-        // 1. Resumen de Deuda Total por Suplidor (Calculando el balance real)
+        // 1. Resumen de Deuda Total por Suplidor (Solo facturas reales, NO caja chica)
         const summaryRes = await client.query(`
             SELECT s.id, s.name, SUM(e.amount - COALESCE(e.paid_amount, 0)) as total_deuda
             FROM expenses e
             JOIN suppliers s ON e.supplier_id = s.id
-            WHERE e.status != 'Pagada'
+            WHERE e.status != 'Pagada' AND e.caja_chica_ciclo_id IS NULL
             GROUP BY s.id, s.name
             ORDER BY total_deuda DESC`);
 
@@ -568,8 +563,7 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
             SELECT e.*, s.name as supplier_name 
             FROM expenses e 
             JOIN suppliers s ON e.supplier_id = s.id 
-            WHERE e.status != 'Pagada'`;
-        AND e.caja_chica_ciclo_id IS NULL`;
+            WHERE e.status != 'Pagada' AND e.caja_chica_ciclo_id IS NULL`;
         
         const params = [];
         if (supplierId) {
@@ -578,10 +572,7 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
         }
 
         const invoicesRes = await client.query(queryText + " ORDER BY e.expense_date DESC", params);
-        
-        // --- ESTA ES LA CONSULTA NUEVA PARA EL HISTORIAL ---
         const historyRes = await client.query("SELECT * FROM payment_history ORDER BY payment_date DESC");
-        
         const suppliersRes = await client.query("SELECT id, name FROM suppliers ORDER BY name ASC");
 
         const summaryCards = summaryRes.rows.map(s => `
@@ -620,13 +611,7 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
                         </div>
 
                         <div class="card">
-                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
-                                <h3 style="margin:0;">Detalle de Facturas Pendientes</h3>
-                                <select id="filter-supplier" onchange="window.location.href='/cuentas-por-pagar?supplierId='+this.value">
-                                    <option value="">-- Filtrar por Suplidor --</option>
-                                    ${suppliersRes.rows.map(s => `<option value="${s.id}" ${supplierId == s.id ? 'selected' : ''}>${s.name}</option>`).join('')}
-                                </select>
-                            </div>
+                            <h3 style="margin:0; margin-bottom:20px;">Detalle de Facturas Pendientes</h3>
                             <table class="modern-table">
                                 <thead>
                                     <tr>
@@ -641,42 +626,32 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
                                         const montoOriginal = parseFloat(i.amount);
                                         const yaPagado = parseFloat(i.paid_amount || 0);
                                         const pendiente = montoOriginal - yaPagado;
-
-                                        // Filtramos los abonos que pertenecen a esta factura específica
                                         const misAbonos = historyRes.rows.filter(h => h.expense_id === i.id);
+                                        
                                         const abonosHtml = misAbonos.map(a => `
                                             <div style="font-size:10px; color:#2c7a7b; background:#f0fff4; padding:2px 5px; margin-top:2px; border-radius:3px;">
-                                                ✅ ${new Date(a.payment_date).toLocaleDateString()}: <b>$${parseFloat(a.amount_paid).toFixed(2)}</b> (${a.payment_method})
-                                            </div>
-                                        `).join('');
+                                                ✅ ${new Date(a.payment_date).toLocaleDateString()}: <b>$${parseFloat(a.amount_paid).toFixed(2)}</b> (${a.fund_source || 'Banco'})
+                                            </div>`).join('');
                                         
                                         return `
                                         <tr>
                                             <td>${new Date(i.expense_date).toLocaleDateString()}</td>
                                             <td><b>${i.supplier_name}</b><br><small>${i.description || 'Sin concepto'}</small></td>
                                             <td style="text-align:right;">
-                                                <div style="font-size:11px; color:gray;">Total: $${montoOriginal.toFixed(2)}</div>
+                                                <div style="font-size:11px; color:gray;">Original: $${montoOriginal.toFixed(2)}</div>
                                                 <div style="font-weight:bold; color:var(--danger); border-bottom:1px solid #eee; padding-bottom:3px;">Pendiente: RD$ ${pendiente.toFixed(2)}</div>
-                                                <div style="margin-top:5px; text-align:left;">
-                                                    ${abonosHtml || '<span style="font-size:10px; color:gray;">Sin abonos registrados</span>'}
-                                                </div>
+                                                <div style="margin-top:5px; text-align:left;">${abonosHtml}</div>
                                             </td>
                                             <td>
-                                                // Formulario de Abono actualizado con Origen y Método
-<form action="/cuentas-por-pagar/abonar" method="POST" style="display:flex; flex-direction:column; gap:5px;">
-    <input type="hidden" name="expenseId" value="${i.id}">
-    
-    <label style="font-size:10px;">Monto a pagar:</label>
-    <input type="number" name="paymentAmount" step="0.01" max="${pendiente.toFixed(2)}" required style="padding:5px;">
-    
-    <label style="font-size:10px;">¿De dónde sale el dinero?:</label>
-    <select name="fundSource" style="padding:5px; font-size:11px;">
-        <option value="Banco">🏦 Banco (Transferencia/Cheque)</option>
-        <option value="Caja Chica">💵 Caja Chica (Efectivo)</option>
-    </select>
-
-    <button type="submit" class="btn btn-activar" style="padding:6px; font-size:11px;">Registrar Abono</button>
-</form>
+                                                <form action="/cuentas-por-pagar/abonar" method="POST" style="display:flex; flex-direction:column; gap:5px;">
+                                                    <input type="hidden" name="expenseId" value="${i.id}">
+                                                    <input type="number" name="paymentAmount" step="0.01" max="${pendiente.toFixed(2)}" placeholder="Monto" required style="padding:4px;">
+                                                    <select name="fundSource" style="padding:4px; font-size:11px; border-radius:4px;">
+                                                        <option value="Banco">🏦 Banco</option>
+                                                        <option value="Caja Chica">💵 Caja Chica</option>
+                                                    </select>
+                                                    <button type="submit" class="btn btn-activar" style="padding:6px; font-size:11px;">Abonar</button>
+                                                </form>
                                             </td>
                                         </tr>`;
                                     }).join('')}
