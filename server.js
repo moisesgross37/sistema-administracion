@@ -569,6 +569,7 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
             FROM expenses e 
             JOIN suppliers s ON e.supplier_id = s.id 
             WHERE e.status != 'Pagada'`;
+        AND e.caja_chica_ciclo_id IS NULL`;
         
         const params = [];
         if (supplierId) {
@@ -661,16 +662,21 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
                                                 </div>
                                             </td>
                                             <td>
-                                                <form action="/cuentas-por-pagar/abonar" method="POST" style="display:flex; flex-direction:column; gap:5px;">
-                                                    <input type="hidden" name="expenseId" value="${i.id}">
-                                                    <input type="number" name="paymentAmount" step="0.01" max="${pendiente.toFixed(2)}" placeholder="Monto RD$" style="padding:5px; border-radius:5px; border:1px solid #ddd;" required>
-                                                    <select name="paymentMethod" style="padding:5px; border-radius:5px; border:1px solid #ddd; font-size:11px;">
-                                                        <option value="Transferencia">Transferencia</option>
-                                                        <option value="Efectivo">Efectivo</option>
-                                                        <option value="Cheque">Cheque</option>
-                                                    </select>
-                                                    <button type="submit" class="btn btn-activar" style="padding:6px; font-size:11px;">Registrar Abono</button>
-                                                </form>
+                                                // Formulario de Abono actualizado con Origen y Método
+<form action="/cuentas-por-pagar/abonar" method="POST" style="display:flex; flex-direction:column; gap:5px;">
+    <input type="hidden" name="expenseId" value="${i.id}">
+    
+    <label style="font-size:10px;">Monto a pagar:</label>
+    <input type="number" name="paymentAmount" step="0.01" max="${pendiente.toFixed(2)}" required style="padding:5px;">
+    
+    <label style="font-size:10px;">¿De dónde sale el dinero?:</label>
+    <select name="fundSource" style="padding:5px; font-size:11px;">
+        <option value="Banco">🏦 Banco (Transferencia/Cheque)</option>
+        <option value="Caja Chica">💵 Caja Chica (Efectivo)</option>
+    </select>
+
+    <button type="submit" class="btn btn-activar" style="padding:6px; font-size:11px;">Registrar Abono</button>
+</form>
                                             </td>
                                         </tr>`;
                                     }).join('')}
@@ -1449,12 +1455,21 @@ app.post('/caja-chica/nuevo-gasto', requireLogin, requireAdminOrCoord, async (re
             `);
         }
 
-        // 3. Si hay dinero, procedemos a guardar
-        await client.query(
-            `INSERT INTO expenses (caja_chica_ciclo_id, expense_date, supplier_id, amount, description, type) 
-             VALUES ($1, $2, $3, $4, $5, 'Caja Chica')`,
-            [cycleId, expense_date, supplier_id, montoNuevoGasto, description]
-        );
+        // 3. Si hay dinero, procedemos a guardar como PAGADA automáticamente
+await client.query(
+    `INSERT INTO expenses (
+        caja_chica_ciclo_id, 
+        expense_date, 
+        supplier_id, 
+        amount, 
+        paid_amount, 
+        description, 
+        type, 
+        status, 
+        fund_source
+    ) VALUES ($1, $2, $3, $4, $4, $5, 'Caja Chica', 'Pagada', 'Caja Chica')`,
+    [cycleId, expense_date, supplier_id, montoNuevoGasto, description]
+);
 
         await client.query('COMMIT');
         res.redirect('/caja-chica');
