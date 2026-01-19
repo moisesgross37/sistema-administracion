@@ -1685,49 +1685,42 @@ app.get('/reporte-gastos', requireLogin, requireAdminOrCoord, async (req, res) =
     try {
         client = await pool.connect();
         
-        // 1. Buscamos los ciclos para el selector de filtros
+        // 1. Buscamos los ciclos para el selector
         const cyclesRes = await client.query("SELECT id, fecha_inicio FROM caja_chica_ciclos ORDER BY id DESC LIMIT 15");
         const cycleOptions = cyclesRes.rows.map(c => 
             `<option value="${c.id}" ${cycleId == c.id ? 'selected' : ''}>Ciclo #${c.id} (${new Date(c.fecha_inicio).toLocaleDateString()})</option>`
         ).join('');
 
-        // 2. Consulta dinámica para la TABLA y el GRÁFICO
+        // 2. CÁLCULO DE COMPARATIVA (Mes Actual vs Pasado) - LO QUE FALTABA
+        const compRes = await client.query(`
+            SELECT 
+                SUM(CASE WHEN date_trunc('month', expense_date) = date_trunc('month', current_date) THEN amount ELSE 0 END) as mes_actual,
+                SUM(CASE WHEN date_trunc('month', expense_date) = date_trunc('month', current_date - interval '1 month') THEN amount ELSE 0 END) as mes_pasado
+            FROM expenses`);
+        
+        const comp = compRes.rows[0];
+        const mesActual = parseFloat(comp.mes_actual || 0);
+        const mesPasado = parseFloat(comp.mes_pasado || 0);
+        const variacion = mesPasado > 0 ? ((mesActual - mesPasado) / mesPasado * 100).toFixed(1) : 0;
+
+        // 3. Consulta dinámica para la tabla (Tu lógica original)
         let whereClause = "WHERE 1=1";
         const params = [];
+        if (startDate) { params.push(startDate); whereClause += ` AND e.expense_date >= $${params.length}`; }
+        if (endDate) { params.push(endDate); whereClause += ` AND e.expense_date <= $${params.length}`; }
+        if (cycleId) { params.push(cycleId); whereClause += ` AND e.caja_chica_ciclo_id = $${params.length}`; }
+        if (missingDesc === 'true') { whereClause += ` AND (e.description IS NULL OR e.description = '')`; }
 
-        if (startDate) {
-            params.push(startDate);
-            whereClause += ` AND e.expense_date >= $${params.length}`;
-        }
-        if (endDate) {
-            params.push(endDate);
-            whereClause += ` AND e.expense_date <= $${params.length}`;
-        }
-        if (cycleId) {
-            params.push(cycleId);
-            whereClause += ` AND e.caja_chica_ciclo_id = $${params.length}`;
-        }
-        if (missingDesc === 'true') {
-            whereClause += ` AND (e.description IS NULL OR e.description = '')`;
-        }
-
-        // Datos para la tabla
-        const tableQuery = `
-            SELECT e.*, s.name as supplier_name 
-            FROM expenses e 
-            LEFT JOIN suppliers s ON e.supplier_id = s.id 
-            ${whereClause} 
-            ORDER BY e.expense_date DESC`;
-        
+        const tableQuery = `SELECT e.*, s.name as supplier_name FROM expenses e LEFT JOIN suppliers s ON e.supplier_id = s.id ${whereClause} ORDER BY e.expense_date DESC`;
         const expensesRes = await client.query(tableQuery, params);
         
-        // Datos para el gráfico (Agrupados por "Valor Fiscal" o "Tipo")
+        // Datos para el gráfico
         const chartQuery = `
             SELECT 
                 CASE 
                     WHEN description LIKE '%fiscal%' THEN 'Con Valor Fiscal'
                     WHEN caja_chica_ciclo_id IS NOT NULL THEN 'Caja Chica'
-                    ELSE 'Otros'
+                    ELSE 'Otros Gastos'
                 END as categoria,
                 SUM(amount) as total
             FROM expenses e
@@ -1750,18 +1743,32 @@ app.get('/reporte-gastos', requireLogin, requireAdminOrCoord, async (req, res) =
                     <div class="card">
                         <h1>Auditoría y Análisis de Gastos</h1>
                         
-                        <div style="background:#f8f9fc; padding:20px; border-radius:12px; display:grid; grid-template-columns: repeat(4, 1fr) auto; gap:15px; align-items:end; margin-bottom:20px;">
+                        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; margin-top: 15px; margin-bottom: 25px;">
+                            <div class="summary-box" style="border-top: 5px solid var(--primary);">
+                                <small>GASTO MES ACTUAL</small>
+                                <div style="font-size:1.6rem; font-weight:bold;">RD$ ${mesActual.toLocaleString('en-US')}</div>
+                            </div>
+                            <div class="summary-box" style="border-top: 5px solid #858796;">
+                                <small>GASTO MES ANTERIOR</small>
+                                <div style="font-size:1.6rem; font-weight:bold;">RD$ ${mesPasado.toLocaleString('en-US')}</div>
+                            </div>
+                            <div class="summary-box" style="border-top: 5px solid ${variacion > 0 ? '#e74a3b' : '#1cc88a'};">
+                                <small>VARIACIÓN</small>
+                                <div style="font-size:1.6rem; font-weight:bold; color: ${variacion > 0 ? '#e74a3b' : '#1cc88a'};">
+                                    ${variacion > 0 ? '▲' : '▼'} ${Math.abs(variacion)}%
+                                </div>
+                            </div>
+                        </div>
+
+                        <div style="background:#f8f9fc; padding:20px; border-radius:12px; display:grid; grid-template-columns: repeat(4, 1fr) auto; gap:15px; align-items:end;">
                             <div class="form-group"><label>Desde:</label><input type="date" id="startDate" value="${startDate || ''}"></div>
                             <div class="form-group"><label>Hasta:</label><input type="date" id="endDate" value="${endDate || ''}"></div>
-                            <div class="form-group">
-                                <label>Ciclo:</label>
-                                <select id="cycleId"><option value="">-- Todos --</option>${cycleOptions}</select>
-                            </div>
+                            <div class="form-group"><label>Ciclo:</label><select id="cycleId"><option value="">-- Todos --</option>${cycleOptions}</select></div>
                             <div class="form-group">
                                 <label>Auditoría:</label>
                                 <select id="missingDesc">
-                                    <option value="false">Todos</option>
-                                    <option value="true" ${missingDesc === 'true' ? 'selected' : ''}>Sin Descripción</option>
+                                    <option value="false">Todos los registros</option>
+                                    <option value="true" ${missingDesc === 'true' ? 'selected' : ''}>⚠️ Sin Descripción</option>
                                 </select>
                             </div>
                             <button class="btn btn-primary" onclick="filtrar()">🔍 Filtrar</button>
@@ -1771,8 +1778,8 @@ app.get('/reporte-gastos', requireLogin, requireAdminOrCoord, async (req, res) =
                     <div style="display: grid; grid-template-columns: 1fr 350px; gap: 30px; margin-top: 20px;">
                         <div>
                             <div class="summary-box" style="margin-bottom:20px; border-left: 8px solid var(--danger);">
-                                <small>TOTAL FILTRADO:</small>
-                                <div class="amount" style="font-size:2.5rem; color:var(--danger);">RD$ ${granTotal.toLocaleString('en-US', {minimumFractionDigits: 2})}</div>
+                                <small>TOTAL FILTRADO EN ESTA VISTA:</small>
+                                <div class="amount" style="font-size:2.2rem; color:var(--danger);">RD$ ${granTotal.toLocaleString('en-US', {minimumFractionDigits: 2})}</div>
                             </div>
                             <div class="card">
                                 <table class="modern-table">
