@@ -220,13 +220,66 @@ const dashboardHeader = (user) => `
 `;
 
 const backToDashboardLink = `<a href="/" class="back-link">🏠 Volver al Panel Principal</a>`;
-app.get('/', requireLogin, requireAdminOrCoord, (req, res) => {
-    res.send(`
+app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
+    let client;
+    try {
+        client = await pool.connect();
+
+        // 1. CÁLCULO DE MÉTRICAS EN TIEMPO REAL
+        const statsRes = await client.query(`
+            SELECT 
+                SUM(CASE WHEN date_trunc('month', expense_date) = date_trunc('month', current_date) THEN paid_amount ELSE 0 END) as mes_actual,
+                SUM(CASE WHEN date_trunc('month', expense_date) = date_trunc('month', current_date - interval '1 month') THEN paid_amount ELSE 0 END) as mes_pasado,
+                SUM(amount - paid_amount) as total_pendiente
+            FROM expenses
+        `);
+
+        const stats = statsRes.rows[0];
+        const actual = parseFloat(stats.mes_actual || 0);
+        const pasado = parseFloat(stats.mes_pasado || 0);
+        const pendiente = parseFloat(stats.total_pendiente || 0);
+        
+        // Calcular porcentaje de variación (Tendencia)
+        let variacion = pasado > 0 ? ((actual - pasado) / pasado * 100).toFixed(1) : 0;
+        const esSubida = variacion > 0;
+        const colorVar = esSubida ? '#e74a3b' : '#1cc88a'; // Rojo si gasta más, Verde si ahorra
+        const flecha = esSubida ? '▲' : '▼';
+
+        // 2. GENERACIÓN DE LA VISTA
+        res.send(`
         <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
             <div class="container">
                 ${dashboardHeader(req.session.user)}
+
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; margin-top: 30px; margin-bottom: 40px;">
+                    
+                    <div class="card" style="border-left: 5px solid #4e73df; padding: 20px;">
+                        <small style="color: #4e73df; font-weight: bold; text-transform: uppercase; font-size: 0.75rem;">Pagado este Mes</small>
+                        <div style="font-size: 1.8rem; font-weight: bold; color: #5a5c69; margin-top: 5px;">
+                            RD$ ${actual.toLocaleString('en-US', {minimumFractionDigits: 2})}
+                        </div>
+                    </div>
+
+                    <div class="card" style="border-left: 5px solid ${colorVar}; padding: 20px;">
+                        <small style="color: ${colorVar}; font-weight: bold; text-transform: uppercase; font-size: 0.75rem;">
+                            Tendencia vs Mes Pasado
+                        </small>
+                        <div style="font-size: 1.8rem; font-weight: bold; color: ${colorVar}; margin-top: 5px;">
+                            ${flecha} ${Math.abs(variacion)}%
+                        </div>
+                        <small style="color: #858796;">Anterior: RD$ ${pasado.toLocaleString()}</small>
+                    </div>
+
+                    <div class="card" style="border-left: 5px solid #f6c23e; padding: 20px;">
+                        <small style="color: #f6c23e; font-weight: bold; text-transform: uppercase; font-size: 0.75rem;">Cuentas por Pagar Totales</small>
+                        <div style="font-size: 1.8rem; font-weight: bold; color: #f6c23e; margin-top: 5px;">
+                            RD$ ${pendiente.toLocaleString('en-US', {minimumFractionDigits: 2})}
+                        </div>
+                    </div>
+
+                </div>
                 
-                <div class="module" style="margin-top: 40px;">
+                <div class="module">
                     <h2>Proyectos y Clientes</h2>
                     <div class="dashboard">
                         <a href="/proyectos-por-activar" class="dashboard-card"><h3>📬 Proyectos por Activar</h3><p>Revisa y activa las cotizaciones formalizadas.</p></a>
@@ -247,33 +300,39 @@ app.get('/', requireLogin, requireAdminOrCoord, (req, res) => {
                     </div>
                 </div>
 
-<div class="module">
-    <h2>Personal y Pagos</h2>
-    <div class="dashboard">
-        <a href="/super-nomina" class="dashboard-card" style="border-top: 5px solid #28a745;">
-            <h3>💰 Control de Nómina</h3>
-            <p>Gestiona sueldos, extras y descuentos quincenales.</p>
-        </a>
-        <a href="/gestionar-prestamos" class="dashboard-card" style="border-top: 5px solid #dc3545;">
-            <h3>🏦 Gestión de Préstamos</h3>
-            <p>Registra nuevos préstamos y abonos en efectivo (Como Isolina).</p>
-        </a>
-        <a href="/pagar-comisiones" class="dashboard-card">
-            <h3>💵 Pago de Comisiones</h3>
-            <p>Revisa y paga las comisiones de tus asesores.</p>
-        </a>
-        <a href="/empleados" class="dashboard-card">
-            <h3>👥 Gestión de Equipo</h3>
-            <p>Configura datos de empleados y asesores.</p>
-        </a>
-        <a href="/historial-nomina" class="dashboard-card">
-            <h3>📂 Historial de Pagos</h3>
-            <p>Consulta registros y recibos de nóminas anteriores.</p>
-        </a>
-    </div>
-</div>
-</body></html>
-    `);
+                <div class="module" style="margin-bottom: 50px;">
+                    <h2>Personal y Pagos</h2>
+                    <div class="dashboard">
+                        <a href="/super-nomina" class="dashboard-card" style="border-top: 5px solid #28a745;">
+                            <h3>💰 Control de Nómina</h3>
+                            <p>Gestiona sueldos, extras y descuentos quincenales.</p>
+                        </a>
+                        <a href="/gestionar-prestamos" class="dashboard-card" style="border-top: 5px solid #dc3545;">
+                            <h3>🏦 Gestión de Préstamos</h3>
+                            <p>Registra nuevos préstamos y abonos en efectivo.</p>
+                        </a>
+                        <a href="/pagar-comisiones" class="dashboard-card">
+                            <h3>💵 Pago de Comisiones</h3>
+                            <p>Revisa y paga las comisiones de tus asesores.</p>
+                        </a>
+                        <a href="/empleados" class="dashboard-card">
+                            <h3>👥 Gestión de Equipo</h3>
+                            <p>Configura datos de empleados y asesores.</p>
+                        </a>
+                        <a href="/historial-nomina" class="dashboard-card">
+                            <h3>📂 Historial de Pagos</h3>
+                            <p>Consulta registros y recibos de nóminas anteriores.</p>
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </body></html>
+        `);
+    } catch (e) {
+        res.status(500).send("Error en el Dashboard: " + e.message);
+    } finally {
+        if (client) client.release();
+    }
 });
 app.get('/todos-los-centros', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
