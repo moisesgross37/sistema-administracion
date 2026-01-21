@@ -644,150 +644,148 @@ let queryText = `
             </div>`).join('');
 
         res.send(`
-            <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
-                <div class="container" style="max-width: 1300px;">
-                    <div style="margin-bottom: 20px;">${backToDashboardLink}</div>
-                    <h1>Cuentas por Pagar a Suplidores</h1>
+    <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
+        <div class="container" style="max-width: 1300px;">
+            <div style="margin-bottom: 20px;">${backToDashboardLink}</div>
+            <h1>Cuentas por Pagar a Suplidores</h1>
 
-                    <div style="display: flex; gap: 15px; overflow-x: auto; padding-bottom: 15px; margin-bottom: 30px;">
-                        ${summaryCards || '<p>No hay deudas pendientes actualmente.</p>'}
-                    </div>
+            <div style="display: flex; gap: 15px; overflow-x: auto; padding-bottom: 15px; margin-bottom: 30px;">
+                ${summaryCards || '<p>No hay deudas pendientes actualmente.</p>'}
+            </div>
 
-                    <div style="display: grid; grid-template-columns: 380px 1fr; gap: 30px;">
-                        <div class="form-container">
-                            <h3 style="margin-top:0;">➕ Registrar Factura</h3>
-                            <form action="/cuentas-por-pagar" method="POST">
-                                <div class="form-group">
-                                    <label>Suplidor:</label>
-                                    <select name="supplier_id" required>
-                                        <option value="">Seleccione...</option>
-                                        ${suppliersRes.rows.map(s => `<option value="${s.id}">${s.name}</option>`).join('')}
-                                    </select>
-                                </div>
-                                
-                                <div class="form-group">
-                                    <label>Número de Factura:</label>
-                                    <input type="text" name="numero_factura" placeholder="Ej: B0100000123">
-                                </div>
-
-                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-                                    <div class="form-group"><label>Fecha Factura:</label><input type="date" name="expense_date" required></div>
-                                    <div class="form-group"><label>Vencimiento:</label><input type="date" name="fecha_vencimiento"></div>
-                                </div>
-
-                                <div class="form-group"><label>Monto Total:</label><input type="number" name="amount" step="0.01" required></div>
-                                <div class="form-group"><label>Concepto / Detalle:</label><textarea name="description" rows="2"></textarea></div>
-
-                                <div style="margin: 15px 0; padding: 12px; background: #fff8e1; border-radius: 8px; border: 1px solid #ffe082;">
-                                    <label style="display: flex; align-items: center; cursor: pointer; font-weight: bold; color: #795548;">
-                                        <input type="checkbox" name="isPaid" value="true" style="margin-right: 10px; width: 18px; height: 18px;">
-                                        💰 ¿Pago al Contado?
-                                    </label>
-                                    <small style="display:block; margin-top:5px; color: #8d6e63;">Si marcas esto, la factura se guardará como PAGADA y no creará deuda.</small>
-                                </div>
-
-                                <button type="submit" class="btn btn-activar" style="width:100%; padding: 12px; font-weight: bold;">💾 Guardar Registro</button>
-                            </form>
+            <div style="display: grid; grid-template-columns: 380px 1fr; gap: 30px;">
+                <div class="form-container">
+                    <h3 style="margin-top:0;">➕ Registrar Factura</h3>
+                    <form action="/cuentas-por-pagar" method="POST">
+                        <div class="form-group">
+                            <label>Suplidor:</label>
+                            <select name="supplier_id" required>
+                                <option value="">Seleccione...</option>
+                                ${suppliersRes.rows.map(s => `<option value="${s.id}">${s.name}</option>`).join('')}
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label>Número de Factura:</label>
+                            <input type="text" name="numero_factura" placeholder="Ej: B0100000123">
                         </div>
 
-                        <div class="card">
-                            <h3 style="margin:0; margin-bottom:20px;">Detalle de Facturas Pendientes</h3>
-                            <table class="modern-table">
-                                <thead>
-                                    <tr>
-                                        <th>Fecha / Vence</th>
-                                        <th>Suplidor / Concepto</th>
-                                        <th style="text-align:right;">Balance e Historial</th>
-                                        <th>Acción de Pago</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    ${invoicesRes.rows.map(i => {
-    // 1. Cálculos de Dinero
-    const montoOriginal = parseFloat(i.amount);
-    const yaPagado = parseFloat(i.paid_amount || 0);
-    const pendiente = montoOriginal - yaPagado;
-
-    // 2. Lógica del Semáforo (Fechas)
-    const hoy = new Date();
-    const vencimiento = i.fecha_vencimiento ? new Date(i.fecha_vencimiento) : null;
-    const diffDias = vencimiento ? Math.ceil((vencimiento - hoy) / (1000 * 60 * 60 * 24)) : null;
-
-    let colorAlerta = '#6c757d'; // Gris (Sin fecha)
-    let mensajeAlerta = 'Sin fecha de vencimiento';
-    let bgFila = 'transparent';
-
-    if (vencimiento) {
-        if (diffDias < 0) {
-            colorAlerta = '#e74a3b'; // Rojo (Vencida)
-            bgFila = '#fff5f5';
-            mensajeAlerta = `⚠️ VENCIDA HACE ${Math.abs(diffDias)} DÍAS`;
-        } else if (diffDias <= 3) {
-            colorAlerta = '#f6c23e'; // Amarillo/Naranja (Próxima)
-            bgFila = '#fffbe6';
-            mensajeAlerta = `⏳ Vence en ${diffDias === 0 ? 'HOY' : diffDias + ' días'}`;
-        } else {
-            colorAlerta = '#1cc88a'; // Verde (Al día)
-            mensajeAlerta = `✅ A tiempo (${diffDias} días)`;
-        }
-    }
-
-    // 3. Historial de Abonos
-    const misAbonos = historyRes.rows.filter(h => h.expense_id === i.id);
-    const abonosHtml = misAbonos.map(a => `
-        <div style="font-size:10px; color:#2c7a7b; background:#f0fff4; padding:2px 5px; margin-top:2px; border-radius:3px; border-left: 2px solid #38a169;">
-            ✅ ${new Date(a.payment_date).toLocaleDateString()}: <b>$${parseFloat(a.amount_paid).toFixed(2)}</b> (${a.fund_source || 'Banco'})
-        </div>`).join('');
-
-    return `
-    <tr style="background-color: ${bgFila}; transition: all 0.3s;">
-        <td style="border-left: 5px solid ${colorAlerta};">
-            <div style="font-weight:bold;">${new Date(i.expense_date).toLocaleDateString()}</div>
-            <div style="font-size:11px; color:${colorAlerta}; font-weight:bold; margin-top:3px;">
-                ${mensajeAlerta}
-            </div>
-            <small style="color:gray;">Vence: ${vencimiento ? vencimiento.toLocaleDateString() : 'No asignada'}</small>
-        </td>
-        <td>
-            <div style="display:flex; align-items:center; gap:8px;">
-                <b>${i.supplier_name}</b>
-                ${i.numero_factura ? `<span style="font-size:10px; background:#eef2ff; color:#4e73df; padding:2px 6px; border-radius:10px;">#${i.numero_factura}</span>` : ''}
-            </div>
-            <small style="color:#5a5c69;">${i.description || 'Sin concepto'}</small>
-        </td>
-        <td style="text-align:right;">
-            <div style="font-size:11px; color:gray;">Original: $${montoOriginal.toFixed(2)}</div>
-            <div style="font-weight:bold; color:var(--danger); border-bottom:1px solid #eee; padding-bottom:3px;">Pendiente: RD$ ${pendiente.toFixed(2)}</div>
-            <div style="margin-top:5px; text-align:left;">
-                ${abonosHtml || '<span style="font-size:10px; color:#b7b9cc;">Sin abonos</span>'}
-            </div>
-        </td>
-        <td>
-            <form action="/cuentas-por-pagar/abonar" method="POST" style="display:flex; flex-direction:column; gap:5px;">
-                <input type="hidden" name="expenseId" value="${i.id}">
-                <div style="display:flex; gap:2px;">
-                    <span style="align-self:center; font-size:12px; color:gray;">$</span>
-                    <input type="number" name="paymentAmount" step="0.01" max="${pendiente.toFixed(2)}" placeholder="Monto" required 
-                           style="padding:6px; border-radius:4px; border:1px solid #ddd; width:100%;">
-                </div>
-                <select name="fundSource" required style="padding:6px; font-size:11px; border-radius:4px; border:1px solid #ddd; background:white;">
-                    <option value="Banco">🏦 Banco (Transferencia)</option>
-                    <option value="Caja Chica">💵 Caja Chica (Efectivo)</option>
-                </select>
-                <button type="submit" class="btn btn-activar" style="padding:8px; font-size:11px; font-weight:bold;">Registrar Pago</button>
-            </form>
-        </td>
-    </tr>`;
-}).join('') || '<tr><td colspan="4" style="text-align:center; padding:40px; color:gray;">🙌 ¡Excelente! No hay facturas pendientes.</td></tr>'}
-</tbody>
-                            </table>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                            <div class="form-group"><label>Fecha Factura:</label><input type="date" name="expense_date" required></div>
+                            <div class="form-group"><label>Vencimiento:</label><input type="date" name="fecha_vencimiento"></div>
                         </div>
-                    </div>
+
+                        <div class="form-group"><label>Monto Total:</label><input type="number" name="amount" step="0.01" required></div>
+                        <div class="form-group"><label>Concepto / Detalle:</label><textarea name="description" rows="2"></textarea></div>
+
+                        <div style="margin: 15px 0; padding: 12px; background: #fff8e1; border-radius: 8px; border: 1px solid #ffe082;">
+                            <label style="display: flex; align-items: center; cursor: pointer; font-weight: bold; color: #795548;">
+                                <input type="checkbox" name="isPaid" value="true" style="margin-right: 10px; width: 18px; height: 18px;">
+                                💰 ¿Pago al Contado?
+                            </label>
+                            <small style="display:block; margin-top:5px; color: #8d6e63;">Si marcas esto, la factura se guardará como PAGADA y no creará deuda.</small>
+                        </div>
+
+                        <button type="submit" class="btn btn-activar" style="width:100%; padding: 12px; font-weight: bold;">💾 Guardar Registro</button>
+                    </form>
                 </div>
-            </body></html>`);
-    } catch (e) { res.status(500).send(e.message); } finally { if (client) client.release(); }
-});
-app.post('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res) => {
+
+                <div class="card">
+                    <h3 style="margin:0; margin-bottom:20px;">Detalle de Facturas Pendientes</h3>
+                    <table class="modern-table">
+                        <thead>
+                            <tr>
+                                <th>Fecha / Vence</th>
+                                <th>Suplidor / Concepto</th>
+                                <th style="text-align:right;">Balance e Historial</th>
+                                <th>Acción de Pago</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${invoicesRes.rows.map(i => {
+                                // 1. Cálculos de Dinero
+                                const montoOriginal = parseFloat(i.amount);
+                                const yaPagado = parseFloat(i.paid_amount || 0);
+                                const pendiente = montoOriginal - yaPagado;
+
+                                // 2. Lógica del Semáforo (Fechas)
+                                const hoy = new Date();
+                                const vencimiento = i.fecha_vencimiento ? new Date(i.fecha_vencimiento) : null;
+                                const diffDias = vencimiento ? Math.ceil((vencimiento - hoy) / (1000 * 60 * 60 * 24)) : null;
+
+                                let colorAlerta = '#6c757d'; 
+                                let mensajeAlerta = 'Sin fecha';
+                                let bgFila = 'transparent';
+
+                                if (vencimiento) {
+                                    if (diffDias < 0) {
+                                        colorAlerta = '#e74a3b'; 
+                                        bgFila = '#fff5f5';
+                                        mensajeAlerta = `⚠️ VENCIDA HACE ${Math.abs(diffDias)} DÍAS`;
+                                    } else if (diffDias <= 3) {
+                                        colorAlerta = '#f6c23e'; 
+                                        bgFila = '#fffbe6';
+                                        mensajeAlerta = `⏳ Vence en ${diffDias === 0 ? 'HOY' : diffDias + ' días'}`;
+                                    } else {
+                                        colorAlerta = '#1cc88a'; 
+                                        mensajeAlerta = `✅ A tiempo (${diffDias} días)`;
+                                    }
+                                }
+
+                                // 3. Historial de Abonos
+                                const misAbonos = historyRes.rows.filter(h => h.expense_id === i.id);
+                                const abonosHtml = misAbonos.map(a => `
+                                    <div style="font-size:10px; color:#2c7a7b; background:#f0fff4; padding:2px 5px; margin-top:2px; border-radius:3px; border-left: 2px solid #38a169;">
+                                        ✅ $${parseFloat(a.amount_paid).toFixed(2)} (${a.fund_source || 'Banco'})
+                                    </div>`).join('');
+
+                                return `
+                                <tr style="background-color: ${bgFila}; transition: all 0.3s;">
+                                    <td style="border-left: 5px solid ${colorAlerta};">
+                                        <div style="font-weight:bold;">${new Date(i.expense_date).toLocaleDateString()}</div>
+                                        <div style="font-size:11px; color:${colorAlerta}; font-weight:bold; margin-top:3px;">
+                                            ${mensajeAlerta}
+                                        </div>
+                                        <small style="color:gray;">Vence: ${vencimiento ? vencimiento.toLocaleDateString() : 'N/A'}</small>
+                                    </td>
+                                    <td>
+                                        <div style="display:flex; align-items:center; gap:8px;">
+                                            <b>${i.supplier_name}</b>
+                                            ${i.numero_factura ? `<span style="font-size:10px; background:#eef2ff; color:#4e73df; padding:2px 6px; border-radius:10px;">#${i.numero_factura}</span>` : ''}
+                                        </div>
+                                        <a href="/suplidores/${i.supplier_id}/estado-de-cuenta" target="_blank" style="display:block; margin-top:3px; font-size:10px; color:#4e73df; text-decoration:none; font-weight:bold;">
+                                            📄 Ver Estado de Cuenta
+                                        </a>
+                                        <small style="color:#5a5c69; display:block; margin-top:5px;">${i.description || 'Sin concepto'}</small>
+                                    </td>
+                                    <td style="text-align:right;">
+                                        <div style="font-size:11px; color:gray;">Original: $${montoOriginal.toFixed(2)}</div>
+                                        <div style="font-weight:bold; color:var(--danger); border-bottom:1px solid #eee; padding-bottom:3px;">Pendiente: RD$ ${pendiente.toFixed(2)}</div>
+                                        <div style="margin-top:5px; text-align:left;">
+                                            ${abonosHtml || '<span style="font-size:10px; color:#b7b9cc;">Sin abonos</span>'}
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <form action="/cuentas-por-pagar/abonar" method="POST" style="display:flex; flex-direction:column; gap:5px;">
+                                            <input type="hidden" name="expenseId" value="${i.id}">
+                                            <input type="number" name="paymentAmount" step="0.01" max="${pendiente.toFixed(2)}" placeholder="Monto" required 
+                                                   style="padding:6px; border-radius:4px; border:1px solid #ddd; width:100%;">
+                                            <select name="fundSource" required style="padding:6px; font-size:11px; border-radius:4px; border:1px solid #ddd; background:white;">
+                                                <option value="Banco">🏦 Banco (Transferencia)</option>
+                                                <option value="Caja Chica">💵 Caja Chica (Efectivo)</option>
+                                            </select>
+                                            <button type="submit" class="btn btn-activar" style="padding:8px; font-size:11px; font-weight:bold;">Registrar Pago</button>
+                                        </form>
+                                    </td>
+                                </tr>`;
+                            }).join('') || '<tr><td colspan="4" style="text-align:center; padding:40px; color:gray;">🙌 No hay facturas pendientes.</td></tr>'}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </body></html>`);
+        app.post('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { 
         supplier_id, 
         numero_factura, 
