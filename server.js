@@ -1506,49 +1506,56 @@ app.post('/caja-chica/nuevo-gasto', requireLogin, requireAdminOrCoord, async (re
         client = await pool.connect();
         await client.query('BEGIN');
 
-        // 1. Obtener el fondo inicial y los gastos actuales de este ciclo
+        // 1. Obtener fondo y gastos (Añadimos validación de existencia)
         const cycleRes = await client.query("SELECT fondo_inicial FROM caja_chica_ciclos WHERE id = $1", [cycleId]);
+        
+        if (cycleRes.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).send("Error: El ciclo de caja chica no existe.");
+        }
+
         const expensesRes = await client.query("SELECT SUM(amount) as total FROM expenses WHERE caja_chica_ciclo_id = $1", [cycleId]);
         
-        const fondoInicial = parseFloat(cycleRes.rows[0].fondo_inicial);
+        const fondoInicial = parseFloat(cycleRes.rows[0].fondo_inicial || 0);
         const totalGastado = parseFloat(expensesRes.rows[0].total || 0);
-        const montoNuevoGasto = parseFloat(amount);
-        
+        const montoNuevoGasto = parseFloat(amount || 0);
         const balanceDisponible = fondoInicial - totalGastado;
 
-        // 2. VALIDACIÓN CRÍTICA: ¿Hay dinero suficiente?
+        // 2. EL ESCUDO: ¿Hay dinero suficiente?
         if (montoNuevoGasto > balanceDisponible) {
             await client.query('ROLLBACK');
+            // Usamos un script de alerta para no sacar al usuario de su pantalla
             return res.send(`
                 <script>
-                    alert('⚠️ OPERACIÓN RECHAZADA: El monto (RD$ ${montoNuevoGasto.toFixed(2)}) excede el saldo disponible en caja (RD$ ${balanceDisponible.toFixed(2)}).');
+                    alert('⚠️ FONDOS INSUFICIENTES\\n\\nDisponible: RD$ ${balanceDisponible.toLocaleString('en-US', {minimumFractionDigits:2})}\\nIntento de gasto: RD$ ${montoNuevoGasto.toLocaleString('en-US', {minimumFractionDigits:2})}\\n\\nPor favor, solicita una reposición.');
                     window.history.back();
                 </script>
             `);
         }
 
-        // 3. Si hay dinero, procedemos a guardar como PAGADA automáticamente
-await client.query(
-    `INSERT INTO expenses (
-        caja_chica_ciclo_id, 
-        expense_date, 
-        supplier_id, 
-        amount, 
-        paid_amount, 
-        description, 
-        type, 
-        status, 
-        fund_source
-    ) VALUES ($1, $2, $3, $4, $4, $5, 'Caja Chica', 'Pagada', 'Caja Chica')`,
-    [cycleId, expense_date, supplier_id, montoNuevoGasto, description]
-);
+        // 3. Registro con vinculación total al sistema de reportes
+        await client.query(
+            `INSERT INTO expenses (
+                caja_chica_ciclo_id, 
+                expense_date, 
+                supplier_id, 
+                amount, 
+                paid_amount, 
+                description, 
+                type, 
+                status, 
+                fund_source
+            ) VALUES ($1, $2, $3, $4, $4, $5, 'Caja Chica', 'Pagada', 'Caja Chica')`,
+            [cycleId, expense_date, supplier_id, montoNuevoGasto, description]
+        );
 
         await client.query('COMMIT');
         res.redirect('/caja-chica');
+
     } catch (error) {
         if (client) await client.query('ROLLBACK');
-        console.error(error);
-        res.status(500).send("Error al registrar el gasto.");
+        console.error("Error en Escudo Caja Chica:", error);
+        res.status(500).send("Error crítico al registrar el gasto.");
     } finally {
         if (client) client.release();
     }
