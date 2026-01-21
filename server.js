@@ -1766,18 +1766,19 @@ app.get('/reporte-gastos', requireLogin, requireAdminOrCoord, async (req, res) =
         const tableQuery = `SELECT e.*, s.name as supplier_name FROM expenses e LEFT JOIN suppliers s ON e.supplier_id = s.id ${whereClause} ORDER BY e.expense_date DESC`;
         const expensesRes = await client.query(tableQuery, params);
         
-        // Datos para el gráfico
-        const chartQuery = `
-            SELECT 
-                CASE 
-                    WHEN description LIKE '%fiscal%' THEN 'Con Valor Fiscal'
-                    WHEN caja_chica_ciclo_id IS NOT NULL THEN 'Caja Chica'
-                    ELSE 'Otros Gastos'
-                END as categoria,
-                SUM(amount) as total
-            FROM expenses e
-            ${whereClause}
-            GROUP BY categoria`;
+        // Consulta corregida para el GRÁFICO (Ahora suma dinero REAL pagado)
+const chartQuery = `
+    SELECT 
+        CASE 
+            WHEN description LIKE '%fiscal%' THEN 'Con Valor Fiscal'
+            WHEN caja_chica_ciclo_id IS NOT NULL THEN 'Caja Chica'
+            ELSE 'Facturas Suplidores'
+        END as categoria,
+        SUM(paid_amount) as total -- <--- CAMBIO CLAVE: Usamos paid_amount, no amount
+    FROM expenses e
+    ${whereClause}
+    AND paid_amount > 0 -- Solo mostramos lo que ya tiene dinero ejecutado
+    GROUP BY categoria`;
         
         const chartRes = await client.query(chartQuery, params);
         const labels = chartRes.rows.map(r => r.categoria);
