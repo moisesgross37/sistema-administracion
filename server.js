@@ -4638,6 +4638,111 @@ app.get('/reporte-gastos/excel', requireLogin, requireAdminOrCoord, async (req, 
         if (client) client.release();
     }
 });
+app.get('/suplidores/:id/estado-de-cuenta', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const supplierId = req.params.id;
+    let client;
+    try {
+        client = await pool.connect();
+
+        // A. Obtener datos del suplidor
+        const supplierRes = await client.query("SELECT * FROM suppliers WHERE id = $1", [supplierId]);
+        if (supplierRes.rows.length === 0) return res.status(404).send("Suplidor no encontrado");
+        const supplier = supplierRes.rows[0];
+
+        // B. Obtener todas las facturas y abonos
+        const invoicesRes = await client.query(`
+            SELECT e.*, 
+                   (SELECT JSON_AGG(ph.*) FROM payment_history ph WHERE ph.expense_id = e.id) as abonos
+            FROM expenses e 
+            WHERE e.supplier_id = $1 
+            ORDER BY e.expense_date DESC`, [supplierId]);
+
+        const facturas = invoicesRes.rows;
+        const totalFacturado = facturas.reduce((sum, f) => sum + parseFloat(f.amount), 0);
+        const totalPagado = facturas.reduce((sum, f) => sum + parseFloat(f.paid_amount || 0), 0);
+        const balanceGeneral = totalFacturado - totalPagado;
+
+        // C. Generar HTML optimizado para Impresión/PDF
+        res.send(`
+            <!DOCTYPE html><html lang="es"><head>
+                <title>Estado de Cuenta - ${supplier.name}</title>
+                <style>
+                    body { font-family: 'Segoe UI', sans-serif; color: #333; padding: 40px; }
+                    .header { display: flex; justify-content: space-between; border-bottom: 2px solid #4e73df; padding-bottom: 20px; margin-bottom: 30px; }
+                    .company-info h1 { margin: 0; color: #4e73df; }
+                    .summary-box { background: #f8f9fc; padding: 20px; border-radius: 8px; margin-bottom: 30px; display: grid; grid-template-columns: repeat(3, 1fr); text-align: center; }
+                    .amount { font-size: 1.4rem; font-weight: bold; }
+                    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+                    th { background: #4e73df; color: white; padding: 12px; text-align: left; }
+                    td { padding: 12px; border-bottom: 1px solid #e3e6f0; font-size: 13px; }
+                    .status-tag { padding: 3px 8px; border-radius: 10px; font-size: 11px; font-weight: bold; }
+                    .abono-row { font-size: 11px; color: #2c7a7b; background: #f0fff4; }
+                    @media print { .no-print { display: none; } }
+                </style>
+            </head><body>
+                <div class="no-print" style="margin-bottom: 20px;">
+                    <button onclick="window.print()" style="padding:10px 20px; background:#1cc88a; color:white; border:none; border-radius:5px; cursor:pointer;">🖨️ Imprimir / Guardar PDF</button>
+                    <button onclick="window.history.back()" style="padding:10px 20px; background:#858796; color:white; border:none; border-radius:5px; cursor:pointer;">Volver</button>
+                </div>
+
+                <div class="header">
+                    <div class="company-info">
+                        <h1>PCOE - GESTIÓN DE EVENTOS</h1>
+                        <p>Estado de Cuenta de Suplidor</p>
+                    </div>
+                    <div style="text-align: right;">
+                        <h2 style="margin:0;">${supplier.name}</h2>
+                        <p>${supplier.phone || ''} | ${supplier.email || ''}</p>
+                        <p>Fecha de reporte: ${new Date().toLocaleDateString()}</p>
+                    </div>
+                </div>
+
+                <div class="summary-box">
+                    <div><small>TOTAL FACTURADO</small><div class="amount">RD$ ${totalFacturado.toLocaleString()}</div></div>
+                    <div><small>TOTAL PAGADO</small><div class="amount" style="color: #1cc88a;">RD$ ${totalPagado.toLocaleString()}</div></div>
+                    <div><small>BALANCE PENDIENTE</small><div class="amount" style="color: #e74a3b;">RD$ ${balanceGeneral.toLocaleString()}</div></div>
+                </div>
+
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Fecha / No. Factura</th>
+                            <th>Descripción / Concepto</th>
+                            <th>Monto Original</th>
+                            <th>Pagado</th>
+                            <th>Balance</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${facturas.map(f => {
+                            const pendiente = parseFloat(f.amount) - parseFloat(f.paid_amount || 0);
+                            return `
+                            <tr>
+                                <td><b>${new Date(f.expense_date).toLocaleDateString()}</b><br><small>Ref: ${f.numero_factura || 'N/A'}</small></td>
+                                <td>${f.description || 'Sin concepto'}</td>
+                                <td>RD$ ${parseFloat(f.amount).toLocaleString()}</td>
+                                <td style="color:#1cc88a;">RD$ ${parseFloat(f.paid_amount || 0).toLocaleString()}</td>
+                                <td style="font-weight:bold; color:${pendiente > 0 ? '#e74a3b' : '#1cc88a'};">RD$ ${pendiente.toLocaleString()}</td>
+                            </tr>
+                            ${f.abonos ? f.abonos.map(a => `
+                                <tr class="abono-row">
+                                    <td colspan="2" style="text-align:right;">↳ Pago registrado el ${new Date(a.payment_date).toLocaleDateString()} (${a.fund_source || 'Banco'})</td>
+                                    <td></td>
+                                    <td>+ RD$ ${parseFloat(a.amount_paid).toLocaleString()}</td>
+                                    <td></td>
+                                </tr>
+                            `).join('') : ''}
+                            `;
+                        }).join('')}
+                    </tbody>
+                </table>
+                <div style="margin-top: 50px; text-align: center; color: gray; font-size: 12px;">
+                    <p>Este documento es una relación de movimientos contables generada por el Sistema PCOE.</p>
+                </div>
+            </body></html>
+        `);
+    } catch (e) { res.status(500).send(e.message); } finally { if (client) client.release(); }
+});
 app.listen(PORT, () => {
     console.log(`✅ Servidor de Administración corriendo en http://localhost:${PORT}`);
 });
