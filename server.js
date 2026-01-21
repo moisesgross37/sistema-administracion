@@ -1737,17 +1737,17 @@ app.get('/reporte-gastos', requireLogin, requireAdminOrCoord, async (req, res) =
     try {
         client = await pool.connect();
         
-        // 1. Buscamos los ciclos para el selector
+        // 1. Buscamos los ciclos para el selector de filtros
         const cyclesRes = await client.query("SELECT id, fecha_inicio FROM caja_chica_ciclos ORDER BY id DESC LIMIT 15");
         const cycleOptions = cyclesRes.rows.map(c => 
             `<option value="${c.id}" ${cycleId == c.id ? 'selected' : ''}>Ciclo #${c.id} (${new Date(c.fecha_inicio).toLocaleDateString()})</option>`
         ).join('');
 
-        // 2. CÁLCULO DE COMPARATIVA (Mes Actual vs Pasado) - LO QUE FALTABA
+        // 2. COMPARATIVA MENSUAL (Dinero Real que salió de la cuenta)
         const compRes = await client.query(`
             SELECT 
-                SUM(CASE WHEN date_trunc('month', expense_date) = date_trunc('month', current_date) THEN amount ELSE 0 END) as mes_actual,
-                SUM(CASE WHEN date_trunc('month', expense_date) = date_trunc('month', current_date - interval '1 month') THEN amount ELSE 0 END) as mes_pasado
+                SUM(CASE WHEN date_trunc('month', expense_date) = date_trunc('month', current_date) THEN paid_amount ELSE 0 END) as mes_actual,
+                SUM(CASE WHEN date_trunc('month', expense_date) = date_trunc('month', current_date - interval '1 month') THEN paid_amount ELSE 0 END) as mes_pasado
             FROM expenses`);
         
         const comp = compRes.rows[0];
@@ -1755,37 +1755,44 @@ app.get('/reporte-gastos', requireLogin, requireAdminOrCoord, async (req, res) =
         const mesPasado = parseFloat(comp.mes_pasado || 0);
         const variacion = mesPasado > 0 ? ((mesActual - mesPasado) / mesPasado * 100).toFixed(1) : 0;
 
-        // 3. Consulta dinámica para la tabla (Tu lógica original)
-        let whereClause = "WHERE 1=1";
+        // 3. Consulta dinámica: Solo mostramos donde hubo PAGO real
+        let whereClause = "WHERE e.paid_amount > 0"; 
         const params = [];
+
         if (startDate) { params.push(startDate); whereClause += ` AND e.expense_date >= $${params.length}`; }
         if (endDate) { params.push(endDate); whereClause += ` AND e.expense_date <= $${params.length}`; }
         if (cycleId) { params.push(cycleId); whereClause += ` AND e.caja_chica_ciclo_id = $${params.length}`; }
         if (missingDesc === 'true') { whereClause += ` AND (e.description IS NULL OR e.description = '')`; }
 
-        const tableQuery = `SELECT e.*, s.name as supplier_name FROM expenses e LEFT JOIN suppliers s ON e.supplier_id = s.id ${whereClause} ORDER BY e.expense_date DESC`;
+        // Datos para la tabla con Fuente de Fondos
+        const tableQuery = `
+            SELECT e.*, s.name as supplier_name 
+            FROM expenses e 
+            LEFT JOIN suppliers s ON e.supplier_id = s.id 
+            ${whereClause} 
+            ORDER BY e.expense_date DESC`;
+        
         const expensesRes = await client.query(tableQuery, params);
         
-        // Consulta corregida para el GRÁFICO (Ahora suma dinero REAL pagado)
-const chartQuery = `
-    SELECT 
-        CASE 
-            WHEN description LIKE '%fiscal%' THEN 'Con Valor Fiscal'
-            WHEN caja_chica_ciclo_id IS NOT NULL THEN 'Caja Chica'
-            ELSE 'Facturas Suplidores'
-        END as categoria,
-        SUM(paid_amount) as total -- <--- CAMBIO CLAVE: Usamos paid_amount, no amount
-    FROM expenses e
-    ${whereClause}
-    AND paid_amount > 0 -- Solo mostramos lo que ya tiene dinero ejecutado
-    GROUP BY categoria`;
+        // Datos para el gráfico (Suma de PAID_AMOUNT)
+        const chartQuery = `
+            SELECT 
+                CASE 
+                    WHEN description LIKE '%fiscal%' THEN 'Con Valor Fiscal'
+                    WHEN caja_chica_ciclo_id IS NOT NULL THEN 'Caja Chica'
+                    ELSE 'Facturas Suplidores'
+                END as categoria,
+                SUM(paid_amount) as total
+            FROM expenses e
+            ${whereClause}
+            GROUP BY categoria`;
         
         const chartRes = await client.query(chartQuery, params);
         const labels = chartRes.rows.map(r => r.categoria);
         const totals = chartRes.rows.map(r => parseFloat(r.total));
         const granTotal = totals.reduce((a, b) => a + b, 0);
 
-res.send(`
+        res.send(`
             <!DOCTYPE html><html lang="es"><head>
                 ${commonHtmlHead}
                 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -1794,15 +1801,15 @@ res.send(`
                     <div style="margin-bottom: 20px;">${backToDashboardLink}</div>
                     
                     <div class="card">
-                        <h1>Auditoría y Análisis de Gastos</h1>
+                        <h1>Auditoría y Análisis de Flujo Real</h1>
                         
                         <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; margin-top: 15px; margin-bottom: 25px;">
                             <div class="summary-box" style="border-top: 5px solid var(--primary);">
-                                <small>GASTO MES ACTUAL</small>
+                                <small>EFECTIVO EJECUTADO MES</small>
                                 <div style="font-size:1.6rem; font-weight:bold;">RD$ ${mesActual.toLocaleString('en-US')}</div>
                             </div>
                             <div class="summary-box" style="border-top: 5px solid #858796;">
-                                <small>GASTO MES ANTERIOR</small>
+                                <small>MES ANTERIOR</small>
                                 <div style="font-size:1.6rem; font-weight:bold;">RD$ ${mesPasado.toLocaleString('en-US')}</div>
                             </div>
                             <div class="summary-box" style="border-top: 5px solid ${variacion > 0 ? '#e74a3b' : '#1cc88a'};">
@@ -1820,8 +1827,8 @@ res.send(`
                             <div class="form-group">
                                 <label>Auditoría:</label>
                                 <select id="missingDesc">
-                                    <option value="false">Todos los registros</option>
-                                    <option value="true" ${missingDesc === 'true' ? 'selected' : ''}>⚠️ Sin Descripción</option>
+                                    <option value="false">Todos</option>
+                                    <option value="true" ${missingDesc === 'true' ? 'selected' : ''}>Sin Descripción</option>
                                 </select>
                             </div>
                             <button class="btn btn-primary" onclick="filtrar()">🔍 Filtrar</button>
@@ -1832,18 +1839,24 @@ res.send(`
                     <div style="display: grid; grid-template-columns: 1fr 350px; gap: 30px; margin-top: 20px;">
                         <div>
                             <div class="summary-box" style="margin-bottom:20px; border-left: 8px solid var(--danger);">
-                                <small>TOTAL FILTRADO EN ESTA VISTA:</small>
+                                <small>TOTAL PAGADO EN ESTE PERIODO:</small>
                                 <div class="amount" style="font-size:2.2rem; color:var(--danger);">RD$ ${granTotal.toLocaleString('en-US', {minimumFractionDigits: 2})}</div>
                             </div>
                             <div class="card">
                                 <table class="modern-table">
-                                    <thead><tr><th>Fecha</th><th>Detalle</th><th style="text-align:right;">Monto</th></tr></thead>
+                                    <thead><tr><th>Fecha</th><th>Detalle / Origen</th><th style="text-align:right;">Monto Pagado</th></tr></thead>
                                     <tbody>
                                         ${expensesRes.rows.map(e => `
                                             <tr>
                                                 <td>${new Date(e.expense_date).toLocaleDateString()}</td>
-                                                <td><b>${e.supplier_name || 'Gasto'}</b><br><small>${e.description || '<span style="color:red;">⚠️ Falta descripción</span>'}</small></td>
-                                                <td style="text-align:right; font-weight:bold;">$${parseFloat(e.amount).toFixed(2)}</td>
+                                                <td>
+                                                    <b>${e.supplier_name || 'Gasto'}</b><br>
+                                                    <small>${e.description || '<span style="color:red;">⚠️ Sin descripción</span>'}</small><br>
+                                                    <span style="font-size:10px; background:#e2e8f0; padding:2px 6px; border-radius:10px; color:#4a5568;">
+                                                        📍 Fuente: ${e.fund_source || 'Banco'}
+                                                    </span>
+                                                </td>
+                                                <td style="text-align:right; font-weight:bold;">$${parseFloat(e.paid_amount).toFixed(2)}</td>
                                             </tr>`).join('')}
                                     </tbody>
                                 </table>
@@ -1851,7 +1864,7 @@ res.send(`
                         </div>
 
                         <div class="card" style="text-align:center;">
-                            <h3>Distribución del Gasto</h3>
+                            <h3>Distribución de Salidas</h3>
                             <canvas id="myChart"></canvas>
                         </div>
                     </div>
@@ -4471,16 +4484,24 @@ app.get('/reporte-gastos/excel', requireLogin, requireAdminOrCoord, async (req, 
     try {
         client = await pool.connect();
         
-        // Usamos la misma lógica de filtros que en el reporte visual
-        let whereClause = "WHERE 1=1";
+        // 1. Filtros consistentes con el reporte visual (Solo lo PAGADO)
+        let whereClause = "WHERE e.paid_amount > 0"; 
         const params = [];
         if (startDate) { params.push(startDate); whereClause += ` AND e.expense_date >= $${params.length}`; }
         if (endDate) { params.push(endDate); whereClause += ` AND e.expense_date <= $${params.length}`; }
         if (cycleId) { params.push(cycleId); whereClause += ` AND e.caja_chica_ciclo_id = $${params.length}`; }
         if (missingDesc === 'true') { whereClause += ` AND (e.description IS NULL OR e.description = '')`; }
 
+        // 2. Consulta con los nuevos campos (Factura y Fuente de Fondo)
         const queryText = `
-            SELECT e.expense_date, s.name as supplier, e.description, e.amount, e.status
+            SELECT 
+                e.expense_date, 
+                s.name as supplier, 
+                e.numero_factura,
+                e.description, 
+                e.paid_amount, 
+                e.fund_source,
+                e.status
             FROM expenses e 
             LEFT JOIN suppliers s ON e.supplier_id = s.id 
             ${whereClause} 
@@ -4488,26 +4509,26 @@ app.get('/reporte-gastos/excel', requireLogin, requireAdminOrCoord, async (req, 
             
         const result = await client.query(queryText, params);
 
-        // CREACIÓN DEL CONTENIDO EXCEL (CSV)
-        // Definimos los encabezados
-        let csvContent = "Fecha,Suplidor,Descripcion,Monto (RD$),Estado\n";
+        // 3. Encabezados profesionales para Contabilidad
+        let csvContent = "Fecha,Suplidor,No. Factura,Descripcion,Monto Pagado (RD$),Fuente de Fondo,Estado\n";
 
-        // Agregamos cada fila
+        // 4. Limpieza y formateo de filas
         result.rows.forEach(row => {
             const fecha = new Date(row.expense_date).toLocaleDateString();
-            const suplidor = (row.supplier || 'Gasto General').replace(/,/g, ''); // Quitamos comas para no romper el CSV
+            const suplidor = (row.supplier || 'Gasto General').replace(/,/g, '');
+            const factura = (row.numero_factura || 'N/A').replace(/,/g, '');
             const desc = (row.description || 'Sin detalle').replace(/,/g, '');
-            const monto = parseFloat(row.amount).toFixed(2);
-            const estado = row.status || 'Pendiente';
+            const monto = parseFloat(row.paid_amount).toFixed(2);
+            const fuente = row.fund_source || 'Banco';
+            const estado = row.status || 'Pagada';
             
-            csvContent += `${fecha},${suplidor},${desc},${monto},${estado}\n`;
+            csvContent += `${fecha},${suplidor},${factura},${desc},${monto},${fuente},${estado}\n`;
         });
 
-        // Configuración para que el navegador lo detecte como descarga de Excel
         res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-        res.setHeader('Content-Disposition', 'attachment; filename=Reporte_Gastos_PCOE.csv');
+        res.setHeader('Content-Disposition', 'attachment; filename=Auditoria_Gastos_PCOE.csv');
         
-        // Enviamos el contenido con el BOM (Byte Order Mark) para que Excel reconozca los acentos correctamente
+        // Enviamos con BOM para que Excel abra bien los acentos
         res.send("\uFEFF" + csvContent);
 
     } catch (e) {
