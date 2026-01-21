@@ -694,18 +694,16 @@ let queryText = `
     } catch (e) { res.status(500).send(e.message); } finally { if (client) client.release(); }
 });
 app.post('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res) => {
-    // 1. Recogemos todos los campos (los tuyos + los de control)
     const { 
         supplier_id, 
         numero_factura, 
-        expense_date,       // Fecha de la factura
-        fecha_vencimiento,  // Para el semáforo futuro
-        amount,             // Monto total
+        expense_date, 
+        fecha_vencimiento, 
+        amount, 
         description, 
-        isPaid              // ¿Viene del botón 'Pago al Contado'?
+        isPaid 
     } = req.body;
 
-    // Validación básica
     if (!supplier_id || !expense_date || !amount) {
         return res.status(400).send("Faltan datos obligatorios (Suplidor, Fecha o Monto).");
     }
@@ -713,44 +711,39 @@ app.post('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, re
     let client;
     try {
         client = await pool.connect();
+        await client.query('BEGIN'); // Iniciamos transacción para seguridad
 
-        // 2. Lógica de "Contado vs Crédito"
-        // Si es pago al contado: status es 'Pagada' y el monto pagado es igual al total.
-        // Si es crédito: status es 'Pendiente' y el monto pagado empieza en 0.
         const status = (isPaid === 'true') ? 'Pagada' : 'Pendiente';
         const paid_amount = (isPaid === 'true') ? amount : 0;
-        const fund_source = (isPaid === 'true') ? 'Banco' : null; // Si se paga ahora, suele ser Banco
+        const fund_source = (isPaid === 'true') ? 'Banco' : null;
 
-        await client.query(
+        // 1. Insertamos en la tabla de Gastos/Facturas
+        const insertRes = await client.query(
             `INSERT INTO expenses (
-                supplier_id, 
-                numero_factura, 
-                expense_date, 
-                fecha_vencimiento, 
-                amount, 
-                paid_amount, 
-                description, 
-                status, 
-                type,
-                fund_source
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+                supplier_id, numero_factura, expense_date, fecha_vencimiento, 
+                amount, paid_amount, description, status, type, fund_source
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
             [
-                supplier_id, 
-                numero_factura || null, 
-                expense_date, 
-                fecha_vencimiento || null, 
-                amount, 
-                paid_amount, 
-                description || '', 
-                status, 
-                'Factura Suplidor',
-                fund_source
+                supplier_id, numero_factura || null, expense_date, fecha_vencimiento || null, 
+                amount, paid_amount, description || '', status, 'Factura Suplidor', fund_source
             ]
         );
 
+        // 2. NUEVO: Si es pago al contado, creamos el registro en el historial de pagos automáticamente
+        if (isPaid === 'true') {
+            const newExpenseId = insertRes.rows[0].id;
+            await client.query(
+                `INSERT INTO payment_history (expense_id, amount_paid, payment_method, fund_source, payment_date) 
+                 VALUES ($1, $2, $3, $4, $5)`,
+                [newExpenseId, amount, 'Pago Contado', 'Banco', expense_date]
+            );
+        }
+
+        await client.query('COMMIT');
         res.redirect('/cuentas-por-pagar');
     } catch (error) {
-        console.error("Error en PCOE (Cuentas por Pagar):", error);
+        if (client) await client.query('ROLLBACK');
+        console.error("Error en Cuentas por Pagar:", error);
         res.status(500).send('<h1>Error al registrar la factura ❌</h1>');
     } finally {
         if (client) client.release();
