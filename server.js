@@ -594,9 +594,9 @@ let queryText = `
                         ${summaryCards || '<p>No hay deudas pendientes actualmente.</p>'}
                     </div>
 
-                    <div style="display: grid; grid-template-columns: 350px 1fr; gap: 30px;">
+                    <div style="display: grid; grid-template-columns: 380px 1fr; gap: 30px;">
                         <div class="form-container">
-                            <h3>➕ Registrar Factura</h3>
+                            <h3 style="margin-top:0;">➕ Registrar Factura</h3>
                             <form action="/cuentas-por-pagar" method="POST">
                                 <div class="form-group">
                                     <label>Suplidor:</label>
@@ -605,10 +605,29 @@ let queryText = `
                                         ${suppliersRes.rows.map(s => `<option value="${s.id}">${s.name}</option>`).join('')}
                                     </select>
                                 </div>
+                                
+                                <div class="form-group">
+                                    <label>Número de Factura:</label>
+                                    <input type="text" name="numero_factura" placeholder="Ej: B0100000123">
+                                </div>
+
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                                    <div class="form-group"><label>Fecha Factura:</label><input type="date" name="expense_date" required></div>
+                                    <div class="form-group"><label>Vencimiento:</label><input type="date" name="fecha_vencimiento"></div>
+                                </div>
+
                                 <div class="form-group"><label>Monto Total:</label><input type="number" name="amount" step="0.01" required></div>
-                                <div class="form-group"><label>Fecha Factura:</label><input type="date" name="expense_date" required></div>
-                                <div class="form-group"><label>Concepto:</label><textarea name="description" rows="2"></textarea></div>
-                                <button type="submit" class="btn btn-activar" style="width:100%;">💾 Guardar Factura</button>
+                                <div class="form-group"><label>Concepto / Detalle:</label><textarea name="description" rows="2"></textarea></div>
+
+                                <div style="margin: 15px 0; padding: 12px; background: #fff8e1; border-radius: 8px; border: 1px solid #ffe082;">
+                                    <label style="display: flex; align-items: center; cursor: pointer; font-weight: bold; color: #795548;">
+                                        <input type="checkbox" name="isPaid" value="true" style="margin-right: 10px; width: 18px; height: 18px;">
+                                        💰 ¿Pago al Contado?
+                                    </label>
+                                    <small style="display:block; margin-top:5px; color: #8d6e63;">Si marcas esto, la factura se guardará como PAGADA y no creará deuda.</small>
+                                </div>
+
+                                <button type="submit" class="btn btn-activar" style="width:100%; padding: 12px; font-weight: bold;">💾 Guardar Registro</button>
                             </form>
                         </div>
 
@@ -617,7 +636,7 @@ let queryText = `
                             <table class="modern-table">
                                 <thead>
                                     <tr>
-                                        <th>Fecha</th>
+                                        <th>Fecha / Vence</th>
                                         <th>Suplidor / Concepto</th>
                                         <th style="text-align:right;">Balance e Historial</th>
                                         <th>Acción de Pago</th>
@@ -631,14 +650,23 @@ let queryText = `
                                         const misAbonos = historyRes.rows.filter(h => h.expense_id === i.id);
                                         
                                         const abonosHtml = misAbonos.map(a => `
-                                            <div style="font-size:10px; color:#2c7a7b; background:#f0fff4; padding:2px 5px; margin-top:2px; border-radius:3px;">
+                                            <div style="font-size:10px; color:#2c7a7b; background:#f0fff4; padding:2px 5px; margin-top:2px; border-radius:3px; border-left: 2px solid #38a169;">
                                                 ✅ ${new Date(a.payment_date).toLocaleDateString()}: <b>$${parseFloat(a.amount_paid).toFixed(2)}</b> (${a.fund_source || 'Banco'})
                                             </div>`).join('');
                                         
                                         return `
                                         <tr>
-                                            <td>${new Date(i.expense_date).toLocaleDateString()}</td>
-                                            <td><b>${i.supplier_name}</b><br><small>${i.description || 'Sin concepto'}</small></td>
+                                            <td>
+                                                ${new Date(i.expense_date).toLocaleDateString()}<br>
+                                                <small style="color:${i.fecha_vencimiento && new Date(i.fecha_vencimiento) < new Date() ? 'red' : 'gray'};">
+                                                    Vence: ${i.fecha_vencimiento ? new Date(i.fecha_vencimiento).toLocaleDateString() : 'N/A'}
+                                                </small>
+                                            </td>
+                                            <td>
+                                                <b>${i.supplier_name}</b><br>
+                                                <small>${i.description || 'Sin concepto'}</small><br>
+                                                <span style="font-size:10px; color:var(--primary);">📄 Factura: ${i.numero_factura || 'N/A'}</span>
+                                            </td>
                                             <td style="text-align:right;">
                                                 <div style="font-size:11px; color:gray;">Original: $${montoOriginal.toFixed(2)}</div>
                                                 <div style="font-weight:bold; color:var(--danger); border-bottom:1px solid #eee; padding-bottom:3px;">Pendiente: RD$ ${pendiente.toFixed(2)}</div>
@@ -647,16 +675,16 @@ let queryText = `
                                             <td>
                                                 <form action="/cuentas-por-pagar/abonar" method="POST" style="display:flex; flex-direction:column; gap:5px;">
                                                     <input type="hidden" name="expenseId" value="${i.id}">
-                                                    <input type="number" name="paymentAmount" step="0.01" max="${pendiente.toFixed(2)}" placeholder="Monto" required style="padding:4px;">
-                                                    <select name="fundSource" style="padding:4px; font-size:11px; border-radius:4px;">
-                                                        <option value="Banco">🏦 Banco</option>
-                                                        <option value="Caja Chica">💵 Caja Chica</option>
+                                                    <input type="number" name="paymentAmount" step="0.01" max="${pendiente.toFixed(2)}" placeholder="Monto" required style="padding:4px; border-radius:4px; border:1px solid #ddd;">
+                                                    <select name="fundSource" style="padding:4px; font-size:11px; border-radius:4px; border:1px solid #ddd;">
+                                                        <option value="Banco">🏦 Banco (Transferencia)</option>
+                                                        <option value="Caja Chica">💵 Caja Chica (Efectivo)</option>
                                                     </select>
-                                                    <button type="submit" class="btn btn-activar" style="padding:6px; font-size:11px;">Abonar</button>
+                                                    <button type="submit" class="btn btn-activar" style="padding:6px; font-size:11px;">Registrar Abono</button>
                                                 </form>
                                             </td>
                                         </tr>`;
-                                    }).join('')}
+                                    }).join('') || '<tr><td colspan="4" style="text-align:center; padding:30px; color:gray;">No hay facturas pendientes.</td></tr>'}
                                 </tbody>
                             </table>
                         </div>
@@ -665,30 +693,69 @@ let queryText = `
             </body></html>`);
     } catch (e) { res.status(500).send(e.message); } finally { if (client) client.release(); }
 });
-// --- RUTA PARA GUARDAR UNA NUEVA FACTURA DE SUPLIDOR ---
 app.post('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res) => {
-    const { supplier_id, numero_factura, fecha_factura, fecha_vencimiento, monto_total, descripcion } = req.body;
-    if (!supplier_id || !fecha_factura || !monto_total || !descripcion) {
-        return res.status(400).send("El suplidor, fecha, monto y descripción son obligatorios.");
+    // 1. Recogemos todos los campos (los tuyos + los de control)
+    const { 
+        supplier_id, 
+        numero_factura, 
+        expense_date,       // Fecha de la factura
+        fecha_vencimiento,  // Para el semáforo futuro
+        amount,             // Monto total
+        description, 
+        isPaid              // ¿Viene del botón 'Pago al Contado'?
+    } = req.body;
+
+    // Validación básica
+    if (!supplier_id || !expense_date || !amount) {
+        return res.status(400).send("Faltan datos obligatorios (Suplidor, Fecha o Monto).");
     }
+
+    let client;
     try {
-        const client = await pool.connect();
+        client = await pool.connect();
+
+        // 2. Lógica de "Contado vs Crédito"
+        // Si es pago al contado: status es 'Pagada' y el monto pagado es igual al total.
+        // Si es crédito: status es 'Pendiente' y el monto pagado empieza en 0.
+        const status = (isPaid === 'true') ? 'Pagada' : 'Pendiente';
+        const paid_amount = (isPaid === 'true') ? amount : 0;
+        const fund_source = (isPaid === 'true') ? 'Banco' : null; // Si se paga ahora, suele ser Banco
+
         await client.query(
-            `INSERT INTO facturas_suplidores (supplier_id, numero_factura, fecha_factura, fecha_vencimiento, monto_total, descripcion) 
-             VALUES ($1, $2, $3, $4, $5, $6)`,
-            [supplier_id, numero_factura || null, fecha_factura, fecha_vencimiento || null, monto_total, descripcion]
+            `INSERT INTO expenses (
+                supplier_id, 
+                numero_factura, 
+                expense_date, 
+                fecha_vencimiento, 
+                amount, 
+                paid_amount, 
+                description, 
+                status, 
+                type,
+                fund_source
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+            [
+                supplier_id, 
+                numero_factura || null, 
+                expense_date, 
+                fecha_vencimiento || null, 
+                amount, 
+                paid_amount, 
+                description || '', 
+                status, 
+                'Factura Suplidor',
+                fund_source
+            ]
         );
-        client.release();
+
         res.redirect('/cuentas-por-pagar');
     } catch (error) {
-        console.error("Error al guardar la factura de suplidor:", error);
-        res.status(500).send('<h1>Error al guardar la factura ❌</h1>');
+        console.error("Error en PCOE (Cuentas por Pagar):", error);
+        res.status(500).send('<h1>Error al registrar la factura ❌</h1>');
+    } finally {
+        if (client) client.release();
     }
 });
-// =======================================================
-//   NUEVAS RUTAS PARA DETALLES Y PAGOS DE FACTURAS A SUPLIDORES
-// =======================================================
-
 // --- PÁGINA DE DETALLE DE UNA FACTURA ESPECÍFICA ---
 app.get('/factura-suplidor/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { id } = req.params;
@@ -4355,36 +4422,51 @@ app.get('/reporte-suplidor-pdf/:id', requireLogin, requireAdminOrCoord, async (r
     } catch (e) { res.status(500).send(e.message); } finally { if (client) client.release(); }
 });
 app.post('/cuentas-por-pagar/abonar', requireLogin, requireAdminOrCoord, async (req, res) => {
-    const { expenseId, paymentAmount, paymentMethod } = req.body;
+    // 1. EXTRAER fundSource (Esto es lo que faltaba)
+    const { expenseId, paymentAmount, paymentMethod, fundSource } = req.body;
+    
     let client;
     try {
         client = await pool.connect();
         await client.query('BEGIN');
 
-        // 1. Registrar el abono en el historial
+        // 2. Registrar el abono en el historial con su origen real
         await client.query(
             "INSERT INTO payment_history (expense_id, amount_paid, payment_method, fund_source) VALUES ($1, $2, $3, $4)",
-[expenseId, paymentAmount, paymentMethod || 'Efectivo', fundSource || 'Banco']
+            [
+                expenseId, 
+                paymentAmount, 
+                paymentMethod || 'Abono Directo', 
+                fundSource || 'Banco' // Si no viene nada, asumimos Banco
+            ]
         );
 
-        // 2. Actualizar el monto pagado acumulado en la factura
+        // 3. Obtener datos actuales de la factura
         const expenseRes = await client.query("SELECT amount, paid_amount FROM expenses WHERE id = $1", [expenseId]);
+        
+        if (expenseRes.rows.length === 0) {
+            throw new Error("Factura no encontrada");
+        }
+
         const expense = expenseRes.rows[0];
         const nuevoTotalPagado = parseFloat(expense.paid_amount || 0) + parseFloat(paymentAmount);
         
-        // 3. Determinar el nuevo estado
+        // 4. Determinar si la factura se cierra o sigue abonada
         let nuevoEstado = (nuevoTotalPagado >= parseFloat(expense.amount)) ? 'Pagada' : 'Abonada';
 
+        // 5. Actualizar la factura (Guardamos también el último fund_source usado)
         await client.query(
-            "UPDATE expenses SET paid_amount = $1, status = $2 WHERE id = $3",
-            [nuevoTotalPagado, nuevoEstado, expenseId]
+            "UPDATE expenses SET paid_amount = $1, status = $2, fund_source = $3 WHERE id = $4",
+            [nuevoTotalPagado, nuevoEstado, fundSource || 'Banco', expenseId]
         );
 
         await client.query('COMMIT');
         res.redirect('/cuentas-por-pagar');
+
     } catch (e) {
         if (client) await client.query('ROLLBACK');
-        res.status(500).send(e.message);
+        console.error("Error en Abono PCOE:", e.message);
+        res.status(500).send("Error al procesar el abono: " + e.message);
     } finally {
         if (client) client.release();
     }
