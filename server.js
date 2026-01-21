@@ -558,12 +558,14 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
             GROUP BY s.id, s.name
             ORDER BY total_deuda DESC`);
 
-        // 2. Consulta de facturas y del HISTORIAL DE ABONOS
-        let queryText = `
-            SELECT e.*, s.name as supplier_name 
-            FROM expenses e 
-            JOIN suppliers s ON e.supplier_id = s.id 
-            WHERE e.status != 'Pagada' AND e.caja_chica_ciclo_id IS NULL`;
+        // Solo mostramos facturas que NO vengan de caja chica y que tengan un balance pendiente mayor a 0
+let queryText = `
+    SELECT e.*, s.name as supplier_name 
+    FROM expenses e 
+    JOIN suppliers s ON e.supplier_id = s.id 
+    WHERE e.status != 'Pagada' 
+    AND e.caja_chica_ciclo_id IS NULL
+    AND (e.amount - COALESCE(e.paid_amount, 0)) > 0`;
         
         const params = [];
         if (supplierId) {
