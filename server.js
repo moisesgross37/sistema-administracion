@@ -4739,8 +4739,16 @@ app.get('/suplidores/:id/estado-de-cuenta', requireLogin, requireAdminOrCoord, a
                 </div>
             </body></html>
         `);
-    } catch (e) { res.status(500).send(e.message); } finally { if (client) client.release(); }
+    } catch (e) { 
+        console.error("Error en reporte:", e);
+        res.status(500).send(e.message); 
+    } finally { 
+        if (client) client.release(); 
+    }
 });
+
+// --- ESTE ES EL CIERRE DEFINITIVO DEL ARCHIVO ---
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`✅ Servidor de Administración corriendo en http://localhost:${PORT}`);
+    console.log(`✅ Servidor de Administración corriendo en puerto ${PORT}`);
 });
