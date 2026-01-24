@@ -3668,11 +3668,14 @@ app.get('/proyecto-detalle/:id', requireLogin, requireAdminOrCoord, async (req, 
         let paymentsHtml = payments.map(p => `
             <tr>
                 <td>${new Date(p.payment_date).toLocaleDateString()}</td>
-                <td style="font-weight:600; color:var(--success);">$${parseFloat(p.amount).toFixed(2)}</td>
+                <td style="font-weight:600; color:var(--success);">$${parseFloat(p.amount).toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
                 <td>${p.students_covered || 'N/A'}</td>
                 <td>${p.comment || ''}</td>
                 <td style="text-align: center;">
-                    <a href="/recibo-pago/${p.id}/pdf" target="_blank" class="btn" style="background-color: var(--info); color:white; padding: 6px 12px; font-size: 12px;">Recibo</a>
+                    <a href="/recibo-pago/${p.id}/pdf" target="_blank" class="btn" 
+                       style="background-color: #4e73df; color:white; padding: 6px 12px; font-size: 11px; font-weight: bold; text-decoration: none; border-radius: 4px; display: inline-block;">
+                       🖨️ Recibo
+                    </a>
                 </td>
             </tr>
         `).join('') || '<tr><td colspan="5">No hay pagos registrados.</td></tr>';
@@ -3680,16 +3683,19 @@ app.get('/proyecto-detalle/:id', requireLogin, requireAdminOrCoord, async (req, 
         let expensesHtml = expenses.map(e => `
             <tr>
                 <td>${new Date(e.expense_date).toLocaleDateString()}</td>
-                <td>${e.supplier_name}</td>
+                <td><b>${e.supplier_name}</b></td>
                 <td>${e.description}</td>
-                <td style="font-weight: 700; color: var(--danger);">$${parseFloat(e.amount).toFixed(2)}</td>
-                <td>${e.type || ''}</td>
+                <td style="font-weight: 700; color: var(--danger);">$${parseFloat(e.amount).toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+                <td><span style="font-size: 10px; background: #f8f9fc; padding: 2px 5px; border-radius: 4px;">${e.type || 'N/A'}</span></td>
                 <td style="text-align: center;">
-                    <a href="/desembolso/${e.id}/pdf" target="_blank" class="btn" style="background-color: var(--gray); color:white; padding: 6px 12px; font-size: 12px;">Imprimir</a>
+                    <a href="/desembolso/${e.id}/pdf" target="_blank" class="btn" 
+                       style="background-color: #5a5c69; color:white; padding: 6px 12px; font-size: 11px; font-weight: bold; text-decoration: none; border-radius: 4px; display: inline-block;">
+                       📄 Imprimir
+                    </a>
                 </td>
             </tr>
         `).join('') || '<tr><td colspan="6">No hay gastos registrados.</td></tr>';
-
+        
         let suppliersOptionsHtml = suppliers.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
 
         res.send(`
