@@ -3448,7 +3448,7 @@ app.get('/proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => 
         const totalGastado = expenses.reduce((sum, expense) => sum + parseFloat(expense.amount), 0);
         const balancePendiente = totalVenta - totalAbonado;
         const rentabilidad = totalAbonado - totalGastado;
-
+const rentabilidadProyectada = totalVenta - totalGastado;
         let adjustmentsHtml = adjustmentsResult.rows.map(adj => `
             <tr>
                 <td>${new Date(adj.fecha_ajuste).toLocaleString('es-DO')}</td>
@@ -3522,7 +3522,12 @@ app.get('/proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => 
                         <div class="summary-box"><h3>Total Gastado</h3><p class="amount orange">$${totalGastado.toFixed(2)}</p></div>
                         <div class="summary-box"><h3>Rentabilidad Actual</h3><p class="amount ${rentabilidad >= 0 ? 'blue' : 'red'}">$${rentabilidad.toFixed(2)}</p></div>
                     </div>
-                    
+                    // Añade este cuadro al final de la clase "summary"
+<div class="summary-box">
+    <h3>Rentabilidad Final (Proyectada)</h3>
+    <p class="amount" style="color: #4e73df;">$${rentabilidadProyectada.toFixed(2)}</p>
+    <small style="color: gray;">Ganancia total al cobrar el 100%</small>
+</div>
                     <hr style="margin: 40px 0;">
                     <h2>Historial de Ajustes al Monto de Venta</h2>
                     <table>
@@ -4738,7 +4743,99 @@ app.get('/suplidores/:id/estado-de-cuenta', requireLogin, requireAdminOrCoord, a
         if (client) client.release(); 
     }
 });
+// ==========================================
+// REPORTE GENERAL DE CUENTAS POR COBRAR (SISTEMA PCOE)
+// ==========================================
+app.get('/reporte-general-cobros', requireLogin, requireAdminOrCoord, async (req, res) => {
+    let client;
+    try {
+        client = await pool.connect();
 
+        // --- PUNTO 1: LA SUPER CONSULTA (El Motor) ---
+        const query = `
+            SELECT 
+                q.id, q.clientname, q.quotenumber, q.advisorname, q.status,
+                (COALESCE(q.preciofinalporestudiante * q.estudiantesparafacturar, 0) + 
+                 COALESCE((SELECT SUM(monto_ajuste) FROM ajustes_cotizacion WHERE quote_id = q.id), 0)) as venta_total,
+                COALESCE((SELECT SUM(amount) FROM payments WHERE quote_id = q.id), 0) as total_cobrado,
+                (SELECT MAX(payment_date) FROM payments WHERE quote_id = q.id) as ultimo_pago
+            FROM quotes q
+            WHERE q.status = 'activa' 
+              AND q.fecha_creacion >= '2025-08-01' -- Ajuste dinámico Ciclo Agosto-Agosto
+            ORDER BY ultimo_pago ASC;
+        `;
+
+        const result = await client.query(query);
+        
+        // --- PUNTO 2: LÓGICA DE SEGMENTACIÓN POR TRAMOS ---
+        const filasHtml = result.rows.map(p => {
+            const deuda = p.venta_total - p.total_cobrado;
+            const porcentajeDeuda = (deuda / p.venta_total) * 100;
+            
+            let zonaColor, zonaNombre;
+            if (porcentajeDeuda > 75) { zonaColor = '#e74a3b'; zonaNombre = 'ZONA ROJA (Crítica)'; }
+            else if (porcentajeDeuda > 50) { zonaColor = '#f6c23e'; zonaNombre = 'ZONA NARANJA (Media)'; }
+            else if (porcentajeDeuda > 25) { zonaColor = '#4e73df'; zonaNombre = 'ZONA AMARILLA (Baja)'; }
+            else { zonaColor = '#1cc88a'; zonaNombre = 'ZONA VERDE (Finalizando)'; }
+
+            return `
+                <tr style="border-left: 8px solid ${zonaColor};">
+                    <td>
+                        <b>${p.clientname}</b><br>
+                        <small style="color:gray;">${p.quotenumber} | Asesor: ${p.advisorname}</small>
+                    </td>
+                    <td>RD$ ${parseFloat(p.venta_total).toLocaleString()}</td>
+                    <td style="color:#1cc88a; font-weight:bold;">RD$ ${parseFloat(p.total_cobrado).toLocaleString()}</td>
+                    <td style="color:${zonaColor}; font-weight:bold;">RD$ ${deuda.toLocaleString()}</td>
+                    <td>
+                        <span style="background:${zonaColor}; color:white; padding:3px 8px; border-radius:12px; font-size:11px;">
+                            ${zonaNombre} (${porcentajeDeuda.toFixed(0)}%)
+                        </span>
+                    </td>
+                    <td>
+                        <a href="/proyecto-detalle/${p.id}" class="btn" style="padding:5px 10px; font-size:11px;">🔍 Ver Detalle</a>
+                        ${deuda === 0 ? '<span style="color:#1cc88a; font-weight:bold;">✅ Listo para Cierre</span>' : ''}
+                    </td>
+                </tr>
+            `;
+        }).join('');
+
+        // --- PUNTO 3: ENVIAR AL NAVEGADOR ---
+        res.send(`
+            <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}
+                <title>Reporte General de Cobros - PCOE</title>
+            </head><body>
+                <div class="container" style="max-width:1400px;">
+                    ${backToDashboardLink}
+                    <h1 style="margin-top:20px;">Control General de Cuentas por Cobrar</h1>
+                    <p>Ciclo Escolar Vigente: <b>Agosto 2025 - Agosto 2026</b></p>
+                    
+                    <table class="modern-table">
+                        <thead>
+                            <tr>
+                                <th>Centro / Proyecto</th>
+                                <th>Venta Total</th>
+                                <th>Total Cobrado</th>
+                                <th>Balance Pendiente</th>
+                                <th>Estado de Deuda</th>
+                                <th>Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${filasHtml || '<tr><td colspan="6" style="text-align:center;">No hay proyectos activos en este ciclo.</td></tr>'}
+                        </tbody>
+                    </table>
+                </div>
+            </body></html>
+        `);
+
+    } catch (e) {
+        console.error("Error en reporte cobros:", e);
+        res.status(500).send("Error al generar el reporte: " + e.message);
+    } finally {
+        if (client) client.release();
+    }
+});
 // --- CIERRE FINAL DEL SERVIDOR ---
 
 app.listen(PORT, () => {
