@@ -3260,12 +3260,12 @@ app.get('/ver-detalle-nomina/:payroll_id', requireLogin, requireAdminOrCoord, as
         client = await pool.connect();
         
         // CORRECCIÓN: Usamos payroll_records para asegurar que salgan los 15-16 empleados
-        const resDetalle = await client.query(`
-            SELECT DISTINCT e.id, e.nombre, e.name, e.base_salary as sueldo
-            FROM employees e
-            JOIN payroll_records pr ON e.id = pr.employee_id
-            WHERE pr.payroll_id = $1
-        `, [payroll_id]);
+      const resDetalle = await client.query(`
+    SELECT DISTINCT e.id, e.nombre, e.name, e.base_salary as sueldo
+    FROM employees e
+    JOIN payroll_records pr ON e.id = pr.employee_id
+    WHERE CAST(pr.payroll_id AS TEXT) = $1
+`, [payroll_id.toString()]);
 
         let filas = resDetalle.rows.map(emp => {
             const nombreMostrar = emp.nombre || emp.name || 'Empleado sin nombre';
