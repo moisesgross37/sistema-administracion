@@ -4747,82 +4747,131 @@ app.get('/suplidores/:id/estado-de-cuenta', requireLogin, requireAdminOrCoord, a
 // REPORTE GENERAL DE CUENTAS POR COBRAR (SISTEMA PCOE)
 // ==========================================
 app.get('/reporte-general-cobros', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { advisor } = req.query; // Filtro de asesor desde la URL
     let client;
     try {
         client = await pool.connect();
 
-        // --- PUNTO 1: LA SUPER CONSULTA (El Motor) ---
-        const query = `
+        // --- A. OBTENER LISTA DE ASESORES PARA EL FILTRO ---
+        const advisorsRes = await client.query("SELECT DISTINCT advisorname FROM quotes WHERE status = 'activa' ORDER BY advisorname");
+
+        // --- B. LA SUPER CONSULTA (Actualizada con Gastos) ---
+        let query = `
             SELECT 
                 q.id, q.clientname, q.quotenumber, q.advisorname, q.status,
                 (COALESCE(q.preciofinalporestudiante * q.estudiantesparafacturar, 0) + 
                  COALESCE((SELECT SUM(monto_ajuste) FROM ajustes_cotizacion WHERE quote_id = q.id), 0)) as venta_total,
                 COALESCE((SELECT SUM(amount) FROM payments WHERE quote_id = q.id), 0) as total_cobrado,
+                COALESCE((SELECT SUM(amount) FROM expenses WHERE quote_id = q.id), 0) as total_gastado,
                 (SELECT MAX(payment_date) FROM payments WHERE quote_id = q.id) as ultimo_pago
             FROM quotes q
             WHERE q.status = 'activa' 
-              AND q.fecha_creacion >= '2025-08-01' -- Ajuste dinámico Ciclo Agosto-Agosto
-            ORDER BY ultimo_pago ASC;
+              AND q.fecha_creacion >= '2025-08-01'
         `;
 
-        const result = await client.query(query);
+        const params = [];
+        if (advisor) {
+            params.push(advisor);
+            query += ` AND q.advisorname = $1`;
+        }
+        query += ` ORDER BY ultimo_pago ASC NULLS FIRST`;
+
+        const result = await client.query(query, params);
         
-        // --- PUNTO 2: LÓGICA DE SEGMENTACIÓN POR TRAMOS ---
+        // --- C. PROCESAMIENTO Y ESTADÍSTICAS GLOBALES ---
+        let globalVenta = 0, globalCobrado = 0, globalGastado = 0;
+        const hoy = new Date();
+
         const filasHtml = result.rows.map(p => {
-            const deuda = p.venta_total - p.total_cobrado;
-            const porcentajeDeuda = (deuda / p.venta_total) * 100;
+            const venta = parseFloat(p.venta_total || 0);
+            const cobrado = parseFloat(p.total_cobrado || 0);
+            const gastado = parseFloat(p.total_gastado || 0);
+            const deuda = venta - cobrado;
+            const porcentajeDeuda = venta > 0 ? (deuda / venta) * 100 : 0;
             
+            globalVenta += venta;
+            globalCobrado += cobrado;
+            globalGastado += gastado;
+
+            // Cálculo de días de inactividad
+            const ultPago = p.ultimo_pago ? new Date(p.ultimo_pago) : null;
+            const diasInactivo = ultPago ? Math.floor((hoy - ultPago) / (1000 * 60 * 60 * 24)) : '---';
+
+            // Lógica de Semáforo (Tus tramos originales)
             let zonaColor, zonaNombre;
-            if (porcentajeDeuda > 75) { zonaColor = '#e74a3b'; zonaNombre = 'ZONA ROJA (Crítica)'; }
-            else if (porcentajeDeuda > 50) { zonaColor = '#f6c23e'; zonaNombre = 'ZONA NARANJA (Media)'; }
-            else if (porcentajeDeuda > 25) { zonaColor = '#4e73df'; zonaNombre = 'ZONA AMARILLA (Baja)'; }
-            else { zonaColor = '#1cc88a'; zonaNombre = 'ZONA VERDE (Finalizando)'; }
+            if (porcentajeDeuda > 75) { zonaColor = '#e74a3b'; zonaNombre = 'ZONA ROJA'; }
+            else if (porcentajeDeuda > 50) { zonaColor = '#f6c23e'; zonaNombre = 'ZONA NARANJA'; }
+            else if (porcentajeDeuda > 25) { zonaColor = '#4e73df'; zonaNombre = 'ZONA AMARILLA'; }
+            else { zonaColor = '#1cc88a'; zonaNombre = 'ZONA VERDE'; }
 
             return `
-                <tr style="border-left: 8px solid ${zonaColor};">
+                <tr style="border-left: 10px solid ${zonaColor};">
                     <td>
                         <b>${p.clientname}</b><br>
                         <small style="color:gray;">${p.quotenumber} | Asesor: ${p.advisorname}</small>
                     </td>
-                    <td>RD$ ${parseFloat(p.venta_total).toLocaleString()}</td>
-                    <td style="color:#1cc88a; font-weight:bold;">RD$ ${parseFloat(p.total_cobrado).toLocaleString()}</td>
-                    <td style="color:${zonaColor}; font-weight:bold;">RD$ ${deuda.toLocaleString()}</td>
-                    <td>
-                        <span style="background:${zonaColor}; color:white; padding:3px 8px; border-radius:12px; font-size:11px;">
-                            ${zonaNombre} (${porcentajeDeuda.toFixed(0)}%)
-                        </span>
+                    <td style="text-align:right;">RD$ ${venta.toLocaleString()}</td>
+                    <td style="text-align:right; color:#1cc88a; font-weight:bold;">RD$ ${cobrado.toLocaleString()}</td>
+                    <td style="text-align:right; color:${deuda > 0 ? '#e74a3b' : '#1cc88a'}; font-weight:bold;">RD$ ${deuda.toLocaleString()}</td>
+                    <td style="text-align:center; font-weight:bold; color:${diasInactivo > 30 ? 'red' : 'inherit'};">
+                        ${diasInactivo} ${diasInactivo !== '---' ? 'días' : ''}
                     </td>
-                    <td>
-                        <a href="/proyecto-detalle/${p.id}" class="btn" style="padding:5px 10px; font-size:11px;">🔍 Ver Detalle</a>
-                        ${deuda === 0 ? '<span style="color:#1cc88a; font-weight:bold;">✅ Listo para Cierre</span>' : ''}
+                    <td style="text-align:center;">
+                        <a href="/proyecto-detalle/${p.id}" class="btn" style="padding:5px 10px; font-size:11px;">🔍 Ver</a>
+                        ${deuda <= 0 ? '<span title="Saldo Cero" style="font-size:18px; cursor:help;">🔒</span>' : ''}
                     </td>
                 </tr>
             `;
         }).join('');
 
-        // --- PUNTO 3: ENVIAR AL NAVEGADOR ---
+        const rentabilidadProyectada = globalVenta - globalGastado;
+
+        // --- D. ENVIAR AL NAVEGADOR ---
         res.send(`
             <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}
                 <title>Reporte General de Cobros - PCOE</title>
+                <style>
+                    .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin-bottom: 30px; }
+                    .stat-card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); border-top: 5px solid var(--primary); }
+                    .stat-card h3 { font-size: 12px; color: gray; margin: 0; text-transform: uppercase; letter-spacing: 1px; }
+                    .stat-card div { font-size: 1.5rem; font-weight: bold; margin-top: 10px; }
+                </style>
             </head><body>
                 <div class="container" style="max-width:1400px;">
                     ${backToDashboardLink}
-                    <h1 style="margin-top:20px;">Control General de Cuentas por Cobrar</h1>
-                    <p>Ciclo Escolar Vigente: <b>Agosto 2025 - Agosto 2026</b></p>
+                    
+                    <h1 style="margin-top:20px;">Control General de Cobros</h1>
+                    <p>Ciclo: <b>Agosto 2025 - Agosto 2026</b></p>
+
+                    <div class="stat-grid">
+                        <div class="stat-card"><h3>Venta Total Esperada</h3><div>RD$ ${globalVenta.toLocaleString()}</div></div>
+                        <div class="stat-card" style="border-top-color:#1cc88a;"><h3>Total Recaudado</h3><div style="color:#1cc88a;">RD$ ${globalCobrado.toLocaleString()}</div></div>
+                        <div class="stat-card" style="border-top-color:#e74a3b;"><h3>Balance en Calle</h3><div style="color:#e74a3b;">RD$ ${(globalVenta - globalCobrado).toLocaleString()}</div></div>
+                        <div class="stat-card" style="border-top-color:#4e73df;"><h3>Ganancia Proyectada</h3><div style="color:#4e73df;">RD$ ${rentabilidadProyectada.toLocaleString()}</div></div>
+                    </div>
+
+                    <form action="/reporte-general-cobros" method="GET" style="margin-bottom:20px; background:#f8f9fc; padding:15px; border-radius:8px; display:flex; align-items:center; gap:15px;">
+                        <label><b>Filtrar por Asesor:</b></label>
+                        <select name="advisor" onchange="this.form.submit()" style="padding:8px; border-radius:5px; border:1px solid #ddd;">
+                            <option value="">-- Todos los Asesores --</option>
+                            ${advisorsRes.rows.map(a => `<option value="${a.advisorname}" ${advisor === a.advisorname ? 'selected' : ''}>${a.advisorname}</option>`).join('')}
+                        </select>
+                        <a href="/reporte-general-cobros" style="font-size:12px; color:gray; text-decoration:none;">Limpiar filtros</a>
+                    </form>
                     
                     <table class="modern-table">
                         <thead>
                             <tr>
                                 <th>Centro / Proyecto</th>
-                                <th>Venta Total</th>
-                                <th>Total Cobrado</th>
-                                <th>Balance Pendiente</th>
-                                <th>Estado de Deuda</th>
-                                <th>Acciones</th>
+                                <th style="text-align:right;">Venta Total</th>
+                                <th style="text-align:right;">Cobrado</th>
+                                <th style="text-align:right;">Pendiente</th>
+                                <th style="text-align:center;">Inactividad</th>
+                                <th style="text-align:center;">Acciones</th>
                             </tr>
                         </thead>
                         <tbody>
-                            ${filasHtml || '<tr><td colspan="6" style="text-align:center;">No hay proyectos activos en este ciclo.</td></tr>'}
+                            ${filasHtml || '<tr><td colspan="6" style="text-align:center;">No hay proyectos para este filtro.</td></tr>'}
                         </tbody>
                     </table>
                 </div>
