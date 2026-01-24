@@ -3259,19 +3259,19 @@ app.get('/ver-detalle-nomina/:payroll_id', requireLogin, requireAdminOrCoord, as
     try {
         client = await pool.connect();
         
-        // Buscamos a todos los empleados que recibieron pago en este lote
+        // CORRECCIÓN: Usamos payroll_records para asegurar que salgan los 15-16 empleados
         const resDetalle = await client.query(`
-            SELECT DISTINCT e.id, e.nombre, e.name, e.salary, e.sueldo
+            SELECT DISTINCT e.id, e.nombre, e.name, e.base_salary as sueldo
             FROM employees e
-            JOIN payroll_extras pe ON e.id = pe.employee_id
-            WHERE pe.payroll_id = $1
+            JOIN payroll_records pr ON e.id = pr.employee_id
+            WHERE pr.payroll_id = $1
         `, [payroll_id]);
 
         let filas = resDetalle.rows.map(emp => {
-            const nombre = emp.nombre || emp.name;
+            const nombreMostrar = emp.nombre || emp.name || 'Empleado sin nombre';
             return `
             <tr>
-                <td style="font-weight:bold; padding:15px;">${nombre}</td>
+                <td style="font-weight:bold; padding:15px;">${nombreMostrar}</td>
                 <td style="text-align:center;">
                     <a href="/ver-recibo/${payroll_id}/${emp.id}" target="_blank" class="btn" style="background:#007bff; color:white; text-decoration:none; padding:5px 15px; font-size:12px;">🖨️ Imprimir Recibo Detallado</a>
                 </td>
@@ -3280,26 +3280,27 @@ app.get('/ver-detalle-nomina/:payroll_id', requireLogin, requireAdminOrCoord, as
 
         res.send(`
             <!DOCTYPE html><html lang="es">
-            <head>${commonHtmlHead}</head>
+            <head>${commonHtmlHead}
+                <title>Detalle Lote #${payroll_id}</title>
+            </head>
             <body>
                 <div class="container">
                     <a href="/historial-nomina" style="text-decoration:none; color:#007bff;">← Volver al Archivo</a>
                     <h1 style="margin-top:20px;">Detalle de Pagos: Lote #${payroll_id}</h1>
                     
-                    <table style="background:white; margin-top:30px;">
+                    <table class="modern-table" style="background:white; margin-top:30px; width:100%;">
                         <thead>
                             <tr><th>Colaborador</th><th style="text-align:center;">Acciones</th></tr>
                         </thead>
-                        <tbody>${filas}</tbody>
+                        <tbody>
+                            ${filas || '<tr><td colspan="2" style="text-align:center; padding:20px;">No se encontraron registros para este lote.</td></tr>'}
+                        </tbody>
                     </table>
 
-                    <div style="margin-top: 80px; border-top: 2px solid #ff4d4d; padding-top: 20px; background: #fff5f5; padding: 25px; border-radius: 12px; border: 1px dashed #ff4d4d;">
+                    <div style="margin-top: 80px; border: 1px dashed #ff4d4d; padding: 25px; border-radius: 12px; background: #fff5f5;">
                         <h4 style="color: #ff4d4d; margin-top: 0;">⚠️ Zona de Peligro</h4>
-                        <p style="font-size: 14px; color: #666; margin-bottom: 20px;">
-                            Si detectas un error masivo en este lote, puedes anularlo. 
-                            <b>Esta acción eliminará:</b> los recibos de esta quincena, los gastos generados en los proyectos y los abonos a préstamos realizados en esta sesión.
-                        </p>
-                        <button class="btn" style="background: #ff4d4d; color: white; padding: 12px 25px; font-weight: bold; border-radius: 6px; cursor: pointer; border: none;" onclick="anularLote(${payroll_id})">
+                        <p style="font-size: 14px; color: #666;">Si anulas este lote, se eliminarán los gastos en proyectos y abonos a préstamos.</p>
+                        <button class="btn" style="background: #ff4d4d; color: white; padding: 12px 25px;" onclick="anularLote(${payroll_id})">
                             Anular Nómina Completa
                         </button>
                     </div>
@@ -3307,24 +3308,17 @@ app.get('/ver-detalle-nomina/:payroll_id', requireLogin, requireAdminOrCoord, as
 
                 <script>
                     async function anularLote(id) {
-                        if(!confirm("¿ESTÁS TOTALMENTE SEGURO? Esta acción es irreversible y borrará todos los registros de esta quincena en la contabilidad y proyectos.")) return;
-                        
+                        if(!confirm("¿ESTÁS SEGURO? Esta acción borrará todo lo vinculado a esta quincena.")) return;
                         try {
                             const res = await fetch('/anular-nomina/' + id, { method: 'POST' });
                             const result = await res.json();
-                            if(result.success) {
-                                alert(result.message);
-                                window.location.href = "/historial-nomina";
-                            } else {
-                                alert("Error: " + result.message);
-                            }
-                        } catch(e) {
-                            alert("Error de conexión al intentar anular el lote.");
-                        }
+                            if(result.success) { alert(result.message); window.location.href = "/historial-nomina"; }
+                            else { alert("Error: " + result.message); }
+                        } catch(e) { alert("Error de conexión."); }
                     }
                 </script>
             </body></html>`);
-    } catch (e) { res.status(500).send(e.message); } finally { if (client) client.release(); }
+    } catch (e) { res.status(500).send("Error en detalle: " + e.message); } finally { if (client) client.release(); }
 });
 // =======================================================
 // NUEVA RUTA PARA GENERAR PDF DE RECIBO DE NÓMINA
