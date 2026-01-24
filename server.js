@@ -784,7 +784,8 @@ let queryText = `
                 </div>
             </div>
         </div>
-    </body></html>`);
+    </body></html>`
+                );
         app.post('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { 
         supplier_id, 
