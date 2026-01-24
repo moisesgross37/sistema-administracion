@@ -4734,7 +4734,7 @@ app.get('/suplidores/:id/estado-de-cuenta', requireLogin, requireAdminOrCoord, a
 });
 
 // --- CIERRE FINAL DEL SERVIDOR ---
-const PORT = process.env.PORT || 3000;
+
 app.listen(PORT, () => {
     console.log(`✅ Servidor PCOE activo en puerto ${PORT}`);
 });
