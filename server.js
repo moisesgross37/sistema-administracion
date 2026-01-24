@@ -786,6 +786,13 @@ let queryText = `
         </div>
     </body></html>`
                 );
+        } catch (e) {
+        console.error("Error en Cuentas por Pagar:", e);
+        res.status(500).send("Error en el servidor: " + e.message);
+    } finally {
+        if (client) client.release();
+    }
+});
         app.post('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { 
         supplier_id, 
