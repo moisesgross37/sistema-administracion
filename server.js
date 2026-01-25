@@ -4325,15 +4325,21 @@ app.post('/procesar-super-nomina', requireLogin, requireAdminOrCoord, async (req
             const netPay = parseFloat(entry.net_pay || 0);
             totalLote += netPay;
 
-            // 1. GUARDAR SUELDO BASE (Lo que le faltaba a la super nómina)
+            // 1. GUARDAR SUELDO BASE (Versión corregida para evitar el error de valor nulo)
             const recordRes = await client.query(
                 `INSERT INTO payroll_records 
                 (employee_id, pay_date, base_salary_paid, bonuses, deductions, net_pay, payroll_id) 
                 VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-                [entry.employee_id, pay_date || new Date(), entry.base_salary, entry.bonuses, entry.deductions, netPay, batchPayrollId]
+                [
+                    entry.employee_id, 
+                    pay_date || new Date(), 
+                    parseFloat(entry.base_salary || entry.sueldo || 0), // <--- Si no viene 'base_salary', busca 'sueldo' o pon 0
+                    parseFloat(entry.bonuses || 0), 
+                    parseFloat(entry.deductions || 0), 
+                    parseFloat(entry.net_pay || 0), 
+                    batchPayrollId
+                ]
             );
-            const newRecordId = recordRes.rows[0].id;
-
             // 2. Registrar Descuento de Préstamo
             if (entry.loan_id && entry.loan_deduction > 0) {
                 await client.query(
