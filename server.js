@@ -4363,11 +4363,16 @@ app.post('/procesar-super-nomina', requireLogin, requireAdminOrCoord, async (req
             }
         }
 
-        // 4. CREAR EL RESUMEN EN EL HISTORIAL (Para que el botón verde funcione)
+        // 4. CREAR EL RESUMEN EN EL HISTORIAL (Versión Blindada)
         await client.query(
-            `INSERT INTO payment_history (id, amount, payment_date, notes) 
-             VALUES ($1, $2, CURRENT_DATE, $3)`,
-            [batchPayrollId, totalLote, `${nomina.length} Colaboradores`]
+            `INSERT INTO payment_history (id, amount_paid, payment_date, payment_method, fund_source) 
+             VALUES ($1, $2, CURRENT_TIMESTAMP, $3, $4)`,
+            [
+                batchPayrollId, 
+                totalLote, 
+                'Súper Nómina', // Se guarda en payment_method
+                'Banco'         // Se guarda en fund_source
+            ]
         );
 
         await client.query('COMMIT');
