@@ -1765,19 +1765,14 @@ app.get('/desembolso/:expenseId/pdf', requireLogin, requireAdminOrCoord, async (
     }
 });
 
-// ==========================================
-// REPORTE MEJORADO DE CUENTAS POR COBRAR (SISTEMA PCOE)
-// ==========================================
 app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { advisor } = req.query; 
     let client;
     try {
         client = await pool.connect();
-
-        // 1. Lista de asesores para el filtro
         const advisorsRes = await client.query("SELECT DISTINCT advisorname FROM quotes WHERE status = 'activa' ORDER BY advisorname");
 
-        // 2. Consulta Maestra (Eliminamos filtros de fecha que daban error)
+        // USAMOS 'createdat' QUE ES EL NOMBRE REAL SEGÚN TU SHELL
         let query = `
             SELECT 
                 q.id, q.clientname, q.quotenumber, q.advisorname,
@@ -1787,7 +1782,8 @@ app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, re
                 COALESCE((SELECT SUM(amount) FROM expenses WHERE quote_id = q.id), 0) as total_gastado,
                 (SELECT MAX(payment_date) FROM payments WHERE quote_id = q.id) as ultimo_pago
             FROM quotes q
-            WHERE q.status = 'activa'
+            WHERE q.status = 'activa' 
+              AND q.createdat >= '2025-08-01'
         `;
 
         const params = [];
@@ -1795,89 +1791,88 @@ app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, re
             params.push(advisor);
             query += ` AND q.advisorname = $1`;
         }
-        query += ` ORDER BY q.clientname ASC`;
+        query += ` ORDER BY ultimo_pago ASC NULLS FIRST`;
 
         const result = await client.query(query, params);
         
-        // 3. Cálculos y Generación de HTML
         let globalVenta = 0, globalCobrado = 0, globalGastado = 0;
         const hoy = new Date();
+        const proyectosConDeuda = [];
+        const proyectosSaldados = [];
 
-        const filasHtml = result.rows.map(p => {
+        result.rows.forEach(p => {
             const venta = parseFloat(p.venta_total || 0);
             const cobrado = parseFloat(p.total_cobrado || 0);
-            const gastado = parseFloat(p.total_gastado || 0);
             const deuda = venta - cobrado;
-            
+
             globalVenta += venta;
             globalCobrado += cobrado;
-            globalGastado += gastado;
+            globalGastado += parseFloat(p.total_gastado || 0);
 
             const ultPago = p.ultimo_pago ? new Date(p.ultimo_pago) : null;
             const diasInactivo = ultPago ? Math.floor((hoy - ultPago) / (1000 * 60 * 60 * 24)) : '---';
-            const colorInactividad = (diasInactivo !== '---' && diasInactivo > 30) ? 'red' : 'inherit';
+            const item = { ...p, venta, cobrado, deuda, diasInactivo };
 
+            if (deuda > 0.01) { proyectosConDeuda.push(item); } 
+            else { proyectosSaldados.push(item); }
+        });
+
+        const generarFilas = (lista) => lista.map(p => {
+            const colorInactividad = (p.diasInactivo !== '---' && p.diasInactivo > 30) ? 'red' : 'inherit';
             return `
                 <tr>
-                    <td><b>${p.clientname}</b><br><small style="color:gray;">${p.quotenumber} | Asesor: ${p.advisorname}</small></td>
-                    <td style="text-align:right;">RD$ ${venta.toLocaleString()}</td>
-                    <td style="text-align:right; color:#1cc88a; font-weight:bold;">RD$ ${cobrado.toLocaleString()}</td>
-                    <td style="text-align:right; color:${deuda > 0 ? '#e74a3b' : '#1cc88a'}; font-weight:bold;">RD$ ${deuda.toLocaleString()}</td>
-                    <td style="text-align:center; font-weight:bold; color:${colorInactividad};">${diasInactivo} ${diasInactivo !== '---' ? 'días' : ''}</td>
-                    <td style="text-align:center;">
-                        <a href="/proyecto-detalle/${p.id}" class="btn" style="padding:5px 10px; font-size:11px;">🔍 Ver</a>
-                        ${deuda <= 0 ? '🔒' : ''}
-                    </td>
+                    <td><b>${p.clientname}</b><br><small>${p.quotenumber} | ${p.advisorname}</small></td>
+                    <td style="text-align:right;">RD$ ${p.venta.toLocaleString()}</td>
+                    <td style="text-align:right; color:#1cc88a;">RD$ ${p.cobrado.toLocaleString()}</td>
+                    <td style="text-align:right; color:${p.deuda > 0 ? '#e74a3b' : '#1cc88a'}; font-weight:bold;">RD$ ${p.deuda.toLocaleString()}</td>
+                    <td style="text-align:center; color:${colorInactividad}; font-weight:bold;">${p.diasInactivo} ${p.diasInactivo !== '---' ? 'días' : ''}</td>
+                    <td style="text-align:center;"><a href="/proyecto-detalle/${p.id}" class="btn" style="font-size:11px;">🔍 Ver</a></td>
                 </tr>`;
         }).join('');
-
-        const gananciaReal = globalVenta - globalGastado;
 
         res.send(`
             <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}
                 <style>
                     .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 25px; }
                     .stat-card { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); border-top: 5px solid #4e73df; }
-                    .stat-card h3 { font-size: 11px; color: gray; margin: 0; text-transform: uppercase; }
-                    .stat-card div { font-size: 1.4rem; font-weight: bold; margin-top: 8px; }
+                    .section-header { background: #f8f9fc; padding: 12px; margin: 30px 0 10px 0; border-radius: 5px; border-left: 5px solid #e74a3b; color: #5a5c69; font-weight: bold; }
                 </style>
             </head><body>
-                <div class="container" style="max-width:1350px;">
+                <div class="container" style="max-width:1400px;">
                     ${backToDashboardLink}
-                    <h2 style="margin-top:20px;">Reporte General de Cuentas por Cobrar</h2>
+                    <h2 style="margin-top:20px;">Reporte de Cobros Ciclo 2025-2026</h2>
 
                     <div class="stat-grid">
                         <div class="stat-card"><h3>Venta Total</h3><div>RD$ ${globalVenta.toLocaleString()}</div></div>
                         <div class="stat-card" style="border-top-color:#1cc88a;"><h3>Cobrado</h3><div style="color:#1cc88a;">RD$ ${globalCobrado.toLocaleString()}</div></div>
                         <div class="stat-card" style="border-top-color:#e74a3b;"><h3>Pendiente</h3><div style="color:#e74a3b;">RD$ ${(globalVenta - globalCobrado).toLocaleString()}</div></div>
-                        <div class="stat-card" style="border-top-color:#4e73df;"><h3>Ganancia Real</h3><div style="color:#4e73df;">RD$ ${gananciaReal.toLocaleString()}</div></div>
+                        <div class="stat-card" style="border-top-color:#4e73df;"><h3>Ganancia Real</h3><div style="color:#4e73df;">RD$ ${(globalVenta - globalGastado).toLocaleString()}</div></div>
                     </div>
 
-                    <form action="/cuentas-por-cobrar" method="GET" style="margin-bottom:20px; background:#f8f9fc; padding:15px; border-radius:8px; display:flex; align-items:center; gap:15px;">
-                        <label><b>Asesor:</b></label>
-                        <select name="advisor" onchange="this.form.submit()" style="padding:5px; border-radius:5px;">
+                    <form action="/cuentas-por-cobrar" method="GET" style="margin-bottom:20px; display:flex; gap:10px; align-items:center;">
+                        <label>Filtrar Asesor:</label>
+                        <select name="advisor" onchange="this.form.submit()" style="padding:5px;">
                             <option value="">-- Todos --</option>
                             ${advisorsRes.rows.map(a => `<option value="${a.advisorname}" ${advisor === a.advisorname ? 'selected' : ''}>${a.advisorname}</option>`).join('')}
                         </select>
-                        <a href="/cuentas-por-cobrar" style="font-size:12px; color:gray; text-decoration:none;">Limpiar</a>
                     </form>
 
+                    <div class="section-header">⚠️ CUENTAS ACTIVAS (PRIORIDAD POR INACTIVIDAD)</div>
                     <table class="modern-table">
-                        <thead>
-                            <tr>
-                                <th>Proyecto</th><th style="text-align:right;">Venta</th><th style="text-align:right;">Cobrado</th><th style="text-align:right;">Pendiente</th><th style="text-align:center;">Inactividad</th><th style="text-align:center;">Acciones</th>
-                            </tr>
-                        </thead>
-                        <tbody>${filasHtml || '<tr><td colspan="6" style="text-align:center;">No hay datos activos.</td></tr>'}</tbody>
+                        <thead><tr><th>Proyecto</th><th>Venta</th><th>Cobrado</th><th>Pendiente</th><th>Inactividad</th><th>Acciones</th></tr></thead>
+                        <tbody>${generarFilas(proyectosConDeuda) || '<tr><td colspan="6" style="text-align:center;">No hay cuentas pendientes.</td></tr>'}</tbody>
+                    </table>
+
+                    <div class="section-header" style="border-left-color:#1cc88a; margin-top:50px; opacity:0.7;">✅ PROYECTOS SALDADOS O CON CRÉDITO</div>
+                    <table class="modern-table" style="opacity:0.7;">
+                        <thead><tr><th>Proyecto</th><th>Venta</th><th>Cobrado</th><th>Diferencia</th><th>Último Pago</th><th>Acciones</th></tr></thead>
+                        <tbody>${generarFilas(proyectosSaldados) || '<tr><td colspan="6" style="text-align:center;">No hay proyectos saldados.</td></tr>'}</tbody>
                     </table>
                 </div>
             </body></html>`);
-    } catch (e) {
-        res.status(500).send("Error en reporte: " + e.message);
-    } finally {
-        if (client) client.release();
-    }
+    } catch (e) { res.status(500).send("Error: " + e.message); } finally { if (client) client.release(); }
 });
+
 
 app.get('/reporte-gastos', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { startDate, endDate, cycleId, missingDesc } = req.query;
