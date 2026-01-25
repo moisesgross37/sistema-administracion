@@ -1765,79 +1765,120 @@ app.get('/desembolso/:expenseId/pdf', requireLogin, requireAdminOrCoord, async (
     }
 });
 
+// ==========================================
+// REPORTE MEJORADO DE CUENTAS POR COBRAR (SISTEMA PCOE)
+// ==========================================
 app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { advisor } = req.query; // Capturamos el filtro de asesor
+    let client;
     try {
-        const client = await pool.connect();
-        
-        // --- CONSULTA SQL MEJORADA ---
-        // Ahora también obtiene la suma de todos los ajustes para cada cotización.
-        const result = await client.query(`
-            SELECT
-                q.id as quote_id,
-                q.quotenumber,
-                q.clientname,
-                q.preciofinalporestudiante,
-                q.estudiantesparafacturar,
-                COALESCE(p.total_abonado, 0) as total_abonado,
-                COALESCE(adj.total_ajustado, 0) as total_ajustado
+        client = await pool.connect();
+
+        // 1. Obtener lista de asesores para el menú desplegable
+        const advisorsRes = await client.query("SELECT DISTINCT advisorname FROM quotes WHERE status = 'activa' ORDER BY advisorname");
+
+        // 2. La Consulta Maestra (Ventas + Cobros + Gastos + Ajustes)
+        let query = `
+            SELECT 
+                q.id, q.clientname, q.quotenumber, q.advisorname,
+                (COALESCE(q.preciofinalporestudiante * q.estudiantesparafacturar, 0) + 
+                 COALESCE((SELECT SUM(monto_ajuste) FROM ajustes_cotizacion WHERE quote_id = q.id), 0)) as venta_total,
+                COALESCE((SELECT SUM(amount) FROM payments WHERE quote_id = q.id), 0) as total_cobrado,
+                COALESCE((SELECT SUM(amount) FROM expenses WHERE quote_id = q.id), 0) as total_gastado,
+                (SELECT MAX(payment_date) FROM payments WHERE quote_id = q.id) as ultimo_pago
             FROM quotes q
-            LEFT JOIN (
-                SELECT quote_id, SUM(amount) as total_abonado
-                FROM payments
-                GROUP BY quote_id
-            ) p ON q.id = p.quote_id
-            LEFT JOIN (
-                SELECT quote_id, SUM(monto_ajuste) as total_ajustado
-                FROM ajustes_cotizacion
-                GROUP BY quote_id
-            ) adj ON q.id = adj.quote_id
-            WHERE q.status = 'activa'
-            ORDER BY q.clientname ASC;
-        `);
-        const projects = result.rows;
-        client.release();
+            WHERE q.status = 'activa' 
+              AND q.fecha_creacion >= '2025-08-01'
+        `;
 
-        let totalGeneralVenta = 0;
-        let totalGeneralAbonado = 0;
-
-        let projectsHtml = projects.map(p => {
-            // --- CÁLCULO CORREGIDO ---
-            // Se calcula el monto original y se le suman los ajustes.
-            const montoOriginal = parseFloat(p.preciofinalporestudiante || 0) * parseFloat(p.estudiantesparafacturar || 0);
-            const totalAjustes = parseFloat(p.total_ajustado || 0);
-            const totalVenta = montoOriginal + totalAjustes;
-
-            const totalAbonado = parseFloat(p.total_abonado);
-            const balancePendiente = totalVenta - totalAbonado;
-            totalGeneralVenta += totalVenta;
-            totalGeneralAbonado += totalAbonado;
-            return `<tr><td>${p.clientname}</td><td>${p.quotenumber}</td><td>$${totalVenta.toFixed(2)}</td><td style="color: green;">$${totalAbonado.toFixed(2)}</td><td style="color: red; font-weight: bold;">$${balancePendiente.toFixed(2)}</td></tr>`;
-        }).join('');
-        
-        const totalGeneralPendiente = totalGeneralVenta - totalGeneralAbonado;
-
-        if (projects.length === 0) {
-            projectsHtml = '<tr><td colspan="5">No hay cuentas por cobrar activas.</td></tr>';
+        const params = [];
+        if (advisor) {
+            params.push(advisor);
+            query += ` AND q.advisorname = $1`;
         }
+        query += ` ORDER BY ultimo_pago ASC NULLS FIRST`;
 
+        const result = await client.query(query, params);
+        
+        // 3. Cálculos de los 4 Cuadros Superiores
+        let globalVenta = 0, globalCobrado = 0, globalGastado = 0;
+        const hoy = new Date();
+
+        const filasHtml = result.rows.map(p => {
+            const venta = parseFloat(p.venta_total || 0);
+            const cobrado = parseFloat(p.total_cobrado || 0);
+            const gastado = parseFloat(p.total_gastado || 0);
+            const deuda = venta - cobrado;
+            
+            globalVenta += venta;
+            globalCobrado += cobrado;
+            globalGastado += gastado;
+
+            // Lógica de Inactividad (Número en rojo si > 30 días)
+            const ultPago = p.ultimo_pago ? new Date(p.ultimo_pago) : null;
+            const diasInactivo = ultPago ? Math.floor((hoy - ultPago) / (1000 * 60 * 60 * 24)) : '---';
+            const colorInactividad = diasInactivo > 30 ? 'red' : 'inherit';
+
+            return `
+                <tr>
+                    <td><b>${p.clientname}</b><br><small style="color:gray;">${p.quotenumber} | Asesor: ${p.advisorname}</small></td>
+                    <td style="text-align:right;">RD$ ${venta.toLocaleString()}</td>
+                    <td style="text-align:right; color:#1cc88a;">RD$ ${cobrado.toLocaleString()}</td>
+                    <td style="text-align:right; color:${deuda > 0 ? '#e74a3b' : '#1cc88a'}; font-weight:bold;">RD$ ${deuda.toLocaleString()}</td>
+                    <td style="text-align:center; color:${colorInactividad}; font-weight:bold;">${diasInactivo} ${diasInactivo !== '---' ? 'días' : ''}</td>
+                    <td style="text-align:center;">
+                        <a href="/proyecto-detalle/${p.id}" class="btn" style="padding:5px 10px; font-size:11px;">🔍 Ver</a>
+                        ${deuda <= 0 ? '🔒' : ''}
+                    </td>
+                </tr>`;
+        }).join('');
+
+        const rentabilidad = globalVenta - globalGastado;
+
+        // 4. El Diseño Final (HTML + CSS)
         res.send(`
-            <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
-                <div class="container">
+            <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}
+                <style>
+                    .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 25px; }
+                    .stat-card { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); border-top: 5px solid #4e73df; }
+                    .stat-card h3 { font-size: 11px; color: gray; margin: 0; text-transform: uppercase; }
+                    .stat-card div { font-size: 1.3rem; font-weight: bold; margin-top: 8px; }
+                </style>
+            </head><body>
+                <div class="container" style="max-width:1300px;">
                     ${backToDashboardLink}
-                    <h2>Reporte General de Cuentas por Cobrar</h2>
-                    <div class="summary">
-                        <div class="summary-box"><h3>Monto Total por Cobrar</h3><p class="amount">$${totalGeneralVenta.toFixed(2)}</p></div>
-                        <div class="summary-box"><h3>Total Abonado General</h3><p class="amount green">$${totalGeneralAbonado.toFixed(2)}</p></div>
-                        <div class="summary-box"><h3>Balance Pendiente General</h3><p class="amount red">$${totalGeneralPendiente.toFixed(2)}</p></div>
+                    <h2 style="margin-top:20px;">Reporte General de Cobros</h2>
+
+                    <div class="stat-grid">
+                        <div class="stat-card"><h3>Venta Total</h3><div>RD$ ${globalVenta.toLocaleString()}</div></div>
+                        <div class="stat-card" style="border-top-color:#1cc88a;"><h3>Cobrado</h3><div style="color:#1cc88a;">RD$ ${globalCobrado.toLocaleString()}</div></div>
+                        <div class="stat-card" style="border-top-color:#e74a3b;"><h3>Pendiente</h3><div style="color:#e74a3b;">RD$ ${(globalVenta - globalCobrado).toLocaleString()}</div></div>
+                        <div class="stat-card" style="border-top-color:#4e73df;"><h3>Ganancia Real</h3><div style="color:#4e73df;">RD$ ${rentabilidad.toLocaleString()}</div></div>
                     </div>
-                    <table><thead><tr><th>Cliente</th><th># Cotización</th><th>Monto Total</th><th>Total Abonado</th><th>Balance Pendiente</th></tr></thead><tbody>${projectsHtml}</tbody></table>
+
+                    <form action="/cuentas-por-cobrar" method="GET" style="margin-bottom:20px; background:#f8f9fc; padding:15px; border-radius:8px; display:flex; align-items:center; gap:15px;">
+                        <label>Filtrar por Asesor:</label>
+                        <select name="advisor" onchange="this.form.submit()" style="padding:5px;">
+                            <option value="">-- Todos --</option>
+                            ${advisorsRes.rows.map(a => `<option value="${a.advisorname}" ${advisor === a.advisorname ? 'selected' : ''}>${a.advisorname}</option>`).join('')}
+                        </select>
+                        <a href="/cuentas-por-cobrar" style="font-size:11px; color:gray;">Limpiar</a>
+                    </form>
+
+                    <table class="modern-table">
+                        <thead><tr><th>Proyecto</th><th style="text-align:right;">Venta</th><th style="text-align:right;">Cobrado</th><th style="text-align:right;">Pendiente</th><th style="text-align:center;">Inactividad</th><th style="text-align:center;">Acciones</th></tr></thead>
+                        <tbody>${filasHtml || '<tr><td colspan="6" style="text-align:center;">No hay datos.</td></tr>'}</tbody>
+                    </table>
                 </div>
             </body></html>`);
-    } catch (error) {
-        console.error("Error al generar reporte de cxc:", error);
-        res.status(500).send('<h1>Error al cargar el reporte ❌</h1>');
+
+    } catch (e) {
+        res.status(500).send("Error: " + e.message);
+    } finally {
+        if (client) client.release();
     }
 });
+
 app.get('/reporte-gastos', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { startDate, endDate, cycleId, missingDesc } = req.query;
     let client;
