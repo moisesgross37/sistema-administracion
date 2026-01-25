@@ -1766,18 +1766,18 @@ app.get('/desembolso/:expenseId/pdf', requireLogin, requireAdminOrCoord, async (
 });
 
 // ==========================================
-// REPORTE MEJORADO DE CUENTAS POR COBRAR (SISTEMA PCOE)
+// REPORTE MEJORADO DE CUENTAS POR COBRAR (SISTEMA PCOE) - VERSIÓN SIN ERROR DE FECHA
 // ==========================================
 app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, res) => {
-    const { advisor } = req.query; // Capturamos el filtro de asesor
+    const { advisor } = req.query; 
     let client;
     try {
         client = await pool.connect();
 
-        // 1. Obtener lista de asesores para el menú desplegable
+        // 1. Obtener lista de asesores para el filtro
         const advisorsRes = await client.query("SELECT DISTINCT advisorname FROM quotes WHERE status = 'activa' ORDER BY advisorname");
 
-        // 2. La Consulta Maestra (Ventas + Cobros + Gastos + Ajustes)
+        // 2. La Consulta Maestra (Sin el filtro de fecha_creacion que daba error)
         let query = `
             SELECT 
                 q.id, q.clientname, q.quotenumber, q.advisorname,
@@ -1785,10 +1785,9 @@ app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, re
                  COALESCE((SELECT SUM(monto_ajuste) FROM ajustes_cotizacion WHERE quote_id = q.id), 0)) as venta_total,
                 COALESCE((SELECT SUM(amount) FROM payments WHERE quote_id = q.id), 0) as total_cobrado,
                 COALESCE((SELECT SUM(amount) FROM expenses WHERE quote_id = q.id), 0) as total_gastado,
-                (SELECT MAX(payment_date) FROM payments WHERE quote_id = q.id) as ultimo_pago
+                (SELECT MAX(date) FROM payments WHERE quote_id = q.id) as ultimo_pago
             FROM quotes q
-            WHERE q.status = 'activa' 
-              AND q.fecha_creacion >= '2025-08-01'
+            WHERE q.status = 'activa'
         `;
 
         const params = [];
@@ -1796,11 +1795,11 @@ app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, re
             params.push(advisor);
             query += ` AND q.advisorname = $1`;
         }
-        query += ` ORDER BY ultimo_pago ASC NULLS FIRST`;
+        query += ` ORDER BY q.clientname ASC`;
 
         const result = await client.query(query, params);
         
-        // 3. Cálculos de los 4 Cuadros Superiores
+        // 3. Cálculos y Generación de Filas
         let globalVenta = 0, globalCobrado = 0, globalGastado = 0;
         const hoy = new Date();
 
@@ -1814,18 +1813,18 @@ app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, re
             globalCobrado += cobrado;
             globalGastado += gastado;
 
-            // Lógica de Inactividad (Número en rojo si > 30 días)
+            // Inactividad
             const ultPago = p.ultimo_pago ? new Date(p.ultimo_pago) : null;
             const diasInactivo = ultPago ? Math.floor((hoy - ultPago) / (1000 * 60 * 60 * 24)) : '---';
-            const colorInactividad = diasInactivo > 30 ? 'red' : 'inherit';
+            const colorInactividad = (diasInactivo !== '---' && diasInactivo > 30) ? 'red' : 'inherit';
 
             return `
                 <tr>
                     <td><b>${p.clientname}</b><br><small style="color:gray;">${p.quotenumber} | Asesor: ${p.advisorname}</small></td>
                     <td style="text-align:right;">RD$ ${venta.toLocaleString()}</td>
-                    <td style="text-align:right; color:#1cc88a;">RD$ ${cobrado.toLocaleString()}</td>
+                    <td style="text-align:right; color:#1cc88a; font-weight:bold;">RD$ ${cobrado.toLocaleString()}</td>
                     <td style="text-align:right; color:${deuda > 0 ? '#e74a3b' : '#1cc88a'}; font-weight:bold;">RD$ ${deuda.toLocaleString()}</td>
-                    <td style="text-align:center; color:${colorInactividad}; font-weight:bold;">${diasInactivo} ${diasInactivo !== '---' ? 'días' : ''}</td>
+                    <td style="text-align:center; font-weight:bold; color:${colorInactividad};">${diasInactivo} ${diasInactivo !== '---' ? 'días' : ''}</td>
                     <td style="text-align:center;">
                         <a href="/proyecto-detalle/${p.id}" class="btn" style="padding:5px 10px; font-size:11px;">🔍 Ver</a>
                         ${deuda <= 0 ? '🔒' : ''}
@@ -1833,45 +1832,47 @@ app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, re
                 </tr>`;
         }).join('');
 
-        const rentabilidad = globalVenta - globalGastado;
+        const gananciaReal = globalVenta - globalGastado;
 
-        // 4. El Diseño Final (HTML + CSS)
         res.send(`
             <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}
                 <style>
                     .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 25px; }
                     .stat-card { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); border-top: 5px solid #4e73df; }
                     .stat-card h3 { font-size: 11px; color: gray; margin: 0; text-transform: uppercase; }
-                    .stat-card div { font-size: 1.3rem; font-weight: bold; margin-top: 8px; }
+                    .stat-card div { font-size: 1.4rem; font-weight: bold; margin-top: 8px; }
                 </style>
             </head><body>
-                <div class="container" style="max-width:1300px;">
+                <div class="container" style="max-width:1350px;">
                     ${backToDashboardLink}
-                    <h2 style="margin-top:20px;">Reporte General de Cobros</h2>
+                    <h2 style="margin-top:20px;">Reporte General de Cuentas por Cobrar</h2>
 
                     <div class="stat-grid">
                         <div class="stat-card"><h3>Venta Total</h3><div>RD$ ${globalVenta.toLocaleString()}</div></div>
                         <div class="stat-card" style="border-top-color:#1cc88a;"><h3>Cobrado</h3><div style="color:#1cc88a;">RD$ ${globalCobrado.toLocaleString()}</div></div>
                         <div class="stat-card" style="border-top-color:#e74a3b;"><h3>Pendiente</h3><div style="color:#e74a3b;">RD$ ${(globalVenta - globalCobrado).toLocaleString()}</div></div>
-                        <div class="stat-card" style="border-top-color:#4e73df;"><h3>Ganancia Real</h3><div style="color:#4e73df;">RD$ ${rentabilidad.toLocaleString()}</div></div>
+                        <div class="stat-card" style="border-top-color:#4e73df;"><h3>Ganancia Proyectada</h3><div style="color:#4e73df;">RD$ ${gananciaReal.toLocaleString()}</div></div>
                     </div>
 
                     <form action="/cuentas-por-cobrar" method="GET" style="margin-bottom:20px; background:#f8f9fc; padding:15px; border-radius:8px; display:flex; align-items:center; gap:15px;">
-                        <label>Filtrar por Asesor:</label>
-                        <select name="advisor" onchange="this.form.submit()" style="padding:5px;">
+                        <label><b>Asesor:</b></label>
+                        <select name="advisor" onchange="this.form.submit()" style="padding:5px; border-radius:5px;">
                             <option value="">-- Todos --</option>
                             ${advisorsRes.rows.map(a => `<option value="${a.advisorname}" ${advisor === a.advisorname ? 'selected' : ''}>${a.advisorname}</option>`).join('')}
                         </select>
-                        <a href="/cuentas-por-cobrar" style="font-size:11px; color:gray;">Limpiar</a>
+                        <a href="/cuentas-por-cobrar" style="font-size:12px; color:gray; text-decoration:none;">Limpiar</a>
                     </form>
 
                     <table class="modern-table">
-                        <thead><tr><th>Proyecto</th><th style="text-align:right;">Venta</th><th style="text-align:right;">Cobrado</th><th style="text-align:right;">Pendiente</th><th style="text-align:center;">Inactividad</th><th style="text-align:center;">Acciones</th></tr></thead>
+                        <thead>
+                            <tr>
+                                <th>Proyecto</th><th style="text-align:right;">Venta</th><th style="text-align:right;">Cobrado</th><th style="text-align:right;">Pendiente</th><th style="text-align:center;">Inactividad</th><th style="text-align:center;">Acciones</th>
+                            </tr>
+                        </thead>
                         <tbody>${filasHtml || '<tr><td colspan="6" style="text-align:center;">No hay datos.</td></tr>'}</tbody>
                     </table>
                 </div>
             </body></html>`);
-
     } catch (e) {
         res.status(500).send("Error: " + e.message);
     } finally {
