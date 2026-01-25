@@ -4311,13 +4311,12 @@ app.get('/ver-recibo/:payroll_id/:employee_id', requireLogin, requireAdminOrCoor
     } catch (e) { res.status(500).send(e.message); } finally { if (client) client.release(); }
 });
 app.post('/procesar-super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => {
-    const { nomina, pay_date } = req.body; // Asegúrate de enviar la fecha desde el frente
+    const { nomina, pay_date } = req.body;
     let client;
     try {
         client = await pool.connect();
         await client.query('BEGIN');
 
-        // Generamos el ID Único para TODO el lote
         const batchPayrollId = Date.now(); 
         let totalLote = 0;
 
@@ -4325,7 +4324,7 @@ app.post('/procesar-super-nomina', requireLogin, requireAdminOrCoord, async (req
             const netPay = parseFloat(entry.net_pay || 0);
             totalLote += netPay;
 
-            // 1. GUARDAR SUELDO BASE (Versión corregida para evitar el error de valor nulo)
+            // 1. GUARDAR SUELDO BASE (Corregido con RETURNING id)
             const recordRes = await client.query(
                 `INSERT INTO payroll_records 
                 (employee_id, pay_date, base_salary_paid, bonuses, deductions, net_pay, payroll_id) 
@@ -4333,46 +4332,56 @@ app.post('/procesar-super-nomina', requireLogin, requireAdminOrCoord, async (req
                 [
                     entry.employee_id, 
                     pay_date || new Date(), 
-                    parseFloat(entry.base_salary || entry.sueldo || 0), // <--- Si no viene 'base_salary', busca 'sueldo' o pon 0
+                    parseFloat(entry.base_salary || entry.sueldo || 0), 
                     parseFloat(entry.bonuses || 0), 
                     parseFloat(entry.deductions || 0), 
-                    parseFloat(entry.net_pay || 0), 
+                    netPay, 
                     batchPayrollId
                 ]
             );
-            // 2. Registrar Descuento de Préstamo
+            
+            // Definimos el ID que acabamos de crear para usarlo en préstamos
+            const newRecordId = recordRes.rows[0].id;
+
+            // 2. Registrar Descuento de Préstamo (Usando el ID de arriba)
             if (entry.loan_id && entry.loan_deduction > 0) {
                 await client.query(
                     `INSERT INTO loan_payments (loan_id, payment_date, amount_paid, payment_method, payroll_record_id) 
                      VALUES ($1, CURRENT_DATE, $2, 'Descuento Nómina', $3)`,
                     [entry.loan_id, entry.loan_deduction, newRecordId]
                 );
-                // ... (aquí sigue tu lógica de verificar si se saldó el préstamo)
             }
 
-            // 3. Registrar Extras y Gastos
+            // 3. Registrar Extras y AFECTAR CENTROS (Aquí estaba el fallo)
             for (const extra of entry.extras) {
-                if (parseFloat(extra.amount) > 0) {
+                const montoExtra = parseFloat(extra.amount || 0);
+                const centroId = extra.quote_id || extra.centro_id || extra.proyecto_id; // Atrapamos el ID del centro
+
+                if (montoExtra > 0) {
+                    // Guardamos el extra vinculado al centro
                     await client.query(
-                        `INSERT INTO payroll_extras (employee_id, amount, description, payroll_id) 
-                         VALUES ($1, $2, $3, $4)`,
-                        [entry.employee_id, extra.amount, extra.desc, batchPayrollId]
+                        `INSERT INTO payroll_extras (employee_id, quote_id, amount, description, payroll_id) 
+                         VALUES ($1, $2, $3, $4, $5)`,
+                        [entry.employee_id, centroId || null, montoExtra, extra.desc, batchPayrollId]
                     );
-                    // ... (aquí sigue tu lógica de insertar en expenses)
+                    
+                    // SI HAY CENTRO: Insertamos el Gasto para que se reste de la utilidad
+                    if (centroId) {
+                        await client.query(
+                            `INSERT INTO expenses (quote_id, amount, description, expense_date, supplier_id, type) 
+                             VALUES ($1, $2, $3, CURRENT_DATE, (SELECT id FROM suppliers LIMIT 1), 'Nómina Interna')`,
+                            [centroId, montoExtra, `Pago Nómina Extra: ${extra.desc}`]
+                        );
+                    }
                 }
             }
         }
 
-        // 4. CREAR EL RESUMEN EN EL HISTORIAL (Versión Blindada)
+        // 4. CREAR EL RESUMEN EN EL HISTORIAL (Blindado)
         await client.query(
             `INSERT INTO payment_history (id, amount_paid, payment_date, payment_method, fund_source) 
              VALUES ($1, $2, CURRENT_TIMESTAMP, $3, $4)`,
-            [
-                batchPayrollId, 
-                totalLote, 
-                'Súper Nómina', // Se guarda en payment_method
-                'Banco'         // Se guarda en fund_source
-            ]
+            [batchPayrollId, totalLote, 'Súper Nómina', 'Banco']
         );
 
         await client.query('COMMIT');
@@ -4380,6 +4389,7 @@ app.post('/procesar-super-nomina', requireLogin, requireAdminOrCoord, async (req
 
     } catch (e) {
         if (client) await client.query('ROLLBACK');
+        console.error("Error crítico:", e.message);
         res.status(500).json({ success: false, message: e.message });
     } finally {
         if (client) client.release();
