@@ -1766,7 +1766,7 @@ app.get('/desembolso/:expenseId/pdf', requireLogin, requireAdminOrCoord, async (
 });
 
 // ==========================================
-// REPORTE MEJORADO DE CUENTAS POR COBRAR (SISTEMA PCOE) - VERSIÓN SIN ERROR DE FECHA
+// REPORTE MEJORADO DE CUENTAS POR COBRAR (SISTEMA PCOE)
 // ==========================================
 app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { advisor } = req.query; 
@@ -1774,10 +1774,10 @@ app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, re
     try {
         client = await pool.connect();
 
-        // 1. Obtener lista de asesores para el filtro
+        // 1. Lista de asesores para el filtro
         const advisorsRes = await client.query("SELECT DISTINCT advisorname FROM quotes WHERE status = 'activa' ORDER BY advisorname");
 
-        // 2. La Consulta Maestra (Sin el filtro de fecha_creacion que daba error)
+        // 2. Consulta Maestra (Eliminamos filtros de fecha que daban error)
         let query = `
             SELECT 
                 q.id, q.clientname, q.quotenumber, q.advisorname,
@@ -1785,7 +1785,7 @@ app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, re
                  COALESCE((SELECT SUM(monto_ajuste) FROM ajustes_cotizacion WHERE quote_id = q.id), 0)) as venta_total,
                 COALESCE((SELECT SUM(amount) FROM payments WHERE quote_id = q.id), 0) as total_cobrado,
                 COALESCE((SELECT SUM(amount) FROM expenses WHERE quote_id = q.id), 0) as total_gastado,
-                (SELECT MAX(date) FROM payments WHERE quote_id = q.id) as ultimo_pago
+                (SELECT MAX(payment_date) FROM payments WHERE quote_id = q.id) as ultimo_pago
             FROM quotes q
             WHERE q.status = 'activa'
         `;
@@ -1799,7 +1799,7 @@ app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, re
 
         const result = await client.query(query, params);
         
-        // 3. Cálculos y Generación de Filas
+        // 3. Cálculos y Generación de HTML
         let globalVenta = 0, globalCobrado = 0, globalGastado = 0;
         const hoy = new Date();
 
@@ -1813,7 +1813,6 @@ app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, re
             globalCobrado += cobrado;
             globalGastado += gastado;
 
-            // Inactividad
             const ultPago = p.ultimo_pago ? new Date(p.ultimo_pago) : null;
             const diasInactivo = ultPago ? Math.floor((hoy - ultPago) / (1000 * 60 * 60 * 24)) : '---';
             const colorInactividad = (diasInactivo !== '---' && diasInactivo > 30) ? 'red' : 'inherit';
@@ -1851,7 +1850,7 @@ app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, re
                         <div class="stat-card"><h3>Venta Total</h3><div>RD$ ${globalVenta.toLocaleString()}</div></div>
                         <div class="stat-card" style="border-top-color:#1cc88a;"><h3>Cobrado</h3><div style="color:#1cc88a;">RD$ ${globalCobrado.toLocaleString()}</div></div>
                         <div class="stat-card" style="border-top-color:#e74a3b;"><h3>Pendiente</h3><div style="color:#e74a3b;">RD$ ${(globalVenta - globalCobrado).toLocaleString()}</div></div>
-                        <div class="stat-card" style="border-top-color:#4e73df;"><h3>Ganancia Proyectada</h3><div style="color:#4e73df;">RD$ ${gananciaReal.toLocaleString()}</div></div>
+                        <div class="stat-card" style="border-top-color:#4e73df;"><h3>Ganancia Real</h3><div style="color:#4e73df;">RD$ ${gananciaReal.toLocaleString()}</div></div>
                     </div>
 
                     <form action="/cuentas-por-cobrar" method="GET" style="margin-bottom:20px; background:#f8f9fc; padding:15px; border-radius:8px; display:flex; align-items:center; gap:15px;">
@@ -1869,12 +1868,12 @@ app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, re
                                 <th>Proyecto</th><th style="text-align:right;">Venta</th><th style="text-align:right;">Cobrado</th><th style="text-align:right;">Pendiente</th><th style="text-align:center;">Inactividad</th><th style="text-align:center;">Acciones</th>
                             </tr>
                         </thead>
-                        <tbody>${filasHtml || '<tr><td colspan="6" style="text-align:center;">No hay datos.</td></tr>'}</tbody>
+                        <tbody>${filasHtml || '<tr><td colspan="6" style="text-align:center;">No hay datos activos.</td></tr>'}</tbody>
                     </table>
                 </div>
             </body></html>`);
     } catch (e) {
-        res.status(500).send("Error: " + e.message);
+        res.status(500).send("Error en reporte: " + e.message);
     } finally {
         if (client) client.release();
     }
