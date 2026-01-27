@@ -1569,21 +1569,30 @@ app.post('/caja-chica/abrir-ciclo', requireLogin, requireAdminOrCoord, async (re
     }
 });
 app.post('/caja-chica/cerrar-ciclo', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { cycleId } = req.body;
     let client;
     try {
         client = await pool.connect();
         await client.query('BEGIN');
 
-        // 1. Movemos o marcamos los gastos actuales como "Cerrados"
-        // Asumiendo que tienes una columna 'estado' o similar. 
-        // Si no, podemos simplemente registrar la fecha de cierre en una tabla de auditoría.
-        await client.query("UPDATE caja_chica SET estado = 'cerrado' WHERE estado = 'abierto'");
+        // 1. ACTUALIZAR EL ESTADO DEL CICLO USANDO EL NOMBRE CORRECTO DE LA TABLA
+        await client.query(
+            "UPDATE caja_chica_ciclos SET estado = 'cerrado', fecha_cierre = CURRENT_TIMESTAMP WHERE id = $1", 
+            [cycleId]
+        );
+
+        // 2. REGISTRAR EL REPOSICIÓN (Opcional: Si manejas una tabla de movimientos)
+        // Puedes agregar aquí un insert si necesitas dejar rastro de quién cerró.
 
         await client.query('COMMIT');
+        
+        // Enviamos respuesta de éxito para que el navegador recargue la página
         res.json({ success: true, message: "Ciclo cerrado exitosamente" });
+
     } catch (e) {
         if (client) await client.query('ROLLBACK');
-        res.status(500).json({ success: false, message: e.message });
+        console.error("Error al cerrar caja:", e.message);
+        res.status(500).json({ success: false, message: "Error en base de datos: " + e.message });
     } finally {
         if (client) client.release();
     }
