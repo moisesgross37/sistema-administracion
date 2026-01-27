@@ -1663,13 +1663,13 @@ app.post('/caja-chica/nuevo-gasto', requireLogin, requireAdminOrCoord, async (re
     } finally {
         if (client) client.release();
     }
-});
-// --- RUTA PARA GENERAR EL REPORTE PDF DEL CIERRE ---
+});// --- RUTA PARA GENERAR EL REPORTE PDF DEL CIERRE (CORREGIDA) ---
 app.get('/caja-chica/reporte/:cycleId/pdf', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { cycleId } = req.params;
     try {
         const client = await pool.connect();
         const cycleResult = await client.query("SELECT * FROM caja_chica_ciclos WHERE id = $1 AND estado = 'cerrado'", [cycleId]);
+        
         if (cycleResult.rows.length === 0) {
             client.release();
             return res.status(404).send('Ciclo de caja no encontrado o no está cerrado.');
@@ -1685,13 +1685,28 @@ app.get('/caja-chica/reporte/:cycleId/pdf', requireLogin, requireAdminOrCoord, a
         );
         client.release();
         const expenses = expensesResult.rows;
-        
+
+        // ==========================================
+        // 🟢 NUEVA LÓGICA DE CÁLCULO AUTOMÁTICO
+        // ==========================================
+        let sumaGastos = 0;
+        expenses.forEach(e => {
+            sumaGastos += parseFloat(e.amount || 0);
+        });
+
+        const fondoInicial = parseFloat(cycle.fondo_inicial || 0);
+        const balanceFinal = fondoInicial - sumaGastos;
+        // ==========================================
+
         const doc = new PDFDocument({ size: 'A4', margin: 50 });
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `inline; filename=reporte-caja-chica-${cycle.id}.pdf`);
         doc.pipe(res);
         
-        doc.image(path.join(__dirname, 'plantillas', 'membrete.jpg'), 0, 0, { width: doc.page.width, height: doc.page.height });
+        // Membrete
+        if (fs.existsSync(path.join(__dirname, 'plantillas', 'membrete.jpg'))) {
+            doc.image(path.join(__dirname, 'plantillas', 'membrete.jpg'), 0, 0, { width: doc.page.width, height: doc.page.height });
+        }
         
         doc.y = 250;
         doc.font('Helvetica-Bold').fontSize(18).text('REPORTE DE CIERRE DE CAJA CHICA', { align: 'center' });
@@ -1701,9 +1716,10 @@ app.get('/caja-chica/reporte/:cycleId/pdf', requireLogin, requireAdminOrCoord, a
         doc.text(`Período del ${new Date(cycle.fecha_inicio).toLocaleDateString()} al ${new Date(cycle.fecha_cierre).toLocaleDateString()}`);
         doc.moveDown(2);
 
-        doc.font('Helvetica-Bold').text('FONDO INICIAL:', { continued: true }).font('Helvetica').text(` $${parseFloat(cycle.fondo_inicial).toFixed(2)}`);
-        doc.font('Helvetica-Bold').text('TOTAL GASTADO:', { continued: true }).font('Helvetica').text(` $${parseFloat(cycle.total_gastado).toFixed(2)}`);
-        doc.font('Helvetica-Bold').text('BALANCE FINAL:', { continued: true }).font('Helvetica').text(` $${parseFloat(cycle.balance_final).toFixed(2)}`);
+        // USAMOS LAS VARIABLES CALCULADAS ARRIBA
+        doc.font('Helvetica-Bold').text('FONDO INICIAL:', { continued: true }).font('Helvetica').text(` RD$ ${fondoInicial.toLocaleString('en-US', {minimumFractionDigits: 2})}`);
+        doc.font('Helvetica-Bold').text('TOTAL GASTADO:', { continued: true }).font('Helvetica').text(` RD$ ${sumaGastos.toLocaleString('en-US', {minimumFractionDigits: 2})}`);
+        doc.font('Helvetica-Bold').text('BALANCE FINAL:', { continued: true }).font('Helvetica').text(` RD$ ${balanceFinal.toLocaleString('en-US', {minimumFractionDigits: 2})}`);
         doc.moveDown(2);
 
         doc.font('Helvetica-Bold').fontSize(14).text('Detalle de Gastos');
@@ -1712,8 +1728,11 @@ app.get('/caja-chica/reporte/:cycleId/pdf', requireLogin, requireAdminOrCoord, a
 
         expenses.forEach(e => {
             doc.font('Helvetica').fontSize(10);
-            doc.text(`${new Date(e.expense_date).toLocaleDateString()} - ${e.supplier_name} - ${e.description}`, { continued: true, width: 450 });
-            doc.text(`$${parseFloat(e.amount).toFixed(2)}`, { align: 'right' });
+            const fecha = new Date(e.expense_date).toLocaleDateString();
+            const monto = parseFloat(e.amount || 0).toLocaleString('en-US', {minimumFractionDigits: 2});
+            
+            doc.text(`${fecha} - ${e.supplier_name} - ${e.description}`, { continued: true, width: 450 });
+            doc.text(`RD$ ${monto}`, { align: 'right' });
             doc.moveDown(0.5);
         });
 
@@ -1723,6 +1742,7 @@ app.get('/caja-chica/reporte/:cycleId/pdf', requireLogin, requireAdminOrCoord, a
         res.status(500).send('<h1>Error al generar el reporte ❌</h1>');
     }
 });
+
 app.post('/gastos-generales', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { expense_date, supplier_id, amount, description, type } = req.body;
     if (!expense_date || !supplier_id || !amount || !description) {
