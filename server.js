@@ -1039,26 +1039,25 @@ app.get('/recibo-pago-suplidor/:pagoId/pdf', requireLogin, requireAdminOrCoord, 
         res.status(500).send('Error al generar el recibo PDF.');
     }
 });
-// =======================================================
-//   NUEVAS RUTAS PARA CUENTAS POR PAGAR
-// =======================================================
-// --- RUTA PARA GENERAR REQUISICIÓN DE PAGO (ORDEN DE PAGO) ---
+// --- RUTA CORREGIDA PARA GENERAR REQUISICIÓN DE PAGO (PCOE) ---
 app.get('/cuentas-por-pagar/requisicion/:id/pdf', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { id } = req.params;
+    let client;
     try {
-        const client = await pool.connect();
+        client = await pool.connect();
         
-        // Buscamos los datos de la factura y del suplidor
+        // Usamos la tabla 'expenses' que es la que tú tienes realmente
         const query = `
-            SELECT f.*, s.name as supplier_name, s.rnc_cedula 
-            FROM facturas_suplidores f
-            JOIN suppliers s ON f.supplier_id = s.id
-            WHERE f.id = $1
+            SELECT e.*, s.name as supplier_name 
+            FROM expenses e
+            JOIN suppliers s ON e.supplier_id = s.id
+            WHERE e.id = $1
         `;
         const result = await client.query(query, [id]);
-        client.release();
 
-        if (result.rows.length === 0) return res.status(404).send('Factura no encontrada');
+        if (result.rows.length === 0) {
+            return res.status(404).send('Factura no encontrada en la base de datos.');
+        }
         const factura = result.rows[0];
 
         const doc = new PDFDocument({ size: 'A4', margin: 50 });
@@ -1066,50 +1065,54 @@ app.get('/cuentas-por-pagar/requisicion/:id/pdf', requireLogin, requireAdminOrCo
         res.setHeader('Content-Disposition', `inline; filename=requisicion-${factura.id}.pdf`);
         doc.pipe(res);
 
-        // 1. Membrete (Usando tu plantilla actual)
-        if (fs.existsSync(path.join(__dirname, 'plantillas', 'membrete.jpg'))) {
-            doc.image(path.join(__dirname, 'plantillas', 'membrete.jpg'), 0, 0, { width: doc.page.width, height: doc.page.height });
+        // 1. Membrete
+        const logoPath = path.join(__dirname, 'plantillas', 'membrete.jpg');
+        if (fs.existsSync(logoPath)) {
+            doc.image(logoPath, 0, 0, { width: doc.page.width, height: doc.page.height });
         }
 
         doc.y = 220;
-        doc.font('Helvetica-Bold').fontSize(16).text('REQUISICIÓN DE PAGO A SUPLIDOR', { align: 'center' });
+        doc.font('Helvetica-Bold').fontSize(18).text('REQUISICIÓN DE PAGO', { align: 'center' });
         doc.moveDown();
 
-        // 2. Cuadro de Información Principal
+        // 2. Información Técnica de la Factura
         doc.rect(50, doc.y, 500, 100).stroke();
-        const startY = doc.y + 10;
+        const startY = doc.y + 15;
         
         doc.fontSize(10).font('Helvetica-Bold');
-        doc.text('SUPLIDOR:', 60, startY);
-        doc.text('CONCEPTO:', 60, startY + 20);
-        doc.text('FACTURA NO:', 60, startY + 40);
-        doc.text('FECHA REGISTRO:', 60, startY + 60);
+        doc.text('SUPLIDOR:', 70, startY);
+        doc.text('CONCEPTO:', 70, startY + 20);
+        doc.text('FACTURA NO:', 70, startY + 40);
+        doc.text('FECHA REGISTRO:', 70, startY + 60);
 
         doc.font('Helvetica');
-        doc.text(factura.supplier_name, 160, startY);
-        doc.text(factura.description || factura.concept, 160, startY + 20);
-        doc.text(factura.invoice_number || 'N/A', 160, startY + 40);
-        doc.text(new Date(factura.created_at).toLocaleDateString(), 160, startY + 60);
+        doc.text(factura.supplier_name, 170, startY);
+        doc.text(factura.description || 'Sin concepto detallado', 170, startY + 20);
+        doc.text(factura.numero_factura || 'N/A', 170, startY + 40);
+        doc.text(new Date(factura.expense_date).toLocaleDateString(), 170, startY + 60);
 
-        // 3. Monto Grande
-        doc.moveDown(5);
-        doc.fontSize(14).font('Helvetica-Bold').text('VALOR A PAGAR:', { continued: true });
-        doc.fontSize(18).text(` RD$ ${parseFloat(factura.total_amount).toLocaleString('en-US', {minimumFractionDigits: 2})}`, { color: '#e74a3b' });
+        // 3. Monto a Pagar
+        doc.moveDown(6);
+        doc.fontSize(14).font('Helvetica-Bold').text('MONTO TOTAL A PAGAR:', { continued: true });
+        doc.fontSize(18).fillColor('#e74a3b').text(` RD$ ${parseFloat(factura.amount).toLocaleString('en-US', {minimumFractionDigits: 2})}`);
+        doc.fillColor('black'); // Reset color
 
-        // 4. Espacios para Firmas
-        doc.moveDown(8);
+        // 4. Firmas de Autorización
+        doc.moveDown(10);
         const footerY = doc.y;
         
-        doc.moveTo(50, footerY).lineTo(220, footerY).stroke();
-        doc.text('SOLICITADO POR (FIRMA)', 50, footerY + 10, { width: 170, align: 'center' });
+        doc.moveTo(50, footerY).lineTo(230, footerY).stroke();
+        doc.fontSize(10).text('SOLICITADO POR', 50, footerY + 10, { width: 180, align: 'center' });
 
-        doc.moveTo(330, footerY).lineTo(500, footerY).stroke();
-        doc.text('AUTORIZADO POR (ADMIN)', 330, footerY + 10, { width: 170, align: 'center' });
+        doc.moveTo(320, footerY).lineTo(500, footerY).stroke();
+        doc.text('RECIBIDO POR (ADMIN)', 320, footerY + 10, { width: 180, align: 'center' });
 
         doc.end();
     } catch (error) {
         console.error("Error al generar requisición:", error);
-        res.status(500).send('Error al generar el documento');
+        res.status(500).send('Error al generar el documento: ' + error.message);
+    } finally {
+        if (client) client.release();
     }
 });
 // --- PÁGINA PRINCIPAL DE CUENTAS POR PAGAR ---
