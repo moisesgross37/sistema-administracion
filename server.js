@@ -1455,12 +1455,17 @@ app.get('/caja-chica', requireLogin, requireAdminOrCoord, async (req, res) => {
                     <div class="summary-box" style="border-top: 5px solid var(--success);"><small>BALANCE DISPONIBLE</small><div class="amount green">RD$ ${balanceActual.toFixed(2)}</div></div>
                 </div>
 
-                <div style="text-align: center; margin-bottom: 30px; background: #fff; padding: 25px; border-radius: 15px; border: 1px dashed var(--danger);">
-                    <form action="/caja-chica/cerrar-ciclo" method="POST" onsubmit="return confirm('¿Cerrar ciclo ahora?')">
-                        <input type="hidden" name="cycleId" value="${cycle.id}">
-                        <button type="submit" class="btn" style="background: var(--danger); color: white; padding: 15px 50px; border-radius: 50px; font-weight: bold;">🔒 Cerrar Ciclo y Reponer</button>
-                    </form>
-                </div>
+               <div style="text-align: center; margin: 30px 0; background: #fff5f5; padding: 25px; border-radius: 15px; border: 2px dashed #e74a3b;">
+    <p style="color: #c0392b; font-size: 14px; margin-bottom: 15px;">
+        <b>⚠️ ATENCIÓN COORDINADORA:</b> Presiona este botón solo si ya revisaste los gastos y deseas archivar este ciclo para iniciar uno nuevo en cero.
+    </p>
+    <form action="/caja-chica/cerrar-ciclo" method="POST" onsubmit="return confirm('¿Estás segura de que deseas CERRAR el ciclo actual y archivar los gastos?')">
+        <input type="hidden" name="cycleId" value="${cycle.id}">
+        <button type="submit" class="btn" style="background: #e74a3b; color: white; padding: 18px 40px; border-radius: 10px; font-weight: bold; border: none; cursor: pointer; font-size: 16px; box-shadow: 0 4px 10px rgba(0,0,0,0.1);">
+            🔒 CERRAR AUDITORÍA Y REINICIAR CAJA
+        </button>
+    </form>
+</div>
 
                 <div style="display: grid; grid-template-columns: 350px 1fr; gap: 30px;">
                     <div class="form-container">
