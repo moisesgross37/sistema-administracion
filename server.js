@@ -749,15 +749,21 @@ let queryText = `
                                         <small style="color:gray;">Vence: ${vencimiento ? vencimiento.toLocaleDateString() : 'N/A'}</small>
                                     </td>
                                     <td>
-                                        <div style="display:flex; align-items:center; gap:8px;">
-                                            <b>${i.supplier_name}</b>
-                                            ${i.numero_factura ? `<span style="font-size:10px; background:#eef2ff; color:#4e73df; padding:2px 6px; border-radius:10px;">#${i.numero_factura}</span>` : ''}
-                                        </div>
-                                        <a href="/suplidores/${i.supplier_id}/estado-de-cuenta" target="_blank" style="display:block; margin-top:3px; font-size:10px; color:#4e73df; text-decoration:none; font-weight:bold;">
-                                            📄 Ver Estado de Cuenta
-                                        </a>
-                                        <small style="color:#5a5c69; display:block; margin-top:5px;">${i.description || 'Sin concepto'}</small>
-                                    </td>
+    <div style="display:flex; align-items:center; gap:8px;">
+        <b>${i.supplier_name}</b>
+        ${i.numero_factura ? `<span style="font-size:10px; background:#eef2ff; color:#4e73df; padding:2px 6px; border-radius:10px;">#${i.numero_factura}</span>` : ''}
+    </div>
+    
+    <a href="/suplidores/${i.supplier_id}/estado-de-cuenta" target="_blank" style="display:block; margin-top:3px; font-size:10px; color:#4e73df; text-decoration:none; font-weight:bold;">
+        📄 Ver Estado de Cuenta
+    </a>
+
+    <a href="/cuentas-por-pagar/requisicion/${i.id}/pdf" target="_blank" style="display:block; margin-top:3px; font-size:10px; color:#e74a3b; text-decoration:none; font-weight:bold;">
+        🖨️ Imprimir Requisición
+    </a>
+
+    <small style="color:#5a5c69; display:block; margin-top:5px;">${i.description || 'Sin concepto'}</small>
+</td>
                                     <td style="text-align:right;">
                                         <div style="font-size:11px; color:gray;">Original: $${montoOriginal.toFixed(2)}</div>
                                         <div style="font-weight:bold; color:var(--danger); border-bottom:1px solid #eee; padding-bottom:3px;">Pendiente: RD$ ${pendiente.toFixed(2)}</div>
@@ -1036,7 +1042,76 @@ app.get('/recibo-pago-suplidor/:pagoId/pdf', requireLogin, requireAdminOrCoord, 
 // =======================================================
 //   NUEVAS RUTAS PARA CUENTAS POR PAGAR
 // =======================================================
+// --- RUTA PARA GENERAR REQUISICIÓN DE PAGO (ORDEN DE PAGO) ---
+app.get('/cuentas-por-pagar/requisicion/:id/pdf', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { id } = req.params;
+    try {
+        const client = await pool.connect();
+        
+        // Buscamos los datos de la factura y del suplidor
+        const query = `
+            SELECT f.*, s.name as supplier_name, s.rnc_cedula 
+            FROM facturas_suplidores f
+            JOIN suppliers s ON f.supplier_id = s.id
+            WHERE f.id = $1
+        `;
+        const result = await client.query(query, [id]);
+        client.release();
 
+        if (result.rows.length === 0) return res.status(404).send('Factura no encontrada');
+        const factura = result.rows[0];
+
+        const doc = new PDFDocument({ size: 'A4', margin: 50 });
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename=requisicion-${factura.id}.pdf`);
+        doc.pipe(res);
+
+        // 1. Membrete (Usando tu plantilla actual)
+        if (fs.existsSync(path.join(__dirname, 'plantillas', 'membrete.jpg'))) {
+            doc.image(path.join(__dirname, 'plantillas', 'membrete.jpg'), 0, 0, { width: doc.page.width, height: doc.page.height });
+        }
+
+        doc.y = 220;
+        doc.font('Helvetica-Bold').fontSize(16).text('REQUISICIÓN DE PAGO A SUPLIDOR', { align: 'center' });
+        doc.moveDown();
+
+        // 2. Cuadro de Información Principal
+        doc.rect(50, doc.y, 500, 100).stroke();
+        const startY = doc.y + 10;
+        
+        doc.fontSize(10).font('Helvetica-Bold');
+        doc.text('SUPLIDOR:', 60, startY);
+        doc.text('CONCEPTO:', 60, startY + 20);
+        doc.text('FACTURA NO:', 60, startY + 40);
+        doc.text('FECHA REGISTRO:', 60, startY + 60);
+
+        doc.font('Helvetica');
+        doc.text(factura.supplier_name, 160, startY);
+        doc.text(factura.description || factura.concept, 160, startY + 20);
+        doc.text(factura.invoice_number || 'N/A', 160, startY + 40);
+        doc.text(new Date(factura.created_at).toLocaleDateString(), 160, startY + 60);
+
+        // 3. Monto Grande
+        doc.moveDown(5);
+        doc.fontSize(14).font('Helvetica-Bold').text('VALOR A PAGAR:', { continued: true });
+        doc.fontSize(18).text(` RD$ ${parseFloat(factura.total_amount).toLocaleString('en-US', {minimumFractionDigits: 2})}`, { color: '#e74a3b' });
+
+        // 4. Espacios para Firmas
+        doc.moveDown(8);
+        const footerY = doc.y;
+        
+        doc.moveTo(50, footerY).lineTo(220, footerY).stroke();
+        doc.text('SOLICITADO POR (FIRMA)', 50, footerY + 10, { width: 170, align: 'center' });
+
+        doc.moveTo(330, footerY).lineTo(500, footerY).stroke();
+        doc.text('AUTORIZADO POR (ADMIN)', 330, footerY + 10, { width: 170, align: 'center' });
+
+        doc.end();
+    } catch (error) {
+        console.error("Error al generar requisición:", error);
+        res.status(500).send('Error al generar el documento');
+    }
+});
 // --- PÁGINA PRINCIPAL DE CUENTAS POR PAGAR ---
 app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
