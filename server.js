@@ -1586,17 +1586,23 @@ app.post('/caja-chica/cerrar-ciclo', requireLogin, requireAdminOrCoord, async (r
 
         await client.query('COMMIT');
         
-        // Enviamos respuesta de éxito para que el navegador recargue la página
-        res.json({ success: true, message: "Ciclo cerrado exitosamente" });
+        // CAMBIA ESTO: En lugar de res.json, enviamos un pequeño script de éxito
+        res.send(`
+            <script>
+                alert("✅ ¡Ciclo cerrado con éxito! La auditoría ha sido archivada.");
+                window.location.href = "/caja-chica";
+            </script>
+        `);
 
     } catch (e) {
         if (client) await client.query('ROLLBACK');
         console.error("Error al cerrar caja:", e.message);
-        res.status(500).json({ success: false, message: "Error en base de datos: " + e.message });
+        res.status(500).send("Error: " + e.message);
     } finally {
         if (client) client.release();
     }
 });
+
 app.post('/caja-chica/nuevo-gasto', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { cycleId, expense_date, supplier_id, amount, description } = req.body;
     let client;
