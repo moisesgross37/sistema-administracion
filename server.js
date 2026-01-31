@@ -3613,47 +3613,54 @@ app.get('/recibo-nomina/:recordId/pdf', requireLogin, requireAdminOrCoord, async
         res.status(500).send('Error al generar el recibo PDF.');
     }
 });
+app.get('/proyecto-detalle/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const quoteId = req.params.id;
+    let client;
 
-app.get('/proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
-    const centerId = req.params.id;
     try {
-        const client = await pool.connect();
-        
+        client = await pool.connect();
+
+        // 1. OBTENCIÓN DE DATOS BASE (Unificado con JOIN para traer el nombre del centro)
         const quoteResult = await client.query(
-            `SELECT q.*, c.name as centerName FROM quotes q LEFT JOIN centers c ON q.clientname = c.name WHERE c.id = $1 AND q.status = 'activa' ORDER BY q.createdat DESC LIMIT 1`,
-            [centerId]
+            `SELECT q.*, c.name as centerName 
+             FROM quotes q 
+             LEFT JOIN centers c ON q.clientname = c.name 
+             WHERE q.id = $1`, [quoteId]
         );
-        
+
         if (quoteResult.rows.length === 0) {
-            const centerResult = await client.query('SELECT name FROM centers WHERE id = $1', [centerId]);
-            const centerName = centerResult.rows.length > 0 ? centerResult.rows[0].name : "Cliente Desconocido";
-            client.release();
-            return res.status(404).send(`<h1>${centerName}</h1><p>No se encontró un proyecto activo para este cliente.</p><a href="/clientes">Volver a la lista</a>`);
+            return res.status(404).send('<h1>Proyecto no encontrado</h1><a href="/clientes">Volver</a>');
         }
+
         const quote = quoteResult.rows[0];
-        
-        const [paymentsResult, expensesResult, suppliersResult, adjustmentsResult] = await Promise.all([
+
+        // 2. CONSULTAS PARALELAS (Para mayor velocidad de carga)
+        const [paymentsRes, expensesRes, suppliersRes, adjustmentsRes] = await Promise.all([
             client.query(`SELECT * FROM payments WHERE quote_id = $1 ORDER BY payment_date DESC`, [quote.id]),
             client.query(`SELECT e.*, s.name as supplier_name FROM expenses e JOIN suppliers s ON e.supplier_id = s.id WHERE e.quote_id = $1 ORDER BY e.expense_date DESC`, [quote.id]),
             client.query('SELECT * FROM suppliers ORDER BY name ASC'),
             client.query(`SELECT * FROM ajustes_cotizacion WHERE quote_id = $1 ORDER BY fecha_ajuste ASC`, [quote.id])
         ]);
-        
-        client.release();
-        const payments = paymentsResult.rows;
-        const expenses = expensesResult.rows;
-        const suppliers = suppliersResult.rows;
-        
-        const montoOriginal = parseFloat(quote.preciofinalporestudiante || 0) * parseFloat(quote.estudiantesparafacturar || 0);
-        const totalAjustes = adjustmentsResult.rows.reduce((sum, adj) => sum + parseFloat(adj.monto_ajuste), 0);
-        const totalVenta = montoOriginal + totalAjustes;
 
-        const totalAbonado = payments.reduce((sum, payment) => sum + parseFloat(payment.amount), 0);
-        const totalGastado = expenses.reduce((sum, expense) => sum + parseFloat(expense.amount), 0);
+        const payments = paymentsRes.rows;
+        const expenses = expensesRes.rows;
+        const suppliers = suppliersRes.rows;
+
+        // 3. LÓGICA DE CÁLCULOS (No dejamos fuera el balance ni la rentabilidad proyectada)
+        const montoOriginal = parseFloat(quote.preciofinalporestudiante || 0) * parseFloat(quote.estudiantesparafacturar || 0);
+        const totalAjustes = adjustmentsRes.rows.reduce((sum, adj) => sum + parseFloat(adj.monto_ajuste), 0);
+        const totalVenta = montoOriginal + totalAjustes;
+        const totalAbonado = payments.reduce((sum, p) => sum + parseFloat(p.amount), 0);
+        const totalGastado = expenses.reduce((sum, e) => sum + parseFloat(e.amount), 0);
+        
         const balancePendiente = totalVenta - totalAbonado;
-        const rentabilidad = totalAbonado - totalGastado;
-const rentabilidadProyectada = totalVenta - totalGastado;
-        let adjustmentsHtml = adjustmentsResult.rows.map(adj => `
+        const rentabilidadReal = totalAbonado - totalGastado;
+        const rentabilidadProyectada = totalVenta - totalGastado;
+
+        // 4. CONSTRUCCIÓN DE COMPONENTES HTML (Preservando tus estilos y botones de PDF)
+        
+        // Tabla de Ajustes
+        let adjustmentsHtml = adjustmentsRes.rows.map(adj => `
             <tr>
                 <td>${new Date(adj.fecha_ajuste).toLocaleString('es-DO')}</td>
                 <td style="color: ${adj.monto_ajuste >= 0 ? 'green' : 'red'}; font-weight: bold;">
@@ -3661,355 +3668,144 @@ const rentabilidadProyectada = totalVenta - totalGastado;
                 </td>
                 <td>${adj.motivo}</td>
                 <td>${adj.ajustado_por}</td>
-            </tr>
-        `).join('') || '<tr><td colspan="4">No se han realizado ajustes.</td></tr>';
+            </tr>`).join('') || '<tr><td colspan="4">No hay ajustes registrados.</td></tr>';
 
+        // Tabla de Pagos (Incluye el botón de recibo con timestamp para evitar cache)
         let paymentsHtml = payments.map(p => `
             <tr>
                 <td>${new Date(p.payment_date).toLocaleDateString()}</td>
-                <td>$${parseFloat(p.amount).toFixed(2)}</td>
+                <td style="font-weight:600; color:#28a745;">$${parseFloat(p.amount).toFixed(2)}</td>
                 <td>${p.students_covered || 'N/A'}</td>
                 <td>${p.comment || ''}</td>
                 <td style="text-align: center;">
-                    <a href="/recibo-pago/${p.id}/pdf?v=${Date.now()}" target="_blank" class="btn" style="padding: 5px 10px; font-size: 12px; background-color: #17a2b8;">
-                        Recibo
-                    </a>
+                    <a href="/recibo-pago/${p.id}/pdf?v=${Date.now()}" target="_blank" class="btn" style="padding: 5px 10px; font-size: 11px; background-color: #4e73df; color:white; border-radius:4px; text-decoration:none;">🖨️ Recibo</a>
                 </td>
-            </tr>
-        `).join('') || '<tr><td colspan="5">No hay pagos registrados.</td></tr>';
-        
-        // --- INICIO DE LA MODIFICACIÓN ---
-        let expensesHtml = expenses.map(e => `
-            <tr>
-                <td>${new Date(e.expense_date).toLocaleDateString()}</td>
-                <td>${e.supplier_name}</td>
-                <td>${e.description}</td>
-                <td>$${parseFloat(e.amount).toFixed(2)}</td>
-                <td>${e.type || ''}</td>
-                <td style="text-align: center;">
-                    <a href="/desembolso/${e.id}/pdf" target="_blank" class="btn" style="padding: 5px 10px; font-size: 14px;">Imprimir</a>
-                </td>
-            </tr>
-        `).join('') || '<tr><td colspan="6">No hay gastos registrados.</td></tr>'; // colspan ahora es 6
-        // --- FIN DE LA MODIFICACIÓN ---
+            </tr>`).join('') || '<tr><td colspan="5">No hay pagos registrados.</td></tr>';
 
-        let suppliersOptionsHtml = suppliers.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
-
-        res.send(`
-            <!DOCTYPE html><html lang="es">
-            <head>
-                ${commonHtmlHead.replace('<title>Panel de Administración</title>', `<title>Proyecto ${quote.clientname}</title>`)}
-                <style>.admin-notes { background-color: #fff3cd; border-left: 5px solid #ffeeba; padding: 15px; margin: 20px 0; border-radius: 5px; }</style>
-            </head>
-            <body>
-                <div class="container" style="max-width: 900px;">
-                    ${backToDashboardLink}
-                    <div class="header" style="border-bottom: 2px solid #007bff; padding-bottom: 10px; margin-bottom: 20px;">
-                        <h1>${quote.clientname}</h1>
-                        <p>
-                            Cotización #${quote.quotenumber} &bull; Asesor: ${quote.advisorname}
-                            <a href="/ver-cotizacion-pdf/${quote.id}" target="_blank" class="btn" style="padding: 5px 10px; font-size: 12px; background-color: #6c757d; margin-left: 20px;">
-                                Ver Cotización Original 📄
-                            </a>
-                        </p>
-                    </div>
-                    ${quote.notas_administrativas ? `<div class="admin-notes"><strong>Notas Administrativas:</strong><br>${quote.notas_administrativas.replace(/\n/g, '<br>')}</div>` : ''}
-                    <div class="summary">
-                        <div class="summary-box">
-                            <div class="header-with-button">
-                                <h3 style="margin:0;">Monto Total Venta</h3>
-                                <button onclick="abrirModalAjuste()" style="padding: 3px 8px; font-size: 12px;" class="btn">Ajustar</button>
-                            </div>
-                            <p class="amount">$${totalVenta.toFixed(2)}</p>
-                        </div>
-                        <div class="summary-box"><h3>Total Abonado</h3><p class="amount green">$${totalAbonado.toFixed(2)}</p></div>
-                        <div class="summary-box"><h3>Total Gastado</h3><p class="amount orange">$${totalGastado.toFixed(2)}</p></div>
-                        <div class="summary-box"><h3>Rentabilidad Actual</h3><p class="amount ${rentabilidad >= 0 ? 'blue' : 'red'}">$${rentabilidad.toFixed(2)}</p></div>
-                    </div>
-                    // Añade este cuadro al final de la clase "summary"
-<div class="summary-box">
-    <h3>Rentabilidad Final (Proyectada)</h3>
-    <p class="amount" style="color: #4e73df;">$${rentabilidadProyectada.toFixed(2)}</p>
-    <small style="color: gray;">Ganancia total al cobrar el 100%</small>
-</div>
-                    <hr style="margin: 40px 0;">
-                    <h2>Historial de Ajustes al Monto de Venta</h2>
-                    <table>
-                        <thead><tr><th>Fecha</th><th>Ajuste (+/-)</th><th>Motivo</th><th>Realizado por</th></tr></thead>
-                        <tbody>${adjustmentsHtml}</tbody>
-                    </table>
-
-                    <hr style="margin: 40px 0;">
-                    <h2><span style="color: #28a745;">Ingresos</span> (Abonos Realizados)</h2>
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Fecha</th>
-                                <th>Monto</th>
-                                <th>Estudiantes Cubiertos</th>
-                                <th>Comentario</th>
-                                <th>Acciones</th>
-                            </tr>
-                        </thead>
-                        <tbody>${paymentsHtml}</tbody>
-                    </table>
-                    <button class="btn btn-toggle" onclick="toggleForm('payment-form-container')">Registrar Nuevo Abono</button>
-                    <div id="payment-form-container" class="payment-form" style="display: none;">
-                        <h2>Nuevo Abono</h2>
-                        <form action="/proyecto/${quote.id}/nuevo-pago" method="POST"><input type="hidden" name="centerId" value="${centerId}"><div class="form-group"><label>Fecha:</label><input type="date" name="payment_date" required></div><div class="form-group"><label>Monto:</label><input type="number" name="amount" step="0.01" required></div><div class="form-group"><label>Estudiantes Cubiertos:</label><input type="number" name="students_covered"></div><div class="form-group"><label>Comentario:</label><textarea name="comment" rows="2"></textarea></div><button type="submit" class="btn">Guardar Abono</button></form>
-                    </div>
-                    <hr style="margin: 40px 0;">
-                    <h2><span style="color: #dc3545;">Egresos</span> (Gastos del Proyecto)</h2>
-                    
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Fecha</th>
-                                <th>Suplidor</th>
-                                <th>Descripción</th>
-                                <th>Monto</th>
-                                <th>Tipo</th>
-                                <th>Acciones</th>
-                            </tr>
-                        </thead>
-                        <tbody>${expensesHtml}</tbody>
-                    </table>
-                    <button class="btn btn-toggle btn-gasto" onclick="toggleForm('expense-form-container')">Registrar Nuevo Gasto</button>
-                    <div id="expense-form-container" class="expense-form" style="display: none;">
-                        <h2>Nuevo Gasto</h2>
-                        <form action="/proyecto/${quote.id}/nuevo-gasto" method="POST"><input type="hidden" name="centerId" value="${centerId}"><div class="form-group"><label>Fecha:</label><input type="date" name="expense_date" required></div><div class="form-group"><label>Suplidor:</label><select name="supplier_id" required><option value="">Seleccione un suplidor...</option>${suppliersOptionsHtml}</select></div><div class="form-group"><label>Monto:</label><input type="number" name="amount" step="0.01" required></div><div class="form-group"><label>Tipo:</label><select name="type"><option value="">Seleccionar...</option><option value="Con Valor Fiscal">Con Valor Fiscal</option><option value="Sin Valor Fiscal">Sin Valor Fiscal</option></select></div><div class="form-group"><label>Descripción:</label><textarea name="description" rows="2" required></textarea></div><button type="submit" class="btn">Guardar Gasto</button></form>
-                    </div>
-                </div>
-                <script>
-                    function toggleForm(id) { const el = document.getElementById(id); el.style.display = el.style.display === 'none' || el.style.display === '' ? 'block' : 'none'; }
-                    
-                    async function abrirModalAjuste() {
-                        const monto_ajuste_str = prompt("Introduce el monto a ajustar (ej: 500 para sumar, -250 para restar):");
-                        if (monto_ajuste_str === null) return;
-
-                        const motivo = prompt("Introduce el motivo del ajuste:");
-                        if (motivo === null || !motivo.trim()) {
-                            alert("Error: Se requiere un motivo para el ajuste.");
-                            return;
-                        }
-
-                        const codigo_secreto = prompt("Introduce el código de seguridad para confirmar:");
-                        if (codigo_secreto === null) return;
-
-                        const monto_ajuste = parseFloat(monto_ajuste_str);
-                        if (isNaN(monto_ajuste)) {
-                            alert("Error: El monto debe ser un número válido.");
-                            return;
-                        }
-
-                        try {
-                            const response = await fetch('/proyecto/${quote.id}/ajustar-monto', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ monto_ajuste, motivo, codigo_secreto })
-                            });
-                            const result = await response.json();
-                            if (response.ok && result.success) {
-                                alert('¡Ajuste guardado con éxito!');
-                                window.location.reload();
-                            } else {
-                                alert('Error al guardar: ' + (result.message || 'Respuesta no válida del servidor.'));
-                            }
-                        } catch (error) {
-                            console.error('Error en fetch:', error);
-                            alert('Hubo un error de conexión. Inténtalo de nuevo.');
-                        }
-                    }
-                </script>
-            </body></html>`);
-    } catch (error) {
-        console.error("Error al obtener detalle del proyecto:", error);
-        res.status(500).send('<h1>Error al obtener los detalles del proyecto ❌</h1>');
-    }
-});
-
-app.get('/proyecto-detalle/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
-    const quoteId = req.params.id;
-    let client;
-    try {
-        client = await pool.connect();
-        
-        const quoteResult = await client.query(
-            `SELECT * FROM quotes WHERE id = $1 AND status = 'activa'`,
-            [quoteId]
-        );
-        
-        if (quoteResult.rows.length === 0) {
-            return res.status(404).send('<h1>Proyecto no encontrado</h1><a href="/clientes">Volver</a>');
-        }
-        
-        const quote = quoteResult.rows[0];
-
-        const [paymentsResult, expensesResult, suppliersResult, adjustmentsResult] = await Promise.all([
-            client.query(`SELECT * FROM payments WHERE quote_id = $1 ORDER BY payment_date DESC`, [quote.id]),
-            client.query(`SELECT e.*, s.name as supplier_name FROM expenses e JOIN suppliers s ON e.supplier_id = s.id WHERE e.quote_id = $1 ORDER BY e.expense_date DESC`, [quote.id]),
-            client.query('SELECT * FROM suppliers ORDER BY name ASC'),
-            client.query(`SELECT * FROM ajustes_cotizacion WHERE quote_id = $1 ORDER BY fecha_ajuste ASC`, [quote.id])
-        ]);
-
-        const payments = paymentsResult.rows;
-        const expenses = expensesResult.rows;
-        const suppliers = suppliersResult.rows;
-        
-        const montoOriginal = parseFloat(quote.preciofinalporestudiante || 0) * parseFloat(quote.estudiantesparafacturar || 0);
-        const totalAjustes = adjustmentsResult.rows.reduce((sum, adj) => sum + parseFloat(adj.monto_ajuste), 0);
-        const totalVenta = montoOriginal + totalAjustes;
-        const totalAbonado = payments.reduce((sum, payment) => sum + parseFloat(payment.amount), 0);
-        const totalGastado = expenses.reduce((sum, expense) => sum + parseFloat(expense.amount), 0);
-        const rentabilidad = totalAbonado - totalGastado;
-
-        let adjustmentsHtml = adjustmentsResult.rows.map(adj => `
-            <tr>
-                <td>${new Date(adj.fecha_ajuste).toLocaleString('es-DO')}</td>
-                <td style="color: ${adj.monto_ajuste >= 0 ? 'var(--success)' : 'var(--danger)'}; font-weight: 700;">
-                    ${adj.monto_ajuste >= 0 ? '+' : ''}$${parseFloat(adj.monto_ajuste).toFixed(2)}
-                </td>
-                <td>${adj.motivo}</td>
-                <td>${adj.ajustado_por}</td>
-            </tr>
-        `).join('') || '<tr><td colspan="4">No hay ajustes registrados.</td></tr>';
-
-        let paymentsHtml = payments.map(p => `
-            <tr>
-                <td>${new Date(p.payment_date).toLocaleDateString()}</td>
-                <td style="font-weight:600; color:var(--success);">$${parseFloat(p.amount).toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
-                <td>${p.students_covered || 'N/A'}</td>
-                <td>${p.comment || ''}</td>
-                <td style="text-align: center;">
-                    <a href="/recibo-pago/${p.id}/pdf" target="_blank" class="btn" 
-                       style="background-color: #4e73df; color:white; padding: 6px 12px; font-size: 11px; font-weight: bold; text-decoration: none; border-radius: 4px; display: inline-block;">
-                       🖨️ Recibo
-                    </a>
-                </td>
-            </tr>
-        `).join('') || '<tr><td colspan="5">No hay pagos registrados.</td></tr>';
-
+        // Tabla de Gastos (Preservando el "Imprimir Desembolso" y tipos fiscal/no fiscal)
         let expensesHtml = expenses.map(e => `
             <tr>
                 <td>${new Date(e.expense_date).toLocaleDateString()}</td>
                 <td><b>${e.supplier_name}</b></td>
                 <td>${e.description}</td>
-                <td style="font-weight: 700; color: var(--danger);">$${parseFloat(e.amount).toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+                <td style="font-weight: 700; color: #dc3545;">$${parseFloat(e.amount).toFixed(2)}</td>
                 <td><span style="font-size: 10px; background: #f8f9fc; padding: 2px 5px; border-radius: 4px;">${e.type || 'N/A'}</span></td>
                 <td style="text-align: center;">
-                    <a href="/desembolso/${e.id}/pdf" target="_blank" class="btn" 
-                       style="background-color: #5a5c69; color:white; padding: 6px 12px; font-size: 11px; font-weight: bold; text-decoration: none; border-radius: 4px; display: inline-block;">
-                       📄 Imprimir
-                    </a>
+                    <a href="/desembolso/${e.id}/pdf" target="_blank" class="btn" style="padding: 5px 10px; font-size: 11px; background-color: #5a5c69; color:white; border-radius:4px; text-decoration:none;">📄 Imprimir</a>
                 </td>
-            </tr>
-        `).join('') || '<tr><td colspan="6">No hay gastos registrados.</td></tr>';
-        
-        let suppliersOptionsHtml = suppliers.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+            </tr>`).join('') || '<tr><td colspan="6">No hay gastos registrados.</td></tr>';
 
+        const suppliersOptionsHtml = suppliers.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+
+        // 5. RESPUESTA FINAL (Fusionando el diseño visual de ambas versiones)
         res.send(`
             <!DOCTYPE html><html lang="es">
             <head>
                 ${commonHtmlHead.replace('<title>Panel de Administración</title>', `<title>Proyecto ${quote.clientname}</title>`)}
                 <style>
-                    .summary-box { position: relative; padding-top: 35px; }
-                    .btn-ajustar-top { position: absolute; top: 15px; right: 15px; font-size: 12px; padding: 5px 12px; background-color: var(--primary); color: white; border-radius: 6px; }
-                    .section-header { display: flex; justify-content: space-between; align-items: center; margin: 40px 0 20px 0; border-bottom: 2px solid #eee; padding-bottom: 10px; }
-                    .btn-main-action { padding: 12px 25px; font-size: 15px; margin-top: 15px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+                    .summary-box { position: relative; padding: 20px; border-radius: 8px; background: #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+                    .admin-notes { background-color: #fff3cd; border-left: 5px solid #ffeeba; padding: 15px; margin: 20px 0; border-radius: 5px; }
+                    .amount { font-size: 24px; font-weight: bold; margin: 10px 0; }
+                    .green { color: #28a745; } .orange { color: #fd7e14; } .blue { color: #007bff; }
+                    .section-header { display: flex; justify-content: space-between; align-items: center; margin-top: 40px; border-bottom: 2px solid #eee; padding-bottom: 10px; }
                 </style>
             </head>
             <body>
                 <div class="container">
                     ${backToDashboardLink}
-                    <div style="margin-bottom: 30px;">
-                        <h1 style="margin:0;">${quote.clientname}</h1>
-                        <p style="color: var(--gray);">Cotización #${quote.quotenumber} &bull; Asesor: ${quote.advisorname}</p>
+                    <div class="header" style="margin-bottom: 30px;">
+                        <h1>${quote.clientname}</h1>
+                        <p>Cotización #${quote.quotenumber} &bull; Asesor: ${quote.advisorname} 
+                           <a href="/ver-cotizacion-pdf/${quote.id}" target="_blank" style="margin-left:15px; text-decoration:none; font-size:13px;">📄 Ver Original</a>
+                        </p>
                     </div>
 
-                    <div class="summary">
+                    ${quote.notas_administrativas ? `<div class="admin-notes"><strong>Notas Administrativas:</strong><br>${quote.notas_administrativas.replace(/\n/g, '<br>')}</div>` : ''}
+
+                    <div class="summary" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px;">
                         <div class="summary-box">
-                            <button onclick="abrirModalAjuste()" class="btn btn-ajustar-top">⚙️ Ajustar Venta</button>
-                            <h3>Monto Total Venta</h3>
+                            <h3>Total Venta</h3>
                             <p class="amount">$${totalVenta.toFixed(2)}</p>
+                            <button onclick="abrirModalAjuste()" class="btn" style="font-size:11px;">⚙️ Ajustar Precio</button>
                         </div>
                         <div class="summary-box"><h3>Total Abonado</h3><p class="amount green">$${totalAbonado.toFixed(2)}</p></div>
                         <div class="summary-box"><h3>Total Gastado</h3><p class="amount orange">$${totalGastado.toFixed(2)}</p></div>
-                        <div class="summary-box"><h3>Rentabilidad Actual</h3><p class="amount blue">$${rentabilidad.toFixed(2)}</p></div>
+                        <div class="summary-box">
+                            <h3>Rentabilidad Proyectada</h3>
+                            <p class="amount blue">$${rentabilidadProyectada.toFixed(2)}</p>
+                            <small style="color:gray;">Ganancia final esperada</small>
+                        </div>
                     </div>
 
-                    <div class="section-header"><h2>Ingresos (Abonos Realizados)</h2></div>
+                    <div class="section-header"><h2>Ingresos (Abonos)</h2></div>
                     <table><thead><tr><th>Fecha</th><th>Monto</th><th>Estudiantes</th><th>Comentario</th><th>Acciones</th></tr></thead><tbody>${paymentsHtml}</tbody></table>
-                    <button class="btn btn-activar btn-main-action" onclick="toggleForm('payment-form-container')">+ Registrar Nuevo Abono</button>
-                    
-                    
-<div id="payment-form-container" class="form-container" style="display: none; margin-top:20px;">
-    <h3>Registrar Nuevo Pago Recibido</h3>
-    <form action="/proyecto/${quote.id}/nuevo-pago" method="POST">
-        <input type="hidden" name="centerId" value="${quote.id}"> 
-        
-        <div class="form-group"><label>Fecha de Pago:</label><input type="date" name="payment_date" required></div>
-        <div class="form-group"><label>Monto Recibido ($):</label><input type="number" name="amount" step="0.01" required></div>
-        
-        <div class="form-group"><label>Comentario / Referencia:</label><textarea name="comment" rows="2"></textarea></div>
-        <button type="submit" class="btn btn-activar">Confirmar y Guardar Abono</button>
-    </form>
-</div>
+                    <button class="btn" style="background-color:#28a745; color:white; margin-top:15px;" onclick="toggleForm('payment-form-container')">+ Registrar Abono</button>
 
-                    <div class="section-header"><h2>Egresos (Gastos del Proyecto)</h2></div>
-                    <table><thead><tr><th>Fecha</th><th>Suplidor</th><th>Descripción</th><th>Monto</th><th>Tipo</th><th>Acciones</th></tr></thead><tbody>${expensesHtml}</tbody></table>
-                    <button class="btn btn-main-action" style="background-color: #fd7e14; color: white;" onclick="toggleForm('expense-form-container')">+ Registrar Nuevo Gasto</button>
-                    
-                    <div id="expense-form-container" class="form-container" style="display: none; margin-top:20px;">
-                        <h3>Registrar Nuevo Egreso / Gasto</h3>
-                        <form action="/proyecto/${quote.id}/nuevo-gasto" method="POST">
-                            <div class="form-group"><label>Fecha del Gasto:</label><input type="date" name="expense_date" required></div>
-                            <div class="form-group"><label>Suplidor:</label><select name="supplier_id" required><option value="">Seleccione un suplidor...</option>${suppliersOptionsHtml}</select></div>
-                            <div class="form-group"><label>Monto del Gasto ($):</label><input type="number" name="amount" step="0.01" required></div>
-                            <div class="form-group"><label>Descripción / Detalle:</label><textarea name="description" rows="2" required></textarea></div>
-                            <div class="form-group"><label>Tipo de Comprobante:</label><select name="type"><option value="Sin Valor Fiscal">Sin Valor Fiscal</option><option value="Con Valor Fiscal">Con Valor Fiscal</option></select></div>
-                            <button type="submit" class="btn" style="background-color: #fd7e14; color: white;">Confirmar y Guardar Gasto</button>
+                    <div id="payment-form-container" style="display:none; margin-top:20px; padding:20px; background:#f8f9fa; border-radius:8px;">
+                        <h3>Nuevo Pago</h3>
+                        <form action="/proyecto/${quote.id}/nuevo-pago" method="POST">
+                            <input type="hidden" name="centerId" value="${quote.id}">
+                            <div class="form-group"><label>Fecha:</label><input type="date" name="payment_date" required></div>
+                            <div class="form-group"><label>Monto:</label><input type="number" name="amount" step="0.01" required></div>
+                            <div class="form-group"><label>Comentario:</label><textarea name="comment" rows="2"></textarea></div>
+                            <button type="submit" class="btn" style="background-color:#28a745; color:white;">Guardar Pago</button>
                         </form>
                     </div>
 
-                    <div class="section-header"><h2>Historial de Ajustes al Precio</h2></div>
-                    <table><thead><tr><th>Fecha y Hora</th><th>Monto del Ajuste</th><th>Motivo</th><th>Usuario</th></tr></thead><tbody>${adjustmentsHtml}</tbody></table>
+                    <div class="section-header"><h2>Egresos (Gastos)</h2></div>
+                    <table><thead><tr><th>Fecha</th><th>Suplidor</th><th>Descripción</th><th>Monto</th><th>Tipo</th><th>Acciones</th></tr></thead><tbody>${expensesHtml}</tbody></table>
+                    <button class="btn" style="background-color:#fd7e14; color:white; margin-top:15px;" onclick="toggleForm('expense-form-container')">+ Registrar Gasto</button>
+
+                    <div id="expense-form-container" style="display:none; margin-top:20px; padding:20px; background:#f8f9fa; border-radius:8px;">
+                        <h3>Nuevo Gasto</h3>
+                        <form action="/proyecto/${quote.id}/nuevo-gasto" method="POST">
+                            <div class="form-group"><label>Fecha:</label><input type="date" name="expense_date" required></div>
+                            <div class="form-group"><label>Suplidor:</label><select name="supplier_id" required><option value="">Seleccione...</option>${suppliersOptionsHtml}</select></div>
+                            <div class="form-group"><label>Monto:</label><input type="number" name="amount" step="0.01" required></div>
+                            <div class="form-group"><label>Descripción:</label><textarea name="description" rows="2" required></textarea></div>
+                            <div class="form-group"><label>Comprobante:</label><select name="type"><option value="Sin Valor Fiscal">Sin Valor Fiscal</option><option value="Con Valor Fiscal">Con Valor Fiscal</option></select></div>
+                            <button type="submit" class="btn" style="background-color:#fd7e14; color:white;">Guardar Gasto</button>
+                        </form>
+                    </div>
+
+                    <div class="section-header"><h2>Historial de Ajustes</h2></div>
+                    <table><thead><tr><th>Fecha</th><th>Monto</th><th>Motivo</th><th>Usuario</th></tr></thead><tbody>${adjustmentsHtml}</tbody></table>
                 </div>
 
                 <script>
                     function toggleForm(id) { 
                         const el = document.getElementById(id); 
-                        el.style.display = (el.style.display === 'none' || el.style.display === '') ? 'block' : 'none'; 
+                        el.style.display = (el.style.display === 'none' || el.style.display === '') ? 'block' : 'none';
                         if(el.style.display === 'block') el.scrollIntoView({ behavior: 'smooth' });
                     }
-                    
                     async function abrirModalAjuste() {
-                        const monto = prompt("Monto a ajustar (ej: 1000 para sumar, -500 para restar):");
-                        if (monto === null) return;
+                        const monto = prompt("Monto a ajustar (ej: 1000 o -500):");
+                        if (!monto) return;
                         const motivo = prompt("Motivo del ajuste:");
-                        if (!motivo) return alert("El motivo es obligatorio para la auditoría.");
-                        const codigo = prompt("Código de seguridad de administrador:");
+                        if (!motivo) return alert("Motivo obligatorio.");
+                        const codigo = prompt("Código de seguridad:");
                         if (!codigo) return;
 
-                        try {
-                            const res = await fetch('/proyecto/${quote.id}/ajustar-monto', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ monto_ajuste: parseFloat(monto), motivo, codigo_secreto: codigo })
-                            });
-                            const data = await res.json();
-                            if (data.success) { alert("¡Ajuste aplicado correctamente!"); window.location.reload(); }
-                            else { alert("Error: " + data.message); }
-                        } catch(e) { alert("Error de conexión al servidor."); }
+                        const res = await fetch('/proyecto/${quote.id}/ajustar-monto', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ monto_ajuste: parseFloat(monto), motivo, codigo_secreto: codigo })
+                        });
+                        const data = await res.json();
+                        if (data.success) { alert("¡Ajuste aplicado!"); window.location.reload(); }
+                        else { alert("Error: " + data.message); }
                     }
                 </script>
             </body></html>`);
+
     } catch (error) {
-        console.error("Error crítico:", error);
+        console.error("Error Crítico PCOE:", error);
         if (!res.headersSent) res.status(500).send('Error al cargar el proyecto ❌');
     } finally {
         if (client) client.release();
     }
 });
+
 app.post('/proyecto/:id/nuevo-pago', requireLogin, requireAdminOrCoord, async (req, res) => {
     const quoteId = req.params.id;
     const { centerId, payment_date, amount, students_covered, comment } = req.body;
