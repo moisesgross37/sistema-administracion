@@ -220,6 +220,7 @@ const dashboardHeader = (user) => `
 `;
 
 const backToDashboardLink = `<a href="/" class="back-link">🏠 Volver al Panel Principal</a>`;
+
 app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
     let client;
     try {
@@ -237,8 +238,8 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
         const stats = statsRes.rows[0];
         const actual = parseFloat(stats.mes_actual || 0);
         const pasado = parseFloat(stats.mes_pasado || 0);
-        const pendiente = parseFloat(stats.total_pendiente || 0);
-        
+        const pendienteRaw = parseFloat(stats.total_pendiente);
+const pendiente = isNaN(pendienteRaw) ? 0 : pendienteRaw;
         // Calcular porcentaje de variación (Tendencia)
         let variacion = pasado > 0 ? ((actual - pasado) / pasado * 100).toFixed(1) : 0;
         const esSubida = variacion > 0;
@@ -1478,18 +1479,22 @@ app.get('/gastos-generales', requireLogin, requireAdminOrCoord, async (req, res)
         const expenses = expensesResult.rows;
 
         let suppliersOptionsHtml = suppliers.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
-        let expensesHtml = expenses.map(e => `
-            <tr>
-                <td>${new Date(e.expense_date).toLocaleDateString()}</td>
-                <td>${e.supplier_name}</td>
-                <td>${e.description}</td>
-                <td>${e.type || ''}</td>
-                <td>$${parseFloat(e.amount).toFixed(2)}</td>
-                <td>
-                    <a href="/desembolso/${e.id}/pdf" target="_blank" class="btn" style="padding: 5px 10px; font-size: 14px;">Imprimir</a>
-                </td>
-            </tr>
-        `).join('') || '<tr><td colspan="6">No hay gastos generales registrados.</td></tr>';
+      
+       let expensesHtml = expenses.map(e => {
+    const montoLimpio = isNaN(parseFloat(e.amount)) ? 0 : parseFloat(e.amount);
+    return `
+        <tr>
+            <td>${new Date(e.expense_date).toLocaleDateString()}</td>
+            <td>${e.supplier_name}</td>
+            <td>${e.description}</td>
+            <td>${e.type || ''}</td>
+            <td style="font-weight: bold;">$${montoLimpio.toFixed(2)}</td>
+            <td>
+                <a href="/desembolso/${e.id}/pdf" target="_blank" class="btn" style="padding: 5px 10px; font-size: 14px;">Imprimir</a>
+            </td>
+        </tr>`;
+}).join('') || '<tr><td colspan="6">No hay gastos generales registrados.</td></tr>';
+        
 
         res.send(`
             <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
@@ -3729,20 +3734,20 @@ const rentabilidadProyectada = totalVenta - totalGastado;
             </tr>
         `).join('') || '<tr><td colspan="5">No hay pagos registrados.</td></tr>';
         
-        // --- INICIO DE LA MODIFICACIÓN ---
-        let expensesHtml = expenses.map(e => `
-            <tr>
-                <td>${new Date(e.expense_date).toLocaleDateString()}</td>
-                <td>${e.supplier_name}</td>
-                <td>${e.description}</td>
-                <td>$${parseFloat(e.amount).toFixed(2)}</td>
-                <td>${e.type || ''}</td>
-                <td style="text-align: center;">
-                    <a href="/desembolso/${e.id}/pdf" target="_blank" class="btn" style="padding: 5px 10px; font-size: 14px;">Imprimir</a>
-                </td>
-            </tr>
-        `).join('') || '<tr><td colspan="6">No hay gastos registrados.</td></tr>'; // colspan ahora es 6
-        // --- FIN DE LA MODIFICACIÓN ---
+       let expensesHtml = expenses.map(e => {
+    const montoLimpio = isNaN(parseFloat(e.amount)) ? 0 : parseFloat(e.amount);
+    return `
+        <tr>
+            <td>${new Date(e.expense_date).toLocaleDateString()}</td>
+            <td>${e.supplier_name}</td>
+            <td>${e.description}</td>
+            <td style="font-weight: bold; color: #dc3545;">$${montoLimpio.toFixed(2)}</td>
+            <td>${e.type || ''}</td>
+            <td style="text-align: center;">
+                <a href="/desembolso/${e.id}/pdf" target="_blank" class="btn" style="padding: 5px 10px; font-size: 14px;">Imprimir</a>
+            </td>
+        </tr>`;
+}).join('') || '<tr><td colspan="6">No hay gastos registrados.</td></tr>';
 
         let suppliersOptionsHtml = suppliers.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
 
@@ -3958,21 +3963,22 @@ const rentabilidad = totalAbonado - totalGastado;
             </tr>
         `).join('') || '<tr><td colspan="5">No hay pagos registrados.</td></tr>';
 
-        let expensesHtml = expenses.map(e => `
-            <tr>
-                <td>${new Date(e.expense_date).toLocaleDateString()}</td>
-                <td><b>${e.supplier_name}</b></td>
-                <td>${e.description}</td>
-                <td style="font-weight: 700; color: var(--danger);">$${parseFloat(e.amount).toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
-                <td><span style="font-size: 10px; background: #f8f9fc; padding: 2px 5px; border-radius: 4px;">${e.type || 'N/A'}</span></td>
-                <td style="text-align: center;">
-                    <a href="/desembolso/${e.id}/pdf" target="_blank" class="btn" 
-                       style="background-color: #5a5c69; color:white; padding: 6px 12px; font-size: 11px; font-weight: bold; text-decoration: none; border-radius: 4px; display: inline-block;">
-                       📄 Imprimir
-                    </a>
-                </td>
-            </tr>
-        `).join('') || '<tr><td colspan="6">No hay gastos registrados.</td></tr>';
+        let expensesHtml = expenses.map(e => {
+    const montoLimpio = isNaN(parseFloat(e.amount)) ? 0 : parseFloat(e.amount);
+    return `
+        <tr>
+            <td>${new Date(e.expense_date).toLocaleDateString()}</td>
+            <td><b>${e.supplier_name}</b></td>
+            <td>${e.description}</td>
+            <td style="font-weight: 700; color: var(--danger);">$${montoLimpio.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+            <td><span style="font-size: 10px; background: #f8f9fc; padding: 2px 5px; border-radius: 4px;">${e.type || 'N/A'}</span></td>
+            <td style="text-align: center;">
+                <a href="/desembolso/${e.id}/pdf" target="_blank" class="btn" style="background-color: #5a5c69; color:white; padding: 6px 12px; font-size: 11px; font-weight: bold; text-decoration: none; border-radius: 4px; display: inline-block;">
+                    📄 Imprimir
+                </a>
+            </td>
+        </tr>`;
+}).join('') || '<tr><td colspan="6">No hay gastos registrados.</td></tr>';
         
         let suppliersOptionsHtml = suppliers.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
 
