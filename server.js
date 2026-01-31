@@ -226,16 +226,18 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         client = await pool.connect();
 
-        // 1. CÁLCULO DE MÉTRICAS UNIFICADAS (Gastos + Comisiones)
-        const statsRes = await client.query(`
-            SELECT 
-                (SELECT COALESCE(SUM(CASE WHEN date_trunc('month', expense_date) = date_trunc('month', current_date) THEN paid_amount ELSE 0 END), 0) FROM expenses) as mes_actual,
-                (SELECT COALESCE(SUM(CASE WHEN date_trunc('month', expense_date) = date_trunc('month', current_date - interval '1 month') THEN paid_amount ELSE 0 END), 0) FROM expenses) as mes_pasado,
-                (
-                    (SELECT COALESCE(SUM(amount - paid_amount), 0) FROM expenses) + 
-                    (SELECT COALESCE(SUM(commission_amount), 0) FROM commissions WHERE status = 'pendiente')
-                ) as total_pendiente
-        `);
+      // SUSTITUYE LA CONSULTA DEL DASHBOARD POR ESTA:
+const statsRes = await client.query(`
+    SELECT 
+        -- Suma de gastos a suplidores (lo que ya tenías)
+        (SELECT COALESCE(SUM(amount - paid_amount), 0) FROM expenses) as deuda_gastos,
+        -- Suma de comisiones de asesores (lo que te faltaba)
+        (SELECT COALESCE(SUM(commission_amount), 0) FROM commissions WHERE status = 'pendiente') as deuda_comisiones
+`);
+
+const stats = statsRes.rows[0];
+// Sumamos ambos para obtener la deuda real de la empresa
+const pendiente = parseFloat(stats.deuda_gastos) + parseFloat(stats.deuda_comisiones);
 
         const stats = statsRes.rows[0];
         const actual = parseFloat(stats.mes_actual || 0);
