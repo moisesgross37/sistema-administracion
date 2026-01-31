@@ -938,6 +938,39 @@ app.get('/factura-suplidor/:id', requireLogin, requireAdminOrCoord, async (req, 
         res.status(500).send('<h1>Error al cargar la página ❌</h1>');
     }
 });
+// RUTA PARA BORRAR ASESOR
+app.post('/borrar-asesor/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const advisorId = req.params.id;
+    const client = await pool.connect();
+
+    try {
+        await client.query('BEGIN');
+
+        // 1. Verificamos si el asesor tiene comisiones ligadas
+        const checkUsage = await client.query(
+            'SELECT id FROM commissions WHERE advisor_id = $1 LIMIT 1', 
+            [advisorId]
+        );
+
+        if (checkUsage.rows.length > 0) {
+            await client.query('ROLLBACK');
+            return res.send('<script>alert("No se puede borrar este asesor porque ya tiene comisiones registradas. Primero debes borrar sus comisiones."); window.location.href="/gestionar-asesores";</script>');
+        }
+
+        // 2. Si está limpio, procedemos a borrar
+        await client.query('DELETE FROM advisors WHERE id = $1', [advisorId]);
+        
+        await client.query('COMMIT');
+        res.redirect('/gestionar-asesores');
+
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error("Error al borrar asesor:", error);
+        res.status(500).send('Error interno al intentar borrar el asesor.');
+    } finally {
+        client.release();
+    }
+});
 
 // --- RUTA PARA GUARDAR UN PAGO A UNA FACTURA ---
 app.post('/factura-suplidor/:facturaId/registrar-pago', requireLogin, requireAdminOrCoord, async (req, res) => {
@@ -2262,17 +2295,23 @@ app.get('/gestionar-asesores', requireLogin, requireAdminOrCoord, async (req, re
         const advisors = advisorsResult.rows;
         const coordinatorRate = settingsResult.rows.length > 0 ? parseFloat(settingsResult.rows[0].value) * 100 : 0;
 
-        let advisorsHtml = advisors.map(a => `
-            <tr>
-                <td>${a.name} ${a.is_coordinator ? '⭐' : ''}</td>
-                <td>${(parseFloat(a.commission_rate) * 100).toFixed(2)}%</td>
-                <td>${a.is_coordinator ? 'Sí' : 'No'}</td>
-                <td>
-                    <a href="/asesor/editar/${a.id}" class="btn" style="background-color: #ffc107; color: #212529; padding: 5px 10px; font-size: 14px;">Editar</a>
-                </td>
-            </tr>
-        `).join('') || '<tr><td colspan="4">No hay asesores registrados.</td></tr>';
-
+       let advisorsHtml = advisors.map(a => `
+    <tr>
+        <td>${a.name} ${a.is_coordinator ? '⭐' : ''}</td>
+        <td>${(parseFloat(a.commission_rate) * 100).toFixed(2)}%</td>
+        <td>${a.is_coordinator ? 'Sí' : 'No'}</td>
+        <td style="display: flex; gap: 8px;">
+            <a href="/asesor/editar/${a.id}" class="btn" style="background-color: #ffc107; color: #212529; padding: 5px 10px; font-size: 14px; text-decoration: none; border-radius: 4px;">Editar</a>
+            
+            <form action="/borrar-asesor/${a.id}" method="POST" style="margin: 0;" onsubmit="return confirm('¿Estás seguro de que deseas eliminar a ${a.name}? Esta acción no se puede deshacer.');">
+                <button type="submit" class="btn" style="background-color: #dc3545; color: white; padding: 5px 10px; font-size: 14px; border: none; border-radius: 4px; cursor: pointer;">
+                    Borrar
+                </button>
+            </form>
+        </td>
+    </tr>
+`).join('') || '<tr><td colspan="4">No hay asesores registrados.</td></tr>';
+        
         res.send(`
             <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
                 <div class="container">
