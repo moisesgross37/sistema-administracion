@@ -3941,16 +3941,19 @@ app.get('/proyecto-detalle/:id', requireLogin, requireAdminOrCoord, async (req, 
                     <table><thead><tr><th>Fecha</th><th>Monto</th><th>Estudiantes</th><th>Comentario</th><th>Acciones</th></tr></thead><tbody>${paymentsHtml}</tbody></table>
                     <button class="btn btn-activar btn-main-action" onclick="toggleForm('payment-form-container')">+ Registrar Nuevo Abono</button>
                     
-                    <div id="payment-form-container" class="form-container" style="display: none; margin-top:20px;">
-                        <h3>Registrar Nuevo Pago Recibido</h3>
-                        <form action="/proyecto/${quote.id}/nuevo-pago" method="POST">
-                            <div class="form-group"><label>Fecha de Pago:</label><input type="date" name="payment_date" required></div>
-                            <div class="form-group"><label>Monto Recibido ($):</label><input type="number" name="amount" step="0.01" required></div>
-                            <div class="form-group"><label>Estudiantes Cubiertos:</label><input type="number" name="students_covered"></div>
-                            <div class="form-group"><label>Comentario / Referencia:</label><textarea name="comment" rows="2"></textarea></div>
-                            <button type="submit" class="btn btn-activar">Confirmar y Guardar Abono</button>
-                        </form>
-                    </div>
+                    // Este código elimina "Estudiantes Cubiertos" y corrige el error de redirección
+<div id="payment-form-container" class="form-container" style="display: none; margin-top:20px;">
+    <h3>Registrar Nuevo Pago Recibido</h3>
+    <form action="/proyecto/${quote.id}/nuevo-pago" method="POST">
+        <input type="hidden" name="centerId" value="${quote.id}"> 
+        
+        <div class="form-group"><label>Fecha de Pago:</label><input type="date" name="payment_date" required></div>
+        <div class="form-group"><label>Monto Recibido ($):</label><input type="number" name="amount" step="0.01" required></div>
+        
+        <div class="form-group"><label>Comentario / Referencia:</label><textarea name="comment" rows="2"></textarea></div>
+        <button type="submit" class="btn btn-activar">Confirmar y Guardar Abono</button>
+    </form>
+</div>
 
                     <div class="section-header"><h2>Egresos (Gastos del Proyecto)</h2></div>
                     <table><thead><tr><th>Fecha</th><th>Suplidor</th><th>Descripción</th><th>Monto</th><th>Tipo</th><th>Acciones</th></tr></thead><tbody>${expensesHtml}</tbody></table>
