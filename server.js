@@ -4059,7 +4059,9 @@ app.post('/proyecto/:id/nuevo-pago', requireLogin, requireAdminOrCoord, async (r
 
                 if (rateRes.rows.length > 0 && coordRes.rows.length > 0) {
                     const coord = coordRes.rows[0];
-                    const coordRate = parseFloat(rateRes.rows[0].value);
+                    const coordRate = (rateRes.rows.length > 0 && !isNaN(parseFloat(rateRes.rows[0].value))) 
+                  ? parseFloat(rateRes.rows[0].value) 
+                  : 0.02;
                     const coordAmount = baseComisionable * coordRate;
 
                     await client.query(
@@ -4072,17 +4074,20 @@ app.post('/proyecto/:id/nuevo-pago', requireLogin, requireAdminOrCoord, async (r
         }
 
         // --- SOLUCIÓN AL PUNTO 1 (EL PUENTE) ---
-        // Buscamos el ID real del centro usando el nombre del cliente de la cotización
-        const centerResult = await client.query('SELECT id FROM centers WHERE name = $1', [clientname]);
+        // Buscamos el ID real del centro para evitar el error 404 al redireccionar
+        const centerResult = await client.query(
+            'SELECT id FROM centers WHERE name = (SELECT clientname FROM quotes WHERE id = $1)', 
+            [quoteId]
+        );
         const realCenterId = centerResult.rows.length > 0 ? centerResult.rows[0].id : null;
 
         await client.query('COMMIT');
         
-        // Redirigimos al ID del centro real para que no de error 404
+        // Redirigimos al ID del centro real (ej: 192) para que el puente sea estable
         if (realCenterId) {
             res.redirect(`/proyecto/${realCenterId}`);
         } else {
-            res.redirect('/clientes'); // Fallback si no encuentra el centro
+            res.redirect('/clientes'); // Fallback de seguridad
         }
 
     } catch (error) {
