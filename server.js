@@ -4052,25 +4052,25 @@ app.post('/proyecto/:id/nuevo-pago', requireLogin, requireAdminOrCoord, async (r
                 [newPaymentId, advisor.id, baseComisionable, advisor.commission_rate, advisorAmount]
             );
             
-            // REGLA GRISELDA: Solo si no es coordinadora se paga comisión de coordinación
-            if (!advisor.is_coordinator) {
-                const rateRes = await client.query(`SELECT value FROM app_settings WHERE key = 'coordinator_override_rate'`);
-                const coordRes = await client.query(`SELECT * FROM advisors WHERE is_coordinator = true LIMIT 1`);
+           // Localiza la parte donde calculas la comisión de coordinación
+if (!advisor.is_coordinator) {
+    const rateRes = await client.query(`SELECT value FROM app_settings WHERE key = 'coordinator_override_rate'`);
+    
+    // MEJORA: Validamos que la tasa sea un número real; si no, usamos 0.02 (2%)
+    const rawRate = rateRes.rows.length > 0 ? rateRes.rows[0].value : '0.02';
+    const coordRate = !isNaN(parseFloat(rawRate)) ? parseFloat(rawRate) : 0.02;
 
-                if (rateRes.rows.length > 0 && coordRes.rows.length > 0) {
-                    const coord = coordRes.rows[0];
-                    const coordRate = (rateRes.rows.length > 0 && !isNaN(parseFloat(rateRes.rows[0].value))) 
-                  ? parseFloat(rateRes.rows[0].value) 
-                  : 0.02;
-                    const coordAmount = baseComisionable * coordRate;
+    const coordAmount = baseComisionable * coordRate;
 
-                    await client.query(
-                        `INSERT INTO commissions (payment_id, advisor_id, commission_type, base_amount, commission_rate, commission_amount)
-                         VALUES ($1, $2, 'coordinador', $3, $4, $5)`,
-                        [newPaymentId, coord.id, baseComisionable, coordRate, coordAmount]
-                    );
-                }
-            }
+    // Solo insertamos si el monto es un número válido
+    if (!isNaN(coordAmount)) {
+        await client.query(
+            `INSERT INTO commissions (payment_id, advisor_id, commission_type, base_amount, commission_rate, commission_amount)
+             VALUES ($1, $2, 'coordinador', $3, $4, $5)`,
+            [newPaymentId, coordinator.id, baseComisionable, coordRate, coordAmount]
+        );
+    }
+}
         }
 
         // --- SOLUCIÓN AL PUNTO 1 (EL PUENTE) ---
