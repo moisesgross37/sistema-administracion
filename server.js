@@ -3941,7 +3941,7 @@ app.get('/proyecto-detalle/:id', requireLogin, requireAdminOrCoord, async (req, 
                     <table><thead><tr><th>Fecha</th><th>Monto</th><th>Estudiantes</th><th>Comentario</th><th>Acciones</th></tr></thead><tbody>${paymentsHtml}</tbody></table>
                     <button class="btn btn-activar btn-main-action" onclick="toggleForm('payment-form-container')">+ Registrar Nuevo Abono</button>
                     
-                    // Este código elimina "Estudiantes Cubiertos" y corrige el error de redirección
+                    
 <div id="payment-form-container" class="form-container" style="display: none; margin-top:20px;">
     <h3>Registrar Nuevo Pago Recibido</h3>
     <form action="/proyecto/${quote.id}/nuevo-pago" method="POST">
