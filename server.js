@@ -319,6 +319,10 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
     <h3>⚖️ Configurar Comisiones</h3>
     <p>Ajusta el 10% de asesores y el 2% de coordinación.</p>
 </a>
+                        <a href="/gestionar-asesores" class="dashboard-card" style="border-left: 5px solid #f6c23e;">
+    <h3>⚖️ Configurar Comisiones</h3>
+    <p>Ajusta el 10% de asesores y el 2% de coordinación.</p>
+</a>
                         <a href="/empleados" class="dashboard-card">
                             <h3>👥 Gestión de Equipo</h3>
                             <p>Configura datos de empleados y asesores.</p>
