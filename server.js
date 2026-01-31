@@ -3978,38 +3978,48 @@ app.post('/proyecto/:id/nuevo-pago', requireLogin, requireAdminOrCoord, async (r
     try {
         await client.query('BEGIN');
 
-        // 1. Guardar el abono del cliente
+        // 1. MANTENEMOS: Buscamos al asesor, pero ahora traemos también el APORTE y el PRECIO
+        const quoteResult = await client.query(
+            'SELECT advisorname, aporte_institucion, preciofinalporestudiante FROM quotes WHERE id = $1', 
+            [quoteId]
+        );
+        const { advisorname, aporte_institucion, preciofinalporestudiante } = quoteResult.rows[0];
+
+        // 2. NUEVA MEJORA: Cálculo del Prorrateo de los $200 (Regla de Oro)
+        const montoAbono = parseFloat(amount);
+        const precioEstudiante = parseFloat(preciofinalporestudiante || 0);
+        const aporteUnitario = parseFloat(aporte_institucion || 0);
+
+        // Calculamos cuánto del abono es para el centro y cuánto queda libre
+        const factorPago = precioEstudiante > 0 ? (montoAbono / precioEstudiante) : 0;
+        const montoAporteRetenido = factorPago * aporteUnitario;
+        const baseRealComisionable = montoAbono - montoAporteRetenido;
+
+        // 3. MANTENEMOS Y MEJORAMOS: Guardar el abono con los nuevos campos de auditoría
         const paymentResult = await client.query(
-            `INSERT INTO payments (quote_id, payment_date, amount, students_covered, comment) 
-             VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-            [quoteId, payment_date, amount, students_covered || null, comment]
+            `INSERT INTO payments (quote_id, payment_date, amount, students_covered, comment, monto_aporte_retenido, base_comisionable) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+            [quoteId, payment_date, montoAbono, students_covered || null, comment, montoAporteRetenido, baseRealComisionable]
         );
         const newPaymentId = paymentResult.rows[0].id;
 
-        // --- INICIO DE LA LÓGICA DE COMISIONES ---
-
-        // 2. Obtener la información necesaria: nombre del asesor de la cotización
-        const quoteResult = await client.query('SELECT advisorname FROM quotes WHERE id = $1', [quoteId]);
-        const advisorName = quoteResult.rows[0].advisorname;
-
-        // 3. Buscar al asesor en nuestra nueva tabla de asesores
-        const advisorResult = await client.query('SELECT * FROM advisors WHERE name = $1', [advisorName]);
+        // 4. MANTENEMOS: Lógica de comisiones del Asesor (Ahora sobre la Base Real)
+        const advisorResult = await client.query('SELECT * FROM advisors WHERE name = $1', [advisorname]);
 
         if (advisorResult.rows.length > 0) {
             const advisor = advisorResult.rows[0];
-            const baseAmount = parseFloat(amount);
-            
-            // 4. Calcular y guardar la comisión de venta del asesor
             const advisorCommissionRate = parseFloat(advisor.commission_rate);
-            const advisorCommissionAmount = baseAmount * advisorCommissionRate;
+            
+            // LA COMISIÓN SE CALCULA SOBRE EL SOBRANTE (baseRealComisionable)
+            const advisorCommissionAmount = baseRealComisionable * advisorCommissionRate;
 
             await client.query(
                 `INSERT INTO commissions (payment_id, advisor_id, commission_type, base_amount, commission_rate, commission_amount)
                  VALUES ($1, $2, 'venta', $3, $4, $5)`,
-                [newPaymentId, advisor.id, baseAmount, advisorCommissionRate, advisorCommissionAmount]
+                [newPaymentId, advisor.id, baseRealComisionable, advisorCommissionRate, advisorCommissionAmount]
             );
             
-            // 5. Si el vendedor NO es el coordinador, calcular la comisión del coordinador
+            // 5. MANTENEMOS: Lógica del Coordinador (Sobre la Base Real también)
             if (!advisor.is_coordinator) {
                 const coordinatorRateResult = await client.query(`SELECT value FROM app_settings WHERE key = 'coordinator_override_rate'`);
                 const coordinatorResult = await client.query(`SELECT * FROM advisors WHERE is_coordinator = true LIMIT 1`);
@@ -4017,17 +4027,16 @@ app.post('/proyecto/:id/nuevo-pago', requireLogin, requireAdminOrCoord, async (r
                 if (coordinatorRateResult.rows.length > 0 && coordinatorResult.rows.length > 0) {
                     const coordinator = coordinatorResult.rows[0];
                     const coordinatorCommissionRate = parseFloat(coordinatorRateResult.rows[0].value);
-                    const coordinatorCommissionAmount = baseAmount * coordinatorCommissionRate;
+                    const coordinatorCommissionAmount = baseRealComisionable * coordinatorCommissionRate;
 
                     await client.query(
                         `INSERT INTO commissions (payment_id, advisor_id, commission_type, base_amount, commission_rate, commission_amount)
                          VALUES ($1, $2, 'coordinador', $3, $4, $5)`,
-                        [newPaymentId, coordinator.id, baseAmount, coordinatorCommissionRate, coordinatorCommissionAmount]
+                        [newPaymentId, coordinator.id, baseRealComisionable, coordinatorCommissionRate, coordinatorCommissionAmount]
                     );
                 }
             }
         }
-        // --- FIN DE LA LÓGICA DE COMISIONES ---
 
         await client.query('COMMIT');
         res.redirect(`/proyecto/${centerId}`);
