@@ -315,6 +315,10 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
                             <h3>💵 Pago de Comisiones</h3>
                             <p>Revisa y paga las comisiones de tus asesores.</p>
                         </a>
+                        <a href="/gestionar-asesores" class="dashboard-card" style="border-left: 5px solid #f6c23e;">
+    <h3>⚖️ Configurar Comisiones</h3>
+    <p>Ajusta el 10% de asesores y el 2% de coordinación.</p>
+</a>
                         <a href="/empleados" class="dashboard-card">
                             <h3>👥 Gestión de Equipo</h3>
                             <p>Configura datos de empleados y asesores.</p>
@@ -2662,7 +2666,7 @@ app.post('/pagar-comisiones', requireLogin, requireAdminOrCoord, async (req, res
         // 4. GENERACIÓN DEL PDF DETALLADO (TRANSPARENCIA)
         const doc = new PDFDocument({ size: 'A4', margin: 50 });
         res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename=recibo_comisiones_${Date.now()}.pdf`);
+res.setHeader('Content-Disposition', `inline; filename=recibo_comisiones_${Date.now()}.pdf`);
         doc.pipe(res);
 
         // Membrete (Usando tu plantilla actual)
