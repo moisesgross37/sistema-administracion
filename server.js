@@ -2605,74 +2605,103 @@ app.get('/pagar-comisiones', requireLogin, requireAdminOrCoord, async (req, res)
 
 app.post('/pagar-comisiones', requireLogin, requireAdminOrCoord, async (req, res) => {
     let { commission_ids } = req.body;
-    if (!commission_ids) {
-        return res.redirect('/pagar-comisiones');
-    }
-    if (!Array.isArray(commission_ids)) {
-        commission_ids = [commission_ids];
-    }
+    if (!commission_ids) return res.redirect('/pagar-comisiones');
+    if (!Array.isArray(commission_ids)) commission_ids = [commission_ids];
     
-    // Convertimos los IDs a números enteros para la consulta SQL
     const commissionIdsInt = commission_ids.map(id => parseInt(id));
-
     const client = await pool.connect();
+
     try {
         await client.query('BEGIN');
 
-        // 1. Obtenemos los detalles de las comisiones que se van a pagar
-        const commissionsToPayResult = await client.query(`
-            SELECT c.*, a.name as advisor_name, p.quote_id 
+        // 1. Obtenemos detalles profundos para el PDF (Aporte, Base y Abono)
+        const detailsResult = await client.query(`
+            SELECT c.*, a.name as advisor_name, q.clientname, q.quotenumber, q.id as quote_id,
+                   p.amount as monto_abono_original, 
+                   p.monto_aporte_retenido, 
+                   p.base_comisionable
             FROM commissions c
             JOIN advisors a ON c.advisor_id = a.id
             JOIN payments p ON c.payment_id = p.id
+            JOIN quotes q ON p.quote_id = q.id
             WHERE c.id = ANY($1::int[]) AND c.status = 'pendiente'`, 
             [commissionIdsInt]
         );
-        const commissionsToPay = commissionsToPayResult.rows;
 
-        if (commissionsToPay.length === 0) {
-            // Si por alguna razón no se encontraron comisiones pendientes con esos IDs
+        if (detailsResult.rows.length === 0) {
             await client.query('ROLLBACK');
-            return res.status(404).send('No se encontraron comisiones pendientes válidas para pagar.');
+            return res.status(404).send('No se encontraron comisiones válidas.');
         }
 
-        // 2. Marcamos las comisiones como pagadas
+        const commissionsToPay = detailsResult.rows;
+
+        // 2. Marcamos como PAGADAS
         await client.query(
             `UPDATE commissions SET status = 'pagada', paid_at = NOW() WHERE id = ANY($1::int[])`,
             [commissionIdsInt]
         );
 
-        // 3. Registramos CADA comisión pagada como un GASTO del proyecto correspondiente
-        for (const commission of commissionsToPay) {
-            const expenseDescription = `Pago comisión ${commission.commission_type} a ${commission.advisor_name} por abono ID #${commission.payment_id}`;
-            const expenseAmount = parseFloat(commission.commission_amount);
-            const quoteId = commission.quote_id;
+        // 3. REGISTRO DE GASTO AUTOMÁTICO EN EL CENTRO
+        for (const comm of commissionsToPay) {
+            const descGasto = `Pago comisión ${comm.commission_type} a ${comm.advisor_name} (Abono #${comm.payment_id})`;
+            
+            // Buscamos o creamos el suplidor "Comisiones Internas"
+            let supRes = await client.query('SELECT id FROM suppliers WHERE name = $1', ['Comisiones Internas']);
+            let supplierId = supRes.rows.length > 0 ? supRes.rows[0].id : 
+                (await client.query('INSERT INTO suppliers (name) VALUES ($1) RETURNING id', ['Comisiones Internas'])).rows[0].id;
 
-            // Buscamos un suplidor llamado "Comisiones Internas" o similar. Si no existe, lo creamos.
-            let supplierResult = await client.query('SELECT id FROM suppliers WHERE name = $1', ['Comisiones Internas']);
-            let supplierId;
-            if (supplierResult.rows.length === 0) {
-                const newSupplier = await client.query('INSERT INTO suppliers (name) VALUES ($1) RETURNING id', ['Comisiones Internas']);
-                supplierId = newSupplier.rows[0].id;
-            } else {
-                supplierId = supplierResult.rows[0].id;
-            }
-
-            // Insertamos el gasto asociado al proyecto (quote_id)
             await client.query(
-                `INSERT INTO expenses (expense_date, supplier_id, amount, description, type, quote_id, caja_chica_ciclo_id) 
-                 VALUES (NOW(), $1, $2, $3, 'Sin Valor Fiscal', $4, NULL)`,
-                [supplierId, expenseAmount, expenseDescription, quoteId]
+                `INSERT INTO expenses (expense_date, supplier_id, amount, description, type, quote_id) 
+                 VALUES (NOW(), $1, $2, $3, 'Sin Valor Fiscal', $4)`,
+                [supplierId, comm.commission_amount, descGasto, comm.quote_id]
             );
         }
 
         await client.query('COMMIT');
-        res.redirect('/pagar-comisiones');
+
+        // 4. GENERACIÓN DEL PDF DETALLADO (TRANSPARENCIA)
+        const doc = new PDFDocument({ size: 'A4', margin: 50 });
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename=recibo_comisiones_${Date.now()}.pdf`);
+        doc.pipe(res);
+
+        // Membrete (Usando tu plantilla actual)
+        const logoPath = path.join(__dirname, 'plantillas', 'membrete.jpg');
+        if (fs.existsSync(logoPath)) doc.image(logoPath, 0, 0, { width: doc.page.width, height: doc.page.height });
+
+        doc.y = 250;
+        doc.font('Helvetica-Bold').fontSize(16).text('COMPROBANTE DE PAGO DE COMISIONES', { align: 'center' });
+        doc.moveDown();
+
+        commissionsToPay.forEach((c, index) => {
+            doc.fontSize(10).font('Helvetica-Bold').text(`PAGO #${index + 1} - PROYECTO: ${c.clientname}`);
+            doc.font('Helvetica').fontSize(9);
+            doc.text(`Asesor: ${c.advisor_name} | Tipo: ${c.commission_type}`);
+            doc.moveDown(0.5);
+            
+            // --- DESGLOSE DE TRANSPARENCIA SOLICITADO POR MOISÉS ---
+            doc.text(`Monto Abono Original: RD$ ${parseFloat(c.monto_abono_original).toFixed(2)}`);
+            doc.fillColor('red').text(`(-) Aporte Institucional Retenido: RD$ ${parseFloat(c.monto_aporte_retenido).toFixed(2)}`);
+            doc.fillColor('black').text(`(=) Base Real Comisionable: RD$ ${parseFloat(c.base_comisionable).toFixed(2)}`);
+            doc.text(`Tasa aplicada: ${(parseFloat(c.commission_rate) * 100).toFixed(2)}%`);
+            doc.font('Helvetica-Bold').text(`TOTAL COMISIÓN: RD$ ${parseFloat(c.commission_amount).toFixed(2)}`, { align: 'right' });
+            doc.moveDown();
+            doc.text('----------------------------------------------------------------------------------------------------');
+            doc.moveDown();
+        });
+
+        // NOTA AL PIE PARA EL ASESOR
+        doc.moveDown(2);
+        doc.fontSize(8).font('Helvetica-Oblique').fillColor('gray');
+        doc.text('Este recibo detalla la resta del Aporte Institucional sobre cada abono antes del cálculo de comisión.', { align: 'center' });
+        doc.text('El asesor acepta este cálculo como base neta de su gestión comercial.', { align: 'center' });
+
+        doc.end();
 
     } catch (error) {
-        await client.query('ROLLBACK');
-        console.error("Error al procesar pago de comisiones y registrar gastos:", error);
-        res.status(500).send('<h1>Error al procesar el pago de comisiones ❌</h1>');
+        if (client) await client.query('ROLLBACK');
+        console.error("Error en pago de comisiones:", error);
+        res.status(500).send('Error al procesar el pago.');
     } finally {
         client.release();
     }
