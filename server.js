@@ -3678,14 +3678,31 @@ app.get('/proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => 
         const expenses = expensesResult.rows;
         const suppliers = suppliersResult.rows;
         
-        const montoOriginal = parseFloat(quote.preciofinalporestudiante || 0) * parseFloat(quote.estudiantesparafacturar || 0);
-        const totalAjustes = adjustmentsResult.rows.reduce((sum, adj) => sum + parseFloat(adj.monto_ajuste), 0);
-        const totalVenta = montoOriginal + totalAjustes;
+        // --- LÓGICA DE CÁLCULOS PROTEGIDA ---
+const montoOriginal = parseFloat(quote.preciofinalporestudiante || 0) * parseFloat(quote.estudiantesparafacturar || 0);
 
-        const totalAbonado = payments.reduce((sum, payment) => sum + parseFloat(payment.amount), 0);
-        const totalGastado = expenses.reduce((sum, expense) => sum + parseFloat(expense.amount), 0);
-        const balancePendiente = totalVenta - totalAbonado;
-        const rentabilidad = totalAbonado - totalGastado;
+// Escudo para Ajustes
+const totalAjustes = adjustmentsResult.rows.reduce((sum, adj) => {
+    const val = parseFloat(adj.monto_ajuste);
+    return sum + (isNaN(val) ? 0 : val);
+}, 0);
+
+const totalVenta = montoOriginal + totalAjustes;
+
+// Escudo para Abonos
+const totalAbonado = payments.reduce((sum, p) => {
+    const val = parseFloat(p.amount);
+    return sum + (isNaN(val) ? 0 : val);
+}, 0);
+
+// EL ESCUDO CRÍTICO: Escudo para Gastos (Donde vive el NaN de Griselda)
+const totalGastado = expenses.reduce((sum, e) => {
+    const val = parseFloat(e.amount);
+    return sum + (isNaN(val) ? 0 : val);
+}, 0);
+
+const balancePendiente = totalVenta - totalAbonado;
+const rentabilidad = totalAbonado - totalGastado;
 const rentabilidadProyectada = totalVenta - totalGastado;
         let adjustmentsHtml = adjustmentsResult.rows.map(adj => `
             <tr>
@@ -3887,15 +3904,33 @@ app.get('/proyecto-detalle/:id', requireLogin, requireAdminOrCoord, async (req, 
         ]);
 
         const payments = paymentsResult.rows;
-        const expenses = expensesResult.rows;
-        const suppliers = suppliersResult.rows;
+const expenses = expensesResult.rows;
+const suppliers = suppliersResult.rows;
+
+const montoOriginal = parseFloat(quote.preciofinalporestudiante || 0) * parseFloat(quote.estudiantesparafacturar || 0);
+
+// Escudo para Ajustes
+const totalAjustes = adjustmentsResult.rows.reduce((sum, adj) => {
+    const val = parseFloat(adj.monto_ajuste);
+    return sum + (isNaN(val) ? 0 : val);
+}, 0);
+
+const totalVenta = montoOriginal + totalAjustes;
+
+// Escudo para Abonos
+const totalAbonado = payments.reduce((sum, p) => {
+    const val = parseFloat(p.amount);
+    return sum + (isNaN(val) ? 0 : val);
+}, 0);
+
+// EL ESCUDO CRÍTICO: Aquí es donde limpiamos el total gastado de la Imagen 2
+const totalGastado = expenses.reduce((sum, e) => {
+    const val = parseFloat(e.amount);
+    return sum + (isNaN(val) ? 0 : val);
+}, 0);
+
+const rentabilidad = totalAbonado - totalGastado;
         
-        const montoOriginal = parseFloat(quote.preciofinalporestudiante || 0) * parseFloat(quote.estudiantesparafacturar || 0);
-        const totalAjustes = adjustmentsResult.rows.reduce((sum, adj) => sum + parseFloat(adj.monto_ajuste), 0);
-        const totalVenta = montoOriginal + totalAjustes;
-        const totalAbonado = payments.reduce((sum, payment) => sum + parseFloat(payment.amount), 0);
-        const totalGastado = expenses.reduce((sum, expense) => sum + parseFloat(expense.amount), 0);
-        const rentabilidad = totalAbonado - totalGastado;
 
         let adjustmentsHtml = adjustmentsResult.rows.map(adj => `
             <tr>
