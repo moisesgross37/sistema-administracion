@@ -3806,6 +3806,12 @@ app.get('/proyecto-detalle/:id', requireLogin, requireAdminOrCoord, async (req, 
     }
 });
 
+// Redirección de seguridad para no romper los enlaces viejos
+app.get('/proyecto/:id', requireLogin, (req, res) => {
+    res.redirect(`/proyecto-detalle/${req.params.id}`);
+});
+
+
 app.post('/proyecto/:id/nuevo-pago', requireLogin, requireAdminOrCoord, async (req, res) => {
     const quoteId = req.params.id;
     const { centerId, payment_date, amount, students_covered, comment } = req.body;
