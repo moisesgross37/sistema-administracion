@@ -3805,92 +3805,132 @@ app.get('/proyecto-detalle/:id', requireLogin, requireAdminOrCoord, async (req, 
         if (client) client.release();
     }
 });
-
-// Redirección de seguridad para no romper los enlaces viejos
-app.get('/proyecto/:id', requireLogin, (req, res) => {
-    res.redirect(`/proyecto-detalle/${req.params.id}`);
-});
-
-
+// AGREGAR ESTO EN server.js
 app.post('/proyecto/:id/nuevo-pago', requireLogin, requireAdminOrCoord, async (req, res) => {
-    const quoteId = req.params.id;
+    const quoteId = req.params.id; 
     const { centerId, payment_date, amount, students_covered, comment } = req.body;
     
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
 
-        // 1. MANTENEMOS: Buscamos al asesor, pero ahora traemos también el APORTE y el PRECIO
+        // 1. Buscamos los datos de la cotización para el cálculo
         const quoteResult = await client.query(
             'SELECT advisorname, aporte_institucion, preciofinalporestudiante FROM quotes WHERE id = $1', 
             [quoteId]
         );
         const { advisorname, aporte_institucion, preciofinalporestudiante } = quoteResult.rows[0];
 
-        // 2. NUEVA MEJORA: Cálculo del Prorrateo de los $200 (Regla de Oro)
+        // 2. Cálculo de la Base Real (Descontando el aporte institucional)
         const montoAbono = parseFloat(amount);
-        const precioEstudiante = parseFloat(preciofinalporestudiante || 0);
-        const aporteUnitario = parseFloat(aporte_institucion || 0);
+        const factor = (parseFloat(preciofinalporestudiante) > 0) ? (montoAbono / parseFloat(preciofinalporestudiante)) : 0;
+        const montoAporteRetenido = factor * parseFloat(aporte_institucion || 0);
+        const baseComisionable = montoAbono - montoAporteRetenido;
 
-        // Calculamos cuánto del abono es para el centro y cuánto queda libre
-        const factorPago = precioEstudiante > 0 ? (montoAbono / precioEstudiante) : 0;
-        const montoAporteRetenido = factorPago * aporteUnitario;
-        const baseRealComisionable = montoAbono - montoAporteRetenido;
-
-        // 3. MANTENEMOS Y MEJORAMOS: Guardar el abono con los nuevos campos de auditoría
-        const paymentResult = await client.query(
+        // 3. Insertamos el pago en la tabla
+        const payRes = await client.query(
             `INSERT INTO payments (quote_id, payment_date, amount, students_covered, comment, monto_aporte_retenido, base_comisionable) 
              VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-            [quoteId, payment_date, montoAbono, students_covered || null, comment, montoAporteRetenido, baseRealComisionable]
+            [quoteId, payment_date, montoAbono, students_covered || null, comment, montoAporteRetenido, baseComisionable]
         );
-        const newPaymentId = paymentResult.rows[0].id;
+        const newPaymentId = payRes.rows[0].id;
 
-        // 4. MANTENEMOS: Lógica de comisiones del Asesor (Ahora sobre la Base Real)
-        const advisorResult = await client.query('SELECT * FROM advisors WHERE name = $1', [advisorname]);
+        // 4. Lógica de Comisiones
+        const advRes = await client.query('SELECT * FROM advisors WHERE name = $1', [advisorname]);
+        if (advRes.rows.length > 0) {
+            const advisor = advRes.rows[0];
+            const advisorAmount = baseComisionable * parseFloat(advisor.commission_rate);
 
-        if (advisorResult.rows.length > 0) {
-            const advisor = advisorResult.rows[0];
-            const advisorCommissionRate = parseFloat(advisor.commission_rate);
-            
-            // LA COMISIÓN SE CALCULA SOBRE EL SOBRANTE (baseRealComisionable)
-            const advisorCommissionAmount = baseRealComisionable * advisorCommissionRate;
-
+            // Insertamos Venta Directa
             await client.query(
                 `INSERT INTO commissions (payment_id, advisor_id, commission_type, base_amount, commission_rate, commission_amount)
                  VALUES ($1, $2, 'venta', $3, $4, $5)`,
-                [newPaymentId, advisor.id, baseRealComisionable, advisorCommissionRate, advisorCommissionAmount]
+                [newPaymentId, advisor.id, baseComisionable, advisor.commission_rate, advisorAmount]
             );
             
-            // 5. MANTENEMOS: Lógica del Coordinador (Sobre la Base Real también)
+            // REGLA GRISELDA: Solo si no es coordinadora se paga comisión de coordinación
             if (!advisor.is_coordinator) {
-                const coordinatorRateResult = await client.query(`SELECT value FROM app_settings WHERE key = 'coordinator_override_rate'`);
-                const coordinatorResult = await client.query(`SELECT * FROM advisors WHERE is_coordinator = true LIMIT 1`);
+                const rateRes = await client.query(`SELECT value FROM app_settings WHERE key = 'coordinator_override_rate'`);
+                const coordRes = await client.query(`SELECT * FROM advisors WHERE is_coordinator = true LIMIT 1`);
 
-                if (coordinatorRateResult.rows.length > 0 && coordinatorResult.rows.length > 0) {
-                    const coordinator = coordinatorResult.rows[0];
-                    const coordinatorCommissionRate = parseFloat(coordinatorRateResult.rows[0].value);
-                    const coordinatorCommissionAmount = baseRealComisionable * coordinatorCommissionRate;
+                if (rateRes.rows.length > 0 && coordRes.rows.length > 0) {
+                    const coord = coordRes.rows[0];
+                    const coordRate = parseFloat(rateRes.rows[0].value);
+                    const coordAmount = baseComisionable * coordRate;
 
                     await client.query(
                         `INSERT INTO commissions (payment_id, advisor_id, commission_type, base_amount, commission_rate, commission_amount)
                          VALUES ($1, $2, 'coordinador', $3, $4, $5)`,
-                        [newPaymentId, coordinator.id, baseRealComisionable, coordinatorCommissionRate, coordinatorCommissionAmount]
+                        [newPaymentId, coord.id, baseComisionable, coordRate, coordAmount]
                     );
                 }
             }
         }
 
         await client.query('COMMIT');
+        // Redirigimos de vuelta a la vista del proyecto
         res.redirect(`/proyecto/${centerId}`);
 
     } catch (error) {
         await client.query('ROLLBACK');
-        console.error("Error al guardar el pago y procesar comisiones:", error);
-        res.status(500).send('<h1>Error al guardar el pago ❌</h1>');
+        console.error("Error al procesar pago:", error);
+        res.status(500).send('Error interno al guardar el pago');
     } finally {
         client.release();
     }
 });
+
+app.get('/proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const centerId = req.params.id;
+    let client;
+    try {
+        client = await pool.connect();
+        
+        // 1. Buscamos la cotización activa de este Centro (centerId)
+        const quoteResult = await client.query(
+            `SELECT q.*, c.name as centerName FROM quotes q 
+             LEFT JOIN centers c ON q.clientname = c.name 
+             WHERE c.id = $1 AND q.status = 'activa' 
+             ORDER BY q.createdat DESC LIMIT 1`,
+            [centerId]
+        );
+        
+        if (quoteResult.rows.length === 0) {
+            const centerRes = await client.query('SELECT name FROM centers WHERE id = $1', [centerId]);
+            const name = centerRes.rows.length > 0 ? centerRes.rows[0].name : "Desconocido";
+            return res.status(404).send(`<h1>${name}</h1><p>No hay proyecto activo.</p>`);
+        }
+        const quote = quoteResult.rows[0];
+
+        // 2. Traemos Pagos, Gastos y Ajustes
+        const [paymentsRes, expensesRes, suppliersRes, adjustmentsRes] = await Promise.all([
+            client.query(`SELECT * FROM payments WHERE quote_id = $1 ORDER BY payment_date DESC`, [quote.id]),
+            client.query(`SELECT e.*, s.name as supplier_name FROM expenses e JOIN suppliers s ON e.supplier_id = s.id WHERE e.quote_id = $1 ORDER BY e.expense_date DESC`, [quote.id]),
+            client.query('SELECT * FROM suppliers ORDER BY name ASC'),
+            client.query(`SELECT * FROM ajustes_cotizacion WHERE quote_id = $1 ORDER BY fecha_ajuste ASC`, [quote.id])
+        ]);
+
+        // 3. Cálculos de Dinero
+        const montoOriginal = parseFloat(quote.preciofinalporestudiante || 0) * parseFloat(quote.estudiantesparafacturar || 0);
+        const totalAjustes = adjustmentsRes.rows.reduce((sum, adj) => sum + parseFloat(adj.monto_ajuste), 0);
+        const totalVenta = montoOriginal + totalAjustes;
+        const totalAbonado = paymentsRes.rows.reduce((sum, p) => sum + parseFloat(p.amount), 0);
+        const totalGastado = expensesRes.rows.reduce((sum, e) => sum + parseFloat(e.amount), 0);
+        const rentabilidadActual = totalAbonado - totalGastado;
+        const rentabilidadProyectada = totalVenta - totalGastado;
+
+        // Aquí pegas tu HTML (el que tiene las tablas de pagos y gastos que ya tenías)
+        // Solo asegúrate de usar las variables: totalVenta, totalAbonado, totalGastado, rentabilidadProyectada.
+        // ... (Tu renderizado de res.send) ...
+
+    } catch (error) {
+        console.error("Error en PCOE:", error);
+        res.status(500).send('Error al cargar proyecto');
+    } finally {
+        if (client) client.release();
+    }
+});
+
 app.post('/proyecto/:id/nuevo-gasto', requireLogin, requireAdminOrCoord, async (req, res) => {
     const quoteId = req.params.id;
     const { centerId, expense_date, supplier_id, amount, description, type } = req.body;
