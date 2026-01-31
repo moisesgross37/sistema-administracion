@@ -3613,19 +3613,21 @@ app.get('/recibo-nomina/:recordId/pdf', requireLogin, requireAdminOrCoord, async
         res.status(500).send('Error al generar el recibo PDF.');
     }
 });
-app.get('/proyecto-detalle/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
-    const quoteId = req.params.id;
+app.get('/proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const centerId = req.params.id; // 192 en tu caso
     let client;
 
     try {
         client = await pool.connect();
 
-        // 1. OBTENCIÓN DE DATOS BASE (Unificado con JOIN para traer el nombre del centro)
+        // 1. Buscamos la cotización activa de este Centro (centerId)
         const quoteResult = await client.query(
             `SELECT q.*, c.name as centerName 
              FROM quotes q 
              LEFT JOIN centers c ON q.clientname = c.name 
-             WHERE q.id = $1`, [quoteId]
+             WHERE c.id = $1 AND q.status = 'activa' 
+             ORDER BY q.createdat DESC LIMIT 1`, 
+            [centerId]
         );
 
         if (quoteResult.rows.length === 0) {
@@ -3634,7 +3636,7 @@ app.get('/proyecto-detalle/:id', requireLogin, requireAdminOrCoord, async (req, 
 
         const quote = quoteResult.rows[0];
 
-        // 2. CONSULTAS PARALELAS (Para mayor velocidad de carga)
+        // 2. CONSULTAS PARALELAS (Pagos, Gastos, Suplidores y Ajustes)
         const [paymentsRes, expensesRes, suppliersRes, adjustmentsRes] = await Promise.all([
             client.query(`SELECT * FROM payments WHERE quote_id = $1 ORDER BY payment_date DESC`, [quote.id]),
             client.query(`SELECT e.*, s.name as supplier_name FROM expenses e JOIN suppliers s ON e.supplier_id = s.id WHERE e.quote_id = $1 ORDER BY e.expense_date DESC`, [quote.id]),
