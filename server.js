@@ -226,13 +226,15 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         client = await pool.connect();
 
-        // 1. CÁLCULO DE MÉTRICAS EN TIEMPO REAL
+        // 1. CÁLCULO DE MÉTRICAS UNIFICADAS (Gastos + Comisiones)
         const statsRes = await client.query(`
             SELECT 
-                SUM(CASE WHEN date_trunc('month', expense_date) = date_trunc('month', current_date) THEN paid_amount ELSE 0 END) as mes_actual,
-                SUM(CASE WHEN date_trunc('month', expense_date) = date_trunc('month', current_date - interval '1 month') THEN paid_amount ELSE 0 END) as mes_pasado,
-                SUM(amount - paid_amount) as total_pendiente
-            FROM expenses
+                (SELECT COALESCE(SUM(CASE WHEN date_trunc('month', expense_date) = date_trunc('month', current_date) THEN paid_amount ELSE 0 END), 0) FROM expenses) as mes_actual,
+                (SELECT COALESCE(SUM(CASE WHEN date_trunc('month', expense_date) = date_trunc('month', current_date - interval '1 month') THEN paid_amount ELSE 0 END), 0) FROM expenses) as mes_pasado,
+                (
+                    (SELECT COALESCE(SUM(amount - paid_amount), 0) FROM expenses) + 
+                    (SELECT COALESCE(SUM(commission_amount), 0) FROM commissions WHERE status = 'pendiente')
+                ) as total_pendiente
         `);
 
         const stats = statsRes.rows[0];
