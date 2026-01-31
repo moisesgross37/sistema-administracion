@@ -4012,7 +4012,7 @@ app.get('/proyecto-detalle/:id', requireLogin, requireAdminOrCoord, async (req, 
 
 app.post('/proyecto/:id/nuevo-pago', requireLogin, requireAdminOrCoord, async (req, res) => {
     const quoteId = req.params.id; 
-    const { centerId, payment_date, amount, students_covered, comment } = req.body;
+    const { payment_date, amount, students_covered, comment } = req.body;
     
     const client = await pool.connect();
     try {
@@ -4020,10 +4020,10 @@ app.post('/proyecto/:id/nuevo-pago', requireLogin, requireAdminOrCoord, async (r
 
         // 1. Buscamos los datos de la cotización para el cálculo
         const quoteResult = await client.query(
-            'SELECT advisorname, aporte_institucion, preciofinalporestudiante FROM quotes WHERE id = $1', 
+            'SELECT advisorname, clientname, aporte_institucion, preciofinalporestudiante FROM quotes WHERE id = $1', 
             [quoteId]
         );
-        const { advisorname, aporte_institucion, preciofinalporestudiante } = quoteResult.rows[0];
+        const { advisorname, clientname, aporte_institucion, preciofinalporestudiante } = quoteResult.rows[0];
 
         // 2. Cálculo de la Base Real (Descontando el aporte institucional)
         const montoAbono = parseFloat(amount);
@@ -4071,19 +4071,28 @@ app.post('/proyecto/:id/nuevo-pago', requireLogin, requireAdminOrCoord, async (r
             }
         }
 
+        // --- SOLUCIÓN AL PUNTO 1 (EL PUENTE) ---
+        // Buscamos el ID real del centro usando el nombre del cliente de la cotización
+        const centerResult = await client.query('SELECT id FROM centers WHERE name = $1', [clientname]);
+        const realCenterId = centerResult.rows.length > 0 ? centerResult.rows[0].id : null;
+
         await client.query('COMMIT');
-        // Redirigimos de vuelta a la vista del proyecto
-        res.redirect(`/proyecto/${centerId}`);
+        
+        // Redirigimos al ID del centro real para que no de error 404
+        if (realCenterId) {
+            res.redirect(`/proyecto/${realCenterId}`);
+        } else {
+            res.redirect('/clientes'); // Fallback si no encuentra el centro
+        }
 
     } catch (error) {
-        await client.query('ROLLBACK');
+        if (client) await client.query('ROLLBACK');
         console.error("Error al procesar pago:", error);
         res.status(500).send('Error interno al guardar el pago');
     } finally {
-        client.release();
+        if (client) client.release();
     }
 });
-
 app.get('/proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
     const centerId = req.params.id;
     let client;
