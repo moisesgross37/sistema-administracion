@@ -220,36 +220,40 @@ const dashboardHeader = (user) => `
 `;
 
 const backToDashboardLink = `<a href="/" class="back-link">🏠 Volver al Panel Principal</a>`;
-
 app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
     let client;
     try {
         client = await pool.connect();
 
-      // SUSTITUYE LA CONSULTA DEL DASHBOARD POR ESTA:
-const statsRes = await client.query(`
-    SELECT 
-        -- Suma de gastos a suplidores (lo que ya tenías)
-        (SELECT COALESCE(SUM(amount - paid_amount), 0) FROM expenses) as deuda_gastos,
-        -- Suma de comisiones de asesores (lo que te faltaba)
-        (SELECT COALESCE(SUM(commission_amount), 0) FROM commissions WHERE status = 'pendiente') as deuda_comisiones
-`);
+        // 1. CONSULTA UNIFICADA: Traemos todo de un solo golpe
+        const statsRes = await client.query(`
+            SELECT 
+                (SELECT COALESCE(SUM(amount - paid_amount), 0) FROM expenses) as deuda_gastos,
+                (SELECT COALESCE(SUM(commission_amount), 0) FROM commissions WHERE status = 'pendiente') as deuda_comisiones,
+                (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE date_part('month', expense_date) = date_part('month', CURRENT_DATE)) as mes_actual,
+                (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE date_part('month', expense_date) = date_part('month', CURRENT_DATE - INTERVAL '1 month')) as mes_pasado
+        `);
 
-const stats = statsRes.rows[0];
-// Sumamos ambos para obtener la deuda real de la empresa
-const pendiente = parseFloat(stats.deuda_gastos) + parseFloat(stats.deuda_comisiones);
-
+        // DECLARAMOS 'stats' UNA SOLA VEZ
         const stats = statsRes.rows[0];
+
+        // 2. CÁLCULO DE DEUDA TOTAL (Gastos + Comisiones)
+        const totalDeudaPendiente = parseFloat(stats.deuda_gastos) + parseFloat(stats.deuda_comisiones);
+        const pendiente = isNaN(totalDeudaPendiente) ? 0 : totalDeudaPendiente;
+
+        // 3. DATOS DE VARIACIÓN MENSUAL
         const actual = parseFloat(stats.mes_actual || 0);
         const pasado = parseFloat(stats.mes_pasado || 0);
-        const pendienteRaw = parseFloat(stats.total_pendiente);
-const pendiente = isNaN(pendienteRaw) ? 0 : pendienteRaw;
-        // Calcular porcentaje de variación (Tendencia)
+
+        // Calcular porcentaje de variación (Tendencia) usando LaTeX para la lógica:
+        // $$\text{Variación} = \frac{\text{Actual} - \text{Pasado}}{\text{Pasado}} \times 100$$
         let variacion = pasado > 0 ? ((actual - pasado) / pasado * 100).toFixed(1) : 0;
+        
         const esSubida = variacion > 0;
         const colorVar = esSubida ? '#e74a3b' : '#1cc88a'; // Rojo si gasta más, Verde si ahorra
         const flecha = esSubida ? '▲' : '▼';
 
+        // ... continúa con tu res.render abajo
         // 2. GENERACIÓN DE LA VISTA
         res.send(`
         <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
