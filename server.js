@@ -4182,56 +4182,6 @@ if (!advisor.is_coordinator) {
         if (client) client.release();
     }
 });
-app.get('/proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
-    const centerId = req.params.id;
-    let client;
-    try {
-        client = await pool.connect();
-        
-        // 1. Buscamos la cotización activa de este Centro (centerId)
-        const quoteResult = await client.query(
-            `SELECT q.*, c.name as centerName FROM quotes q 
-             LEFT JOIN centers c ON q.clientname = c.name 
-             WHERE c.id = $1 AND q.status = 'activa' 
-             ORDER BY q.createdat DESC LIMIT 1`,
-            [centerId]
-        );
-        
-        if (quoteResult.rows.length === 0) {
-            const centerRes = await client.query('SELECT name FROM centers WHERE id = $1', [centerId]);
-            const name = centerRes.rows.length > 0 ? centerRes.rows[0].name : "Desconocido";
-            return res.status(404).send(`<h1>${name}</h1><p>No hay proyecto activo.</p>`);
-        }
-        const quote = quoteResult.rows[0];
-
-        // 2. Traemos Pagos, Gastos y Ajustes
-        const [paymentsRes, expensesRes, suppliersRes, adjustmentsRes] = await Promise.all([
-            client.query(`SELECT * FROM payments WHERE quote_id = $1 ORDER BY payment_date DESC`, [quote.id]),
-            client.query(`SELECT e.*, s.name as supplier_name FROM expenses e JOIN suppliers s ON e.supplier_id = s.id WHERE e.quote_id = $1 ORDER BY e.expense_date DESC`, [quote.id]),
-            client.query('SELECT * FROM suppliers ORDER BY name ASC'),
-            client.query(`SELECT * FROM ajustes_cotizacion WHERE quote_id = $1 ORDER BY fecha_ajuste ASC`, [quote.id])
-        ]);
-
-        // 3. Cálculos de Dinero
-        const montoOriginal = parseFloat(quote.preciofinalporestudiante || 0) * parseFloat(quote.estudiantesparafacturar || 0);
-        const totalAjustes = adjustmentsRes.rows.reduce((sum, adj) => sum + parseFloat(adj.monto_ajuste), 0);
-        const totalVenta = montoOriginal + totalAjustes;
-        const totalAbonado = paymentsRes.rows.reduce((sum, p) => sum + parseFloat(p.amount), 0);
-        const totalGastado = expensesRes.rows.reduce((sum, e) => sum + parseFloat(e.amount), 0);
-        const rentabilidadActual = totalAbonado - totalGastado;
-        const rentabilidadProyectada = totalVenta - totalGastado;
-
-        // Aquí pegas tu HTML (el que tiene las tablas de pagos y gastos que ya tenías)
-        // Solo asegúrate de usar las variables: totalVenta, totalAbonado, totalGastado, rentabilidadProyectada.
-        // ... (Tu renderizado de res.send) ...
-
-    } catch (error) {
-        console.error("Error en PCOE:", error);
-        res.status(500).send('Error al cargar proyecto');
-    } finally {
-        if (client) client.release();
-    }
-});
 
 app.post('/proyecto/:id/nuevo-gasto', requireLogin, requireAdminOrCoord, async (req, res) => {
     const quoteId = req.params.id;
