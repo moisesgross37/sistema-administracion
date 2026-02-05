@@ -225,36 +225,53 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         client = await pool.connect();
 
-        // 1. CONSULTA UNIFICADA: Traemos todo de un solo golpe
+        // 1. CONSULTA DE ESTADÍSTICAS BLINDADA
+        // Usamos COALESCE(..., 0) desde SQL para que nunca venga un NULL
         const statsRes = await client.query(`
             SELECT 
                 (SELECT COALESCE(SUM(amount - paid_amount), 0) FROM expenses) as deuda_gastos,
                 (SELECT COALESCE(SUM(commission_amount), 0) FROM commissions WHERE status = 'pendiente') as deuda_comisiones,
-                (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE date_part('month', expense_date) = date_part('month', CURRENT_DATE)) as mes_actual,
-                (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE date_part('month', expense_date) = date_part('month', CURRENT_DATE - INTERVAL '1 month')) as mes_pasado
+                (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE date_part('month', expense_date) = date_part('month', CURRENT_DATE) AND date_part('year', expense_date) = date_part('year', CURRENT_DATE)) as mes_actual,
+                (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE date_part('month', expense_date) = date_part('month', CURRENT_DATE - INTERVAL '1 month') AND date_part('year', expense_date) = date_part('year', CURRENT_DATE - INTERVAL '1 month')) as mes_pasado
         `);
 
-        // DECLARAMOS 'stats' UNA SOLA VEZ
         const stats = statsRes.rows[0];
 
-        // 2. CÁLCULO DE DEUDA TOTAL (Gastos + Comisiones)
-        const totalDeudaPendiente = parseFloat(stats.deuda_gastos) + parseFloat(stats.deuda_comisiones);
-        const pendiente = isNaN(totalDeudaPendiente) ? 0 : totalDeudaPendiente;
+        // 2. ESCUDO ANTI-NAN EN JAVASCRIPT (Doble protección)
+        const safeNum = (val) => {
+            const num = parseFloat(val);
+            return isNaN(num) ? 0.00 : num;
+        };
 
-        // 3. DATOS DE VARIACIÓN MENSUAL
-        const actual = parseFloat(stats.mes_actual || 0);
-        const pasado = parseFloat(stats.mes_pasado || 0);
+        const deudaGastos = safeNum(stats.deuda_gastos);
+        const deudaComisiones = safeNum(stats.deuda_comisiones);
+        const actual = safeNum(stats.mes_actual);
+        const pasado = safeNum(stats.mes_pasado);
 
-        // Calcular porcentaje de variación (Tendencia) usando LaTeX para la lógica:
-        // $$\text{Variación} = \frac{\text{Actual} - \text{Pasado}}{\text{Pasado}} \times 100$$
-        let variacion = pasado > 0 ? ((actual - pasado) / pasado * 100).toFixed(1) : 0;
+        const totalDeudaPendiente = deudaGastos + deudaComisiones;
+
+        // 3. CÁLCULO DE VARIACIÓN (Protegido contra división por cero)
+        let variacion = 0;
+        let colorVar = '#1cc88a'; // Verde por defecto
+        let flecha = '-';
+
+        if (pasado > 0) {
+            // Fórmula: ((Actual - Pasado) / Pasado) * 100
+            variacion = ((actual - pasado) / pasado) * 100;
+        } else if (actual > 0) {
+            // Si el mes pasado fue 0 y este mes hay gastos, es un aumento del 100% (técnicamente infinito)
+            variacion = 100;
+        }
+
+        // Formatear a 1 decimal
+        const variacionTexto = Math.abs(variacion).toFixed(1);
         
+        // Lógica de colores: Si gastamos MÁS (variación positiva), es malo (Rojo). Si gastamos MENOS, es bueno (Verde).
         const esSubida = variacion > 0;
-        const colorVar = esSubida ? '#e74a3b' : '#1cc88a'; // Rojo si gasta más, Verde si ahorra
-        const flecha = esSubida ? '▲' : '▼';
+        colorVar = esSubida ? '#e74a3b' : '#1cc88a'; 
+        flecha = esSubida ? '▲' : (variacion < 0 ? '▼' : '=');
 
-        // ... continúa con tu res.render abajo
-        // 2. GENERACIÓN DE LA VISTA
+        // 4. GENERACIÓN DE LA VISTA
         res.send(`
         <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
             <div class="container">
@@ -263,7 +280,7 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
                 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; margin-top: 30px; margin-bottom: 40px;">
                     
                     <div class="card" style="border-left: 5px solid #4e73df; padding: 20px;">
-                        <small style="color: #4e73df; font-weight: bold; text-transform: uppercase; font-size: 0.75rem;">Pagado este Mes</small>
+                        <small style="color: #4e73df; font-weight: bold; text-transform: uppercase; font-size: 0.75rem;">Pagado este Mes (Gastos)</small>
                         <div style="font-size: 1.8rem; font-weight: bold; color: #5a5c69; margin-top: 5px;">
                             RD$ ${actual.toLocaleString('en-US', {minimumFractionDigits: 2})}
                         </div>
@@ -274,15 +291,15 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
                             Tendencia vs Mes Pasado
                         </small>
                         <div style="font-size: 1.8rem; font-weight: bold; color: ${colorVar}; margin-top: 5px;">
-                            ${flecha} ${Math.abs(variacion)}%
+                            ${flecha} ${variacionTexto}%
                         </div>
-                        <small style="color: #858796;">Anterior: RD$ ${pasado.toLocaleString()}</small>
+                        <small style="color: #858796;">Anterior: RD$ ${pasado.toLocaleString('en-US', {minimumFractionDigits: 2})}</small>
                     </div>
 
                     <div class="card" style="border-left: 5px solid #f6c23e; padding: 20px;">
                         <small style="color: #f6c23e; font-weight: bold; text-transform: uppercase; font-size: 0.75rem;">Cuentas por Pagar Totales</small>
                         <div style="font-size: 1.8rem; font-weight: bold; color: #f6c23e; margin-top: 5px;">
-                            RD$ ${pendiente.toLocaleString('en-US', {minimumFractionDigits: 2})}
+                            RD$ ${totalDeudaPendiente.toLocaleString('en-US', {minimumFractionDigits: 2})}
                         </div>
                     </div>
 
@@ -325,9 +342,9 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
                             <p>Revisa y paga las comisiones de tus asesores.</p>
                         </a>
                         <a href="/gestionar-asesores" class="dashboard-card" style="border-left: 5px solid #f6c23e;">
-    <h3>⚖️ Configurar Comisiones</h3>
-    <p>Ajusta comisiones</p>
-</a>
+                            <h3>⚖️ Configurar Comisiones</h3>
+                            <p>Ajusta comisiones</p>
+                        </a>
                         <a href="/empleados" class="dashboard-card">
                             <h3>👥 Gestión de Equipo</h3>
                             <p>Configura datos de empleados y asesores.</p>
@@ -342,6 +359,7 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
         </body></html>
         `);
     } catch (e) {
+        console.error("Error Dashboard:", e);
         res.status(500).send("Error en el Dashboard: " + e.message);
     } finally {
         if (client) client.release();
