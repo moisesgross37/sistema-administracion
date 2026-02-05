@@ -4098,24 +4098,41 @@ app.post('/proyecto/:id/nuevo-pago', requireLogin, requireAdminOrCoord, async (r
     const quoteId = req.params.id; 
     const { payment_date, amount, students_covered, comment } = req.body;
     
+    // --- 1. VALIDACIÓN PREVIA (ESCUDO DE SEGURIDAD) ---
+    // Evitamos que entre basura a la base de datos si el monto no es válido.
+    if (!amount || isNaN(parseFloat(amount))) {
+        return res.status(400).send("Error: El monto ingresado no es válido.");
+    }
+    
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
 
-        // 1. Buscamos los datos de la cotización para el cálculo
+        // --- 2. DATOS DE LA COTIZACIÓN ---
         const quoteResult = await client.query(
             'SELECT advisorname, clientname, aporte_institucion, preciofinalporestudiante FROM quotes WHERE id = $1', 
             [quoteId]
         );
+        
+        if (quoteResult.rows.length === 0) {
+            throw new Error("Cotización no encontrada");
+        }
+
         const { advisorname, clientname, aporte_institucion, preciofinalporestudiante } = quoteResult.rows[0];
 
-        // 2. Cálculo de la Base Real (Descontando el aporte institucional)
+        // --- 3. CÁLCULOS MATEMÁTICOS (VENTA NETA) ---
         const montoAbono = parseFloat(amount);
-        const factor = (parseFloat(preciofinalporestudiante) > 0) ? (montoAbono / parseFloat(preciofinalporestudiante)) : 0;
+        // Evitamos división por cero usando lógica segura
+        const precioEstudiante = parseFloat(preciofinalporestudiante || 0);
+        const factor = (precioEstudiante > 0) ? (montoAbono / precioEstudiante) : 0;
+        
+        // Calculamos cuánto de este abono pertenece al "Fondo Institucional"
         const montoAporteRetenido = factor * parseFloat(aporte_institucion || 0);
+        
+        // La comisión se paga sobre lo que queda (Base Comisionable)
         const baseComisionable = montoAbono - montoAporteRetenido;
 
-        // 3. Insertamos el pago en la tabla
+        // --- 4. INSERTAR EL PAGO ---
         const payRes = await client.query(
             `INSERT INTO payments (quote_id, payment_date, amount, students_covered, comment, monto_aporte_retenido, base_comisionable) 
              VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
@@ -4123,42 +4140,54 @@ app.post('/proyecto/:id/nuevo-pago', requireLogin, requireAdminOrCoord, async (r
         );
         const newPaymentId = payRes.rows[0].id;
 
-        // 4. Lógica de Comisiones
+        // --- 5. LÓGICA DE COMISIONES ---
+        // A. Comisión del Vendedor (Asesor)
         const advRes = await client.query('SELECT * FROM advisors WHERE name = $1', [advisorname]);
+        
         if (advRes.rows.length > 0) {
             const advisor = advRes.rows[0];
-            const advisorAmount = baseComisionable * parseFloat(advisor.commission_rate);
+            const advisorAmount = baseComisionable * parseFloat(advisor.commission_rate || 0);
 
-            // Insertamos Venta Directa
+            // Insertamos Comisión Venta Directa
             await client.query(
                 `INSERT INTO commissions (payment_id, advisor_id, commission_type, base_amount, commission_rate, commission_amount)
                  VALUES ($1, $2, 'venta', $3, $4, $5)`,
                 [newPaymentId, advisor.id, baseComisionable, advisor.commission_rate, advisorAmount]
             );
             
-           // Localiza la parte donde calculas la comisión de coordinación
-if (!advisor.is_coordinator) {
-    const rateRes = await client.query(`SELECT value FROM app_settings WHERE key = 'coordinator_override_rate'`);
-    
-    // MEJORA: Validamos que la tasa sea un número real; si no, usamos 0.02 (2%)
-    const rawRate = rateRes.rows.length > 0 ? rateRes.rows[0].value : '0.02';
-    const coordRate = !isNaN(parseFloat(rawRate)) ? parseFloat(rawRate) : 0.02;
+            // B. Comisión de Coordinación (CORREGIDO)
+            // Si el vendedor NO es coordinador, buscamos a su jefe (o al coordinador general)
+            if (!advisor.is_coordinator) {
+                
+                // PASO CRÍTICO: Buscar al coordinador en la BD antes de usarlo
+                // Aquí buscamos al primer asesor que tenga el rol de coordinador activo
+                const coordRes = await client.query("SELECT id FROM advisors WHERE is_coordinator = true LIMIT 1");
+                const coordinator = coordRes.rows[0];
 
-    const coordAmount = baseComisionable * coordRate;
+                if (coordinator) {
+                    // Buscamos la tasa de la App o usamos 2% por defecto
+                    const rateRes = await client.query(`SELECT value FROM app_settings WHERE key = 'coordinator_override_rate'`);
+                    const rawRate = rateRes.rows.length > 0 ? rateRes.rows[0].value : '0.02';
+                    const coordRate = !isNaN(parseFloat(rawRate)) ? parseFloat(rawRate) : 0.02;
 
-    // Solo insertamos si el monto es un número válido
-    if (!isNaN(coordAmount)) {
-        await client.query(
-            `INSERT INTO commissions (payment_id, advisor_id, commission_type, base_amount, commission_rate, commission_amount)
-             VALUES ($1, $2, 'coordinador', $3, $4, $5)`,
-            [newPaymentId, coordinator.id, baseComisionable, coordRate, coordAmount]
-        );
-    }
-}
+                    const coordAmount = baseComisionable * coordRate;
+
+                    // Insertamos solo si el cálculo es válido
+                    if (!isNaN(coordAmount)) {
+                        await client.query(
+                            `INSERT INTO commissions (payment_id, advisor_id, commission_type, base_amount, commission_rate, commission_amount)
+                             VALUES ($1, $2, 'coordinador', $3, $4, $5)`,
+                            [newPaymentId, coordinator.id, baseComisionable, coordRate, coordAmount]
+                        );
+                    }
+                } else {
+                    console.warn("AVISO: Se registró el pago pero no se encontró un coordinador activo para asignar comisión.");
+                }
+            }
         }
 
-        // --- SOLUCIÓN AL PUNTO 1 (EL PUENTE) ---
-        // Buscamos el ID real del centro para evitar el error 404 al redireccionar
+        // --- 6. REDIRECCIÓN INTELIGENTE ---
+        // Buscamos el ID real del centro para redirigir al usuario a la página correcta
         const centerResult = await client.query(
             'SELECT id FROM centers WHERE name = (SELECT clientname FROM quotes WHERE id = $1)', 
             [quoteId]
@@ -4167,22 +4196,21 @@ if (!advisor.is_coordinator) {
 
         await client.query('COMMIT');
         
-        // Redirigimos al ID del centro real (ej: 192) para que el puente sea estable
         if (realCenterId) {
             res.redirect(`/proyecto/${realCenterId}`);
         } else {
-            res.redirect('/clientes'); // Fallback de seguridad
+            res.redirect('/clientes');
         }
 
     } catch (error) {
         if (client) await client.query('ROLLBACK');
         console.error("Error al procesar pago:", error);
-        res.status(500).send('Error interno al guardar el pago');
+        // Enviamos un error 500 pero con texto para saber qué pasó
+        res.status(500).send(`<h1>Error al guardar el pago</h1><p>${error.message}</p>`);
     } finally {
         if (client) client.release();
     }
 });
-
 app.post('/proyecto/:id/nuevo-gasto', requireLogin, requireAdminOrCoord, async (req, res) => {
     const quoteId = req.params.id;
     const { centerId, expense_date, supplier_id, amount, description, type } = req.body;
