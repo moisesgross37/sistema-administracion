@@ -1924,19 +1924,30 @@ app.get('/caja-chica/reporte/:cycleId/pdf', requireLogin, requireAdminOrCoord, a
 
 app.post('/gastos-generales', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { expense_date, supplier_id, amount, description, type } = req.body;
+    
+    // Validaciones
     if (!expense_date || !supplier_id || !amount || !description) {
         return res.status(400).send("La fecha, suplidor, monto y descripción son obligatorios.");
     }
+
+    let client;
     try {
-        const client = await pool.connect();
+        client = await pool.connect();
+        
+        // --- CAMBIO CLAVE AQUÍ ---
+        // Agregamos 'status' y 'paid_amount' al INSERT.
+        // Le pasamos 'Pagada' como texto y repetimos el monto ($3) en la columna de pagado.
         await client.query(
-            `INSERT INTO expenses (expense_date, supplier_id, amount, description, type, quote_id) 
-             VALUES ($1, $2, $3, $4, $5, NULL)`,
+            `INSERT INTO expenses (expense_date, supplier_id, amount, description, type, quote_id, status, paid_amount) 
+             VALUES ($1, $2, $3, $4, $5, NULL, 'Pagada', $3)`,
             [expense_date, supplier_id, amount, description, type]
         );
+        
         client.release();
         res.redirect('/gastos-generales');
+
     } catch (error) {
+        if (client) client.release(); // Asegurar liberación si falla
         console.error("Error al guardar el gasto general:", error);
         res.status(500).send('<h1>Error al guardar el gasto ❌</h1>');
     }
