@@ -229,69 +229,67 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
         // FECHA DE INICIO DEL CICLO (Agosto 1, 2025)
         const CYCLE_START = '2025-08-01';
 
-        // 1. CONSULTA MAESTRA GLOBAL (Ciclo Completo)
-        // Sumamos TODO desde el inicio del ciclo para tener la "Temperatura Real"
+        // 1. CONSULTA MAESTRA GLOBAL (CORREGIDA CON TUS OBSERVACIONES)
         const globalStats = await client.query(`
             SELECT 
-                -- A. VENTA TOTAL CONTRATADA (Proyección de Ingreso)
-                (SELECT COALESCE(SUM(preciofinalporestudiante * estudiantesparafacturar), 0) 
+                -- A. VENTA TOTAL NETA (Restando el Aporte Institucional)
+                (SELECT COALESCE(SUM((preciofinalporestudiante - COALESCE(aporte, 0)) * estudiantesparafacturar), 0) 
                  FROM quotes WHERE status = 'activa' AND createdat >= $1) as venta_contratada,
 
                 -- B. DINERO QUE HA ENTRADO REALMENTE (Caja)
                 (SELECT COALESCE(SUM(amount), 0) 
                  FROM payments WHERE payment_date >= $1) as total_cobrado,
 
-                -- C. DINERO QUE HA SALIDO REALMENTE (Gastos Operativos + Facturas + Caja Chica)
+                -- C1. GASTOS OPERATIVOS (Suplidores + Caja Chica + Generales)
                 (SELECT COALESCE(SUM(amount), 0) 
                  FROM expenses WHERE expense_date >= $1) as gastos_operativos,
 
-                -- D. COMISIONES PAGADAS (Salidas de Dinero a Asesores)
+                -- C2. COMISIONES PAGADAS (Salidas a Asesores)
                 (SELECT COALESCE(SUM(commission_amount), 0) 
                  FROM commissions WHERE status = 'pagada' AND created_at >= $1) as comisiones_pagadas,
 
-                -- E. DEUDAS PENDIENTES (Para saber qué nos falta pagar)
-                (SELECT COALESCE(SUM(amount - paid_amount), 0) FROM expenses) as deuda_proveedores,
-                (SELECT COALESCE(SUM(commission_amount), 0) FROM commissions WHERE status = 'pendiente') as deuda_comisiones
+                -- C3. NÓMINA PAGADA (Salidas a Empleados - NUEVO)
+                -- Buscamos en el historial de nóminas pagadas
+                (SELECT COALESCE(SUM(total_paid), 0) 
+                 FROM payroll_history WHERE payment_date >= $1) as nomina_pagada
+
         `, [CYCLE_START]);
 
         const stats = globalStats.rows[0];
 
-        // 2. MATEMÁTICA FINANCIERA (El Cerebro del Negocio)
-        const ventaTotal = parseFloat(stats.venta_contratada);
+        // 2. MATEMÁTICA FINANCIERA REAL
+        const ventaTotal = parseFloat(stats.venta_contratada); // Ya tiene el aporte restado
         const cobradoTotal = parseFloat(stats.total_cobrado);
         
-        // Gasto Total Real = Gastos Operativos (Luz, Nómina, Materiales) + Comisiones Pagadas
-        const gastoTotal = parseFloat(stats.gastos_operativos) + parseFloat(stats.comisiones_pagadas);
+        // GASTO TOTAL REAL = Operativos + Comisiones + Nómina
+        // Si 'payroll_history' usa otro nombre de columna (ej: net_salary), avísame. Usé 'total_paid'.
+        const nomina = parseFloat(stats.nomina_pagada || 0);
+        const gastoTotal = parseFloat(stats.gastos_operativos) + parseFloat(stats.comisiones_pagadas) + nomina;
         
         // Disponibilidad (Caja Real) = Lo que entró - Lo que salió
         const disponibilidad = cobradoTotal - gastoTotal;
 
         // 3. CÁLCULO DE PROYECCIÓN (RUNWAY)
-        // Calculamos cuántos meses han pasado desde Agosto 2025 hasta hoy
         const hoy = new Date();
         const inicioCiclo = new Date(CYCLE_START);
         const mesesPasados = (hoy.getFullYear() - inicioCiclo.getFullYear()) * 12 + (hoy.getMonth() - inicioCiclo.getMonth()) + 1;
         
-        // Promedio de Gasto Mensual (Quemado de Dinero)
         const promedioGastoMensual = mesesPasados > 0 ? (gastoTotal / mesesPasados) : gastoTotal;
-
-        // ¿Para cuántos meses nos da el dinero actual?
-        // Si el promedio es 0, tenemos "infinito" (evitar división por cero)
         const mesesDeVida = promedioGastoMensual > 0 ? (disponibilidad / promedioGastoMensual) : 0;
 
-        // Lógica de Semáforo para la Inversión
+        // Lógica de Semáforo
         let mensajeInversion = "";
         let colorInversion = "";
         
         if (mesesDeVida >= 6) {
-            mensajeInversion = "✅ EXCELENTE. Puedes invertir con seguridad.";
-            colorInversion = "#1cc88a"; // Verde
+            mensajeInversion = "✅ EXCELENTE. Caja saludable para invertir.";
+            colorInversion = "#1cc88a"; 
         } else if (mesesDeVida >= 3) {
-            mensajeInversion = "⚠️ PRECAUCIÓN. Inversiones moderadas solamente.";
-            colorInversion = "#f6c23e"; // Amarillo
+            mensajeInversion = "⚠️ PRECAUCIÓN. Mantén gastos controlados.";
+            colorInversion = "#f6c23e"; 
         } else {
-            mensajeInversion = "🛑 PELIGRO. No inviertas. Protege la caja.";
-            colorInversion = "#e74a3b"; // Rojo
+            mensajeInversion = "🛑 ALERTA. Prioriza la liquidez. No gastes.";
+            colorInversion = "#e74a3b"; 
         }
 
         // 4. GENERACIÓN DE LA VISTA
@@ -301,32 +299,34 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
                 ${dashboardHeader(req.session.user)}
 
                 <div class="card" style="margin-top:20px; border-left: 5px solid ${colorInversion}; padding: 25px; background: #fff;">
-                    <h2 style="margin-top:0; color: #5a5c69;">📊 Diagnóstico Financiero Global (Ciclo 25-26)</h2>
+                    <h2 style="margin-top:0; color: #5a5c69;">📊 Diagnóstico Financiero (Ciclo 25-26)</h2>
                     
                     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-top: 20px;">
                         
                         <div style="text-align: center; padding: 10px; background: #f8f9fc; border-radius: 8px;">
-                            <small style="color:#4e73df; font-weight:bold;">VENTA TOTAL CONTRATADA</small>
+                            <small style="color:#4e73df; font-weight:bold;">VENTA NETA CONTRATADA</small>
                             <div style="font-size: 1.4rem; font-weight:bold; color:#5a5c69;">RD$ ${ventaTotal.toLocaleString('en-US', {maximumFractionDigits: 0})}</div>
+                            <small style="color:gray; font-size:10px;">(Ya descontado el Aporte)</small>
                         </div>
 
                         <div style="text-align: center; padding: 10px; background: ${disponibilidad >= 0 ? '#e6fffa' : '#fff5f5'}; border-radius: 8px; border: 1px solid ${disponibilidad >= 0 ? '#1cc88a' : '#e74a3b'};">
-                            <small style="color:${disponibilidad >= 0 ? '#2c7a7b' : '#c53030'}; font-weight:bold;">DISPONIBILIDAD REAL (CAJA)</small>
+                            <small style="color:${disponibilidad >= 0 ? '#2c7a7b' : '#c53030'}; font-weight:bold;">DISPONIBILIDAD REAL</small>
                             <div style="font-size: 1.6rem; font-weight:bold; color:${disponibilidad >= 0 ? '#2c7a7b' : '#c53030'};">
                                 RD$ ${disponibilidad.toLocaleString('en-US', {minimumFractionDigits: 2})}
                             </div>
-                            <small style="display:block; margin-top:5px;">(Cobrado - Gastado Total)</small>
+                            <small style="display:block; margin-top:5px; font-size:11px;">(Cobros - Gastos - Nómina)</small>
                         </div>
 
                         <div style="text-align: center; padding: 10px; background: #fffbe6; border-radius: 8px;">
-                            <small style="color:#856404; font-weight:bold;">COBERTURA GASTOS FIJOS</small>
-                            <div style="font-size: 1.4rem; font-weight:bold; color:#856404;">${mesesDeVida.toFixed(1)} Meses</div>
-                            <small style="display:block; color:#856404;">Basado en gasto prom: RD$ ${promedioGastoMensual.toLocaleString('en-US', {maximumFractionDigits: 0})}/mes</small>
+                            <small style="color:#856404; font-weight:bold;">QUEMA MENSUAL (BURN RATE)</small>
+                            <div style="font-size: 1.4rem; font-weight:bold; color:#856404;">RD$ ${promedioGastoMensual.toLocaleString('en-US', {maximumFractionDigits: 0})}</div>
+                            <small style="display:block; color:#856404; font-size:10px;">Gasto promedio por mes</small>
                         </div>
 
                     </div>
 
                     <div style="margin-top: 20px; padding: 15px; background: ${colorInversion}20; border-radius: 5px; color: ${colorInversion}; font-weight: bold; text-align: center; border: 1px solid ${colorInversion};">
+                        COBERTURA ACTUAL: ${mesesDeVida.toFixed(1)} Meses de vida operativa. <br>
                         ${mensajeInversion}
                     </div>
                 </div>
@@ -361,7 +361,6 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
         if (client) client.release();
     }
 });
-
 
 app.get('/todos-los-centros', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
