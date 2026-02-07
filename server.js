@@ -226,126 +226,112 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         client = await pool.connect();
 
-        // FECHA DE INICIO DEL CICLO (Agosto 1, 2025)
+        // FECHA DE INICIO DEL CICLO
         const CYCLE_START = '2025-08-01';
 
-        // 1. CONSULTA MAESTRA (CORREGIDA)
+        // 1. CONSULTA FINANCIERA BLINDADA
         const globalStats = await client.query(`
             SELECT 
-                -- A. VENTA TOTAL NETA (Corregido: usamos 'aporte_institucion')
+                -- A. VENTA (Usamos 'aporte_institucion' que ya vimos que sí existe)
                 (SELECT COALESCE(SUM((preciofinalporestudiante - COALESCE(aporte_institucion, 0)) * estudiantesparafacturar), 0) 
                  FROM quotes WHERE status = 'activa' AND createdat >= $1) as venta_contratada,
 
-                -- B. DINERO QUE HA ENTRADO REALMENTE (Caja)
-                (SELECT COALESCE(SUM(amount), 0) 
-                 FROM payments WHERE payment_date >= $1) as total_cobrado,
+                -- B. COBROS
+                (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE payment_date >= $1) as total_cobrado,
 
-                -- C1. GASTOS OPERATIVOS
-                (SELECT COALESCE(SUM(amount), 0) 
-                 FROM expenses WHERE expense_date >= $1) as gastos_operativos,
+                -- C. GASTOS
+                (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE expense_date >= $1) as gastos_operativos,
 
-                -- C2. COMISIONES PAGADAS
-                (SELECT COALESCE(SUM(commission_amount), 0) 
-                 FROM commissions WHERE status = 'pagada' AND created_at >= $1) as comisiones_pagadas,
+                -- D. COMISIONES
+                (SELECT COALESCE(SUM(commission_amount), 0) FROM commissions WHERE status = 'pagada' AND created_at >= $1) as comisiones_pagadas,
 
-                -- C3. NÓMINA PAGADA (TEMPORALMENTE EN 0 PARA EVITAR EL ERROR)
-                -- Cuando sepamos el nombre real de la tabla de nómina, activamos esto.
-                (SELECT 0) as nomina_pagada
+                -- E. NÓMINA (Usamos 'payroll_records' pero con 0 por seguridad hasta saber la columna de monto)
+                (SELECT 0 FROM payroll_records LIMIT 1) as nomina_pagada
 
         `, [CYCLE_START]);
 
         const stats = globalStats.rows[0];
 
-        // 2. MATEMÁTICA FINANCIERA
-        const ventaTotal = parseFloat(stats.venta_contratada);
-        const cobradoTotal = parseFloat(stats.total_cobrado);
-        
-        // GASTO TOTAL REAL
-        const nomina = parseFloat(stats.nomina_pagada || 0);
-        const gastoTotal = parseFloat(stats.gastos_operativos) + parseFloat(stats.comisiones_pagadas) + nomina;
-        
-        // Disponibilidad
+        // 2. ESCUDO ANTI-NAN (Función de seguridad)
+        const safe = (val) => {
+            const num = parseFloat(val);
+            return isNaN(num) ? 0 : num;
+        };
+
+        // 3. CÁLCULOS
+        const ventaTotal = safe(stats.venta_contratada);
+        const cobradoTotal = safe(stats.total_cobrado);
+        const nomina = safe(stats.nomina_pagada); // Por ahora será 0
+        const gastoTotal = safe(stats.gastos_operativos) + safe(stats.comisiones_pagadas) + nomina;
         const disponibilidad = cobradoTotal - gastoTotal;
 
-        // 3. CÁLCULO DE PROYECCIÓN
+        // Proyección (Runway)
         const hoy = new Date();
         const inicioCiclo = new Date(CYCLE_START);
-        const mesesPasados = (hoy.getFullYear() - inicioCiclo.getFullYear()) * 12 + (hoy.getMonth() - inicioCiclo.getMonth()) + 1;
+        const mesesPasados = Math.max(1, (hoy.getFullYear() - inicioCiclo.getFullYear()) * 12 + (hoy.getMonth() - inicioCiclo.getMonth()) + 1);
         
-        const promedioGastoMensual = mesesPasados > 0 ? (gastoTotal / mesesPasados) : gastoTotal;
-        const mesesDeVida = promedioGastoMensual > 0 ? (disponibilidad / promedioGastoMensual) : 0;
+        const promedioGasto = gastoTotal / mesesPasados;
+        const mesesVida = promedioGasto > 0 ? (disponibilidad / promedioGasto) : 0;
 
-        // Lógica de Semáforo
-        let mensajeInversion = "";
-        let colorInversion = "";
-        
-        if (mesesDeVida >= 6) {
-            mensajeInversion = "✅ EXCELENTE. Caja saludable para invertir.";
-            colorInversion = "#1cc88a"; 
-        } else if (mesesDeVida >= 3) {
-            mensajeInversion = "⚠️ PRECAUCIÓN. Mantén gastos controlados.";
-            colorInversion = "#f6c23e"; 
-        } else {
-            mensajeInversion = "🛑 ALERTA. Prioriza la liquidez. No gastes.";
-            colorInversion = "#e74a3b"; 
-        }
+        // Semáforo
+        let colorInv = mesesVida >= 6 ? '#1cc88a' : (mesesVida >= 3 ? '#f6c23e' : '#e74a3b');
+        let msgInv = mesesVida >= 6 ? "✅ EXCELENTE. Caja saludable." : (mesesVida >= 3 ? "⚠️ PRECAUCIÓN. Controla gastos." : "🛑 ALERTA. Prioriza liquidez.");
 
-        // 4. GENERACIÓN DE LA VISTA
+        // 4. VISTA (CON TODOS TUS BOTONES RESTAURADOS)
         res.send(`
         <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
             <div class="container">
                 ${dashboardHeader(req.session.user)}
 
-                <div class="card" style="margin-top:20px; border-left: 5px solid ${colorInversion}; padding: 25px; background: #fff;">
-                    <h2 style="margin-top:0; color: #5a5c69;">📊 Diagnóstico Financiero (Ciclo 25-26)</h2>
+                <div class="card" style="margin-top:20px; border-left: 5px solid ${colorInv}; padding: 20px; background: #fff;">
+                    <h3 style="margin-top:0; color: #5a5c69; border-bottom:1px solid #eee; padding-bottom:10px;">📊 Diagnóstico Financiero (Ciclo 25-26)</h3>
                     
-                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-top: 20px;">
-                        
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-top: 15px;">
                         <div style="text-align: center; padding: 10px; background: #f8f9fc; border-radius: 8px;">
-                            <small style="color:#4e73df; font-weight:bold;">VENTA NETA CONTRATADA</small>
-                            <div style="font-size: 1.4rem; font-weight:bold; color:#5a5c69;">RD$ ${ventaTotal.toLocaleString('en-US', {maximumFractionDigits: 0})}</div>
-                            <small style="color:gray; font-size:10px;">(Ya descontado el Aporte)</small>
+                            <small style="color:#4e73df; font-weight:bold;">VENTA NETA</small>
+                            <div style="font-size: 1.2rem; font-weight:bold; color:#5a5c69;">RD$ ${ventaTotal.toLocaleString('en-US', {maximumFractionDigits:0})}</div>
                         </div>
-
-                        <div style="text-align: center; padding: 10px; background: ${disponibilidad >= 0 ? '#e6fffa' : '#fff5f5'}; border-radius: 8px; border: 1px solid ${disponibilidad >= 0 ? '#1cc88a' : '#e74a3b'};">
+                        <div style="text-align: center; padding: 10px; background: ${disponibilidad >= 0 ? '#e6fffa' : '#fff5f5'}; border-radius: 8px;">
                             <small style="color:${disponibilidad >= 0 ? '#2c7a7b' : '#c53030'}; font-weight:bold;">DISPONIBILIDAD REAL</small>
-                            <div style="font-size: 1.6rem; font-weight:bold; color:${disponibilidad >= 0 ? '#2c7a7b' : '#c53030'};">
-                                RD$ ${disponibilidad.toLocaleString('en-US', {minimumFractionDigits: 2})}
-                            </div>
-                            <small style="display:block; margin-top:5px; font-size:11px;">(Cobros - Gastos - Nómina)</small>
+                            <div style="font-size: 1.4rem; font-weight:bold; color:${disponibilidad >= 0 ? '#2c7a7b' : '#c53030'};">RD$ ${disponibilidad.toLocaleString('en-US', {minimumFractionDigits:2})}</div>
                         </div>
-
                         <div style="text-align: center; padding: 10px; background: #fffbe6; border-radius: 8px;">
-                            <small style="color:#856404; font-weight:bold;">QUEMA MENSUAL (BURN RATE)</small>
-                            <div style="font-size: 1.4rem; font-weight:bold; color:#856404;">RD$ ${promedioGastoMensual.toLocaleString('en-US', {maximumFractionDigits: 0})}</div>
-                            <small style="display:block; color:#856404; font-size:10px;">Gasto promedio por mes</small>
+                            <small style="color:#856404; font-weight:bold;">COBERTURA</small>
+                            <div style="font-size: 1.2rem; font-weight:bold; color:#856404;">${mesesVida.toFixed(1)} Meses</div>
                         </div>
-
-                    </div>
-
-                    <div style="margin-top: 20px; padding: 15px; background: ${colorInversion}20; border-radius: 5px; color: ${colorInversion}; font-weight: bold; text-align: center; border: 1px solid ${colorInversion};">
-                        COBERTURA ACTUAL: ${mesesDeVida.toFixed(1)} Meses de vida operativa. <br>
-                        ${mensajeInversion}
                     </div>
                 </div>
 
                 <div class="module" style="margin-top: 30px;">
-                    <h2>Gestión Operativa</h2>
+                    <h2>📂 Gestión de Proyectos</h2>
                     <div class="dashboard">
                         <a href="/proyectos-por-activar" class="dashboard-card"><h3>📬 Proyectos por Activar</h3><p>Activa cotizaciones nuevas.</p></a>
-                        <a href="/cuentas-por-cobrar" class="dashboard-card"><h3>📊 Cuentas por Cobrar</h3><p>Gestiona cobros y abonos.</p></a>
-                        <a href="/cuentas-por-pagar" class="dashboard-card"><h3>🧾 Cuentas por Pagar</h3><p>Gestiona deudas a suplidores.</p></a>
-                        <a href="/gastos-generales" class="dashboard-card"><h3>💸 Registrar Gastos</h3><p>Registra salidas de caja.</p></a>
+                        <a href="/clientes" class="dashboard-card"><h3>🗂️ Clientes Activos</h3><p>Ver proyectos en curso.</p></a>
+                        <a href="/todos-los-centros" class="dashboard-card"><h3>🏢 Directorio Centros</h3><p>Lista de todos los colegios.</p></a>
+                    </div>
+                </div>
+
+                <div class="module">
+                    <h2>💰 Finanzas y Contabilidad</h2>
+                    <div class="dashboard">
+                        <a href="/caja-chica" class="dashboard-card"><h3>💵 Caja Chica</h3><p>Control de efectivo diario.</p></a>
+                        <a href="/cuentas-por-cobrar" class="dashboard-card"><h3>📊 Cuentas por Cobrar</h3><p>Gestión de abonos pendientes.</p></a>
+                        <a href="/cuentas-por-pagar" class="dashboard-card"><h3>🧾 Cuentas por Pagar</h3><p>Facturas de suplidores.</p></a>
+                        <a href="/gastos-generales" class="dashboard-card"><h3>💸 Registrar Gasto</h3><p>Salidas generales o admin.</p></a>
+                        <a href="/reporte-gastos" class="dashboard-card"><h3>📉 Reporte de Gastos</h3><p>Resumen global de salidas.</p></a>
+                        <a href="/suplidores" class="dashboard-card"><h3>🚚 Suplidores</h3><p>Directorio de proveedores.</p></a>
                     </div>
                 </div>
 
                 <div class="module" style="margin-bottom: 50px;">
-                    <h2>Personal y Nómina</h2>
+                    <h2>👥 Personal y Nómina</h2>
                     <div class="dashboard">
-                        <a href="/super-nomina" class="dashboard-card" style="border-top: 5px solid #28a745;"><h3>💰 Control de Nómina</h3><p>Pagos quincenales.</p></a>
-                        <a href="/gestionar-prestamos" class="dashboard-card" style="border-top: 5px solid #dc3545;"><h3>🏦 Gestión de Préstamos</h3><p>Adelantos a empleados.</p></a>
-                        <a href="/pagar-comisiones" class="dashboard-card"><h3>💵 Pago de Comisiones</h3><p>Liquidación de asesores.</p></a>
-                        <a href="/empleados" class="dashboard-card"><h3>👥 Equipo</h3><p>Directorio de empleados.</p></a>
+                        <a href="/super-nomina" class="dashboard-card" style="border-top: 4px solid #1cc88a;"><h3>💰 Control Nómina</h3><p>Pagos quincenales.</p></a>
+                        <a href="/historial-nomina" class="dashboard-card"><h3>📂 Historial Nómina</h3><p>Recibos anteriores.</p></a>
+                        <a href="/gestionar-prestamos" class="dashboard-card" style="border-top: 4px solid #e74a3b;"><h3>🏦 Préstamos</h3><p>Adelantos a empleados.</p></a>
+                        <a href="/pagar-comisiones" class="dashboard-card"><h3>💵 Pagar Comisiones</h3><p>Liquidación asesores.</p></a>
+                        <a href="/gestionar-asesores" class="dashboard-card"><h3>⚖️ Config. Comisiones</h3><p>Ajustar % de ganancia.</p></a>
+                        <a href="/empleados" class="dashboard-card"><h3>busts_in_silhouette Equipo</h3><p>Datos de empleados.</p></a>
                     </div>
                 </div>
 
@@ -354,11 +340,12 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
         `);
     } catch (e) {
         console.error("Error Dashboard:", e);
-        res.status(500).send("Error en el Dashboard: " + e.message);
+        res.status(500).send("Error: " + e.message);
     } finally {
         if (client) client.release();
     }
 });
+
 app.get('/todos-los-centros', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
