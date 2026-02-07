@@ -220,56 +220,79 @@ const dashboardHeader = (user) => `
 `;
 
 const backToDashboardLink = `<a href="/" class="back-link">🏠 Volver al Panel Principal</a>`;
+
 app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
     let client;
     try {
         client = await pool.connect();
 
-        // 1. CONSULTA DE ESTADÍSTICAS BLINDADA
-        // Usamos COALESCE(..., 0) desde SQL para que nunca venga un NULL
-        const statsRes = await client.query(`
+        // FECHA DE INICIO DEL CICLO (Agosto 1, 2025)
+        const CYCLE_START = '2025-08-01';
+
+        // 1. CONSULTA MAESTRA GLOBAL (Ciclo Completo)
+        // Sumamos TODO desde el inicio del ciclo para tener la "Temperatura Real"
+        const globalStats = await client.query(`
             SELECT 
-                (SELECT COALESCE(SUM(amount - paid_amount), 0) FROM expenses) as deuda_gastos,
-                (SELECT COALESCE(SUM(commission_amount), 0) FROM commissions WHERE status = 'pendiente') as deuda_comisiones,
-                (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE date_part('month', expense_date) = date_part('month', CURRENT_DATE) AND date_part('year', expense_date) = date_part('year', CURRENT_DATE)) as mes_actual,
-                (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE date_part('month', expense_date) = date_part('month', CURRENT_DATE - INTERVAL '1 month') AND date_part('year', expense_date) = date_part('year', CURRENT_DATE - INTERVAL '1 month')) as mes_pasado
-        `);
+                -- A. VENTA TOTAL CONTRATADA (Proyección de Ingreso)
+                (SELECT COALESCE(SUM(preciofinalporestudiante * estudiantesparafacturar), 0) 
+                 FROM quotes WHERE status = 'activa' AND createdat >= $1) as venta_contratada,
 
-        const stats = statsRes.rows[0];
+                -- B. DINERO QUE HA ENTRADO REALMENTE (Caja)
+                (SELECT COALESCE(SUM(amount), 0) 
+                 FROM payments WHERE payment_date >= $1) as total_cobrado,
 
-        // 2. ESCUDO ANTI-NAN EN JAVASCRIPT (Doble protección)
-        const safeNum = (val) => {
-            const num = parseFloat(val);
-            return isNaN(num) ? 0.00 : num;
-        };
+                -- C. DINERO QUE HA SALIDO REALMENTE (Gastos Operativos + Facturas + Caja Chica)
+                (SELECT COALESCE(SUM(amount), 0) 
+                 FROM expenses WHERE expense_date >= $1) as gastos_operativos,
 
-        const deudaGastos = safeNum(stats.deuda_gastos);
-        const deudaComisiones = safeNum(stats.deuda_comisiones);
-        const actual = safeNum(stats.mes_actual);
-        const pasado = safeNum(stats.mes_pasado);
+                -- D. COMISIONES PAGADAS (Salidas de Dinero a Asesores)
+                (SELECT COALESCE(SUM(commission_amount), 0) 
+                 FROM commissions WHERE status = 'pagada' AND created_at >= $1) as comisiones_pagadas,
 
-        const totalDeudaPendiente = deudaGastos + deudaComisiones;
+                -- E. DEUDAS PENDIENTES (Para saber qué nos falta pagar)
+                (SELECT COALESCE(SUM(amount - paid_amount), 0) FROM expenses) as deuda_proveedores,
+                (SELECT COALESCE(SUM(commission_amount), 0) FROM commissions WHERE status = 'pendiente') as deuda_comisiones
+        `, [CYCLE_START]);
 
-        // 3. CÁLCULO DE VARIACIÓN (Protegido contra división por cero)
-        let variacion = 0;
-        let colorVar = '#1cc88a'; // Verde por defecto
-        let flecha = '-';
+        const stats = globalStats.rows[0];
 
-        if (pasado > 0) {
-            // Fórmula: ((Actual - Pasado) / Pasado) * 100
-            variacion = ((actual - pasado) / pasado) * 100;
-        } else if (actual > 0) {
-            // Si el mes pasado fue 0 y este mes hay gastos, es un aumento del 100% (técnicamente infinito)
-            variacion = 100;
-        }
-
-        // Formatear a 1 decimal
-        const variacionTexto = Math.abs(variacion).toFixed(1);
+        // 2. MATEMÁTICA FINANCIERA (El Cerebro del Negocio)
+        const ventaTotal = parseFloat(stats.venta_contratada);
+        const cobradoTotal = parseFloat(stats.total_cobrado);
         
-        // Lógica de colores: Si gastamos MÁS (variación positiva), es malo (Rojo). Si gastamos MENOS, es bueno (Verde).
-        const esSubida = variacion > 0;
-        colorVar = esSubida ? '#e74a3b' : '#1cc88a'; 
-        flecha = esSubida ? '▲' : (variacion < 0 ? '▼' : '=');
+        // Gasto Total Real = Gastos Operativos (Luz, Nómina, Materiales) + Comisiones Pagadas
+        const gastoTotal = parseFloat(stats.gastos_operativos) + parseFloat(stats.comisiones_pagadas);
+        
+        // Disponibilidad (Caja Real) = Lo que entró - Lo que salió
+        const disponibilidad = cobradoTotal - gastoTotal;
+
+        // 3. CÁLCULO DE PROYECCIÓN (RUNWAY)
+        // Calculamos cuántos meses han pasado desde Agosto 2025 hasta hoy
+        const hoy = new Date();
+        const inicioCiclo = new Date(CYCLE_START);
+        const mesesPasados = (hoy.getFullYear() - inicioCiclo.getFullYear()) * 12 + (hoy.getMonth() - inicioCiclo.getMonth()) + 1;
+        
+        // Promedio de Gasto Mensual (Quemado de Dinero)
+        const promedioGastoMensual = mesesPasados > 0 ? (gastoTotal / mesesPasados) : gastoTotal;
+
+        // ¿Para cuántos meses nos da el dinero actual?
+        // Si el promedio es 0, tenemos "infinito" (evitar división por cero)
+        const mesesDeVida = promedioGastoMensual > 0 ? (disponibilidad / promedioGastoMensual) : 0;
+
+        // Lógica de Semáforo para la Inversión
+        let mensajeInversion = "";
+        let colorInversion = "";
+        
+        if (mesesDeVida >= 6) {
+            mensajeInversion = "✅ EXCELENTE. Puedes invertir con seguridad.";
+            colorInversion = "#1cc88a"; // Verde
+        } else if (mesesDeVida >= 3) {
+            mensajeInversion = "⚠️ PRECAUCIÓN. Inversiones moderadas solamente.";
+            colorInversion = "#f6c23e"; // Amarillo
+        } else {
+            mensajeInversion = "🛑 PELIGRO. No inviertas. Protege la caja.";
+            colorInversion = "#e74a3b"; // Rojo
+        }
 
         // 4. GENERACIÓN DE LA VISTA
         res.send(`
@@ -277,84 +300,57 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
             <div class="container">
                 ${dashboardHeader(req.session.user)}
 
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; margin-top: 30px; margin-bottom: 40px;">
+                <div class="card" style="margin-top:20px; border-left: 5px solid ${colorInversion}; padding: 25px; background: #fff;">
+                    <h2 style="margin-top:0; color: #5a5c69;">📊 Diagnóstico Financiero Global (Ciclo 25-26)</h2>
                     
-                    <div class="card" style="border-left: 5px solid #4e73df; padding: 20px;">
-                        <small style="color: #4e73df; font-weight: bold; text-transform: uppercase; font-size: 0.75rem;">Pagado este Mes (Gastos)</small>
-                        <div style="font-size: 1.8rem; font-weight: bold; color: #5a5c69; margin-top: 5px;">
-                            RD$ ${actual.toLocaleString('en-US', {minimumFractionDigits: 2})}
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-top: 20px;">
+                        
+                        <div style="text-align: center; padding: 10px; background: #f8f9fc; border-radius: 8px;">
+                            <small style="color:#4e73df; font-weight:bold;">VENTA TOTAL CONTRATADA</small>
+                            <div style="font-size: 1.4rem; font-weight:bold; color:#5a5c69;">RD$ ${ventaTotal.toLocaleString('en-US', {maximumFractionDigits: 0})}</div>
                         </div>
+
+                        <div style="text-align: center; padding: 10px; background: ${disponibilidad >= 0 ? '#e6fffa' : '#fff5f5'}; border-radius: 8px; border: 1px solid ${disponibilidad >= 0 ? '#1cc88a' : '#e74a3b'};">
+                            <small style="color:${disponibilidad >= 0 ? '#2c7a7b' : '#c53030'}; font-weight:bold;">DISPONIBILIDAD REAL (CAJA)</small>
+                            <div style="font-size: 1.6rem; font-weight:bold; color:${disponibilidad >= 0 ? '#2c7a7b' : '#c53030'};">
+                                RD$ ${disponibilidad.toLocaleString('en-US', {minimumFractionDigits: 2})}
+                            </div>
+                            <small style="display:block; margin-top:5px;">(Cobrado - Gastado Total)</small>
+                        </div>
+
+                        <div style="text-align: center; padding: 10px; background: #fffbe6; border-radius: 8px;">
+                            <small style="color:#856404; font-weight:bold;">COBERTURA GASTOS FIJOS</small>
+                            <div style="font-size: 1.4rem; font-weight:bold; color:#856404;">${mesesDeVida.toFixed(1)} Meses</div>
+                            <small style="display:block; color:#856404;">Basado en gasto prom: RD$ ${promedioGastoMensual.toLocaleString('en-US', {maximumFractionDigits: 0})}/mes</small>
+                        </div>
+
                     </div>
 
-                    <div class="card" style="border-left: 5px solid ${colorVar}; padding: 20px;">
-                        <small style="color: ${colorVar}; font-weight: bold; text-transform: uppercase; font-size: 0.75rem;">
-                            Tendencia vs Mes Pasado
-                        </small>
-                        <div style="font-size: 1.8rem; font-weight: bold; color: ${colorVar}; margin-top: 5px;">
-                            ${flecha} ${variacionTexto}%
-                        </div>
-                        <small style="color: #858796;">Anterior: RD$ ${pasado.toLocaleString('en-US', {minimumFractionDigits: 2})}</small>
-                    </div>
-
-                    <div class="card" style="border-left: 5px solid #f6c23e; padding: 20px;">
-                        <small style="color: #f6c23e; font-weight: bold; text-transform: uppercase; font-size: 0.75rem;">Cuentas por Pagar Totales</small>
-                        <div style="font-size: 1.8rem; font-weight: bold; color: #f6c23e; margin-top: 5px;">
-                            RD$ ${totalDeudaPendiente.toLocaleString('en-US', {minimumFractionDigits: 2})}
-                        </div>
-                    </div>
-
-                </div>
-                
-                <div class="module">
-                    <h2>Proyectos y Clientes</h2>
-                    <div class="dashboard">
-                        <a href="/proyectos-por-activar" class="dashboard-card"><h3>📬 Proyectos por Activar</h3><p>Revisa y activa las cotizaciones formalizadas.</p></a>
-                        <a href="/clientes" class="dashboard-card"><h3>🗂️ Clientes con Proyectos Activos</h3><p>Gestiona abonos y gastos de los proyectos.</p></a>
-                        <a href="/todos-los-centros" class="dashboard-card"><h3>🏢 Directorio de Centros</h3><p>Consulta la lista completa de centros.</p></a>
+                    <div style="margin-top: 20px; padding: 15px; background: ${colorInversion}20; border-radius: 5px; color: ${colorInversion}; font-weight: bold; text-align: center; border: 1px solid ${colorInversion};">
+                        ${mensajeInversion}
                     </div>
                 </div>
 
-                <div class="module">
-                    <h2>Finanzas y Contabilidad</h2>
+                <div class="module" style="margin-top: 30px;">
+                    <h2>Gestión Operativa</h2>
                     <div class="dashboard">
-                        <a href="/caja-chica" class="dashboard-card"><h3>💰 Caja Chica</h3><p>Gestiona el fondo, gastos y cierres de caja chica.</p></a>
-                        <a href="/cuentas-por-pagar" class="dashboard-card"><h3>🧾 Cuentas por Pagar</h3><p>Gestiona las facturas pendientes de tus suplidores.</p></a>
-                        <a href="/cuentas-por-cobrar" class="dashboard-card"><h3>📊 Cuentas por Cobrar</h3><p>Consulta un resumen de todas las deudas pendientes.</p></a>
-                        <a href="/reporte-gastos" class="dashboard-card"><h3>🧾 Reporte de Gastos</h3><p>Consulta un resumen de todos los gastos de la empresa.</p></a>
-                        <a href="/gastos-generales" class="dashboard-card"><h3>💸 Registrar Gasto General</h3><p>Registra desembolsos y gastos administrativos.</p></a>
-                        <a href="/suplidores" class="dashboard-card"><h3>🚚 Gestionar Suplidores</h3><p>Añade o edita la información de tus suplidores.</p></a>
+                        <a href="/proyectos-por-activar" class="dashboard-card"><h3>📬 Proyectos por Activar</h3><p>Activa cotizaciones nuevas.</p></a>
+                        <a href="/cuentas-por-cobrar" class="dashboard-card"><h3>📊 Cuentas por Cobrar</h3><p>Gestiona cobros y abonos.</p></a>
+                        <a href="/cuentas-por-pagar" class="dashboard-card"><h3>🧾 Cuentas por Pagar</h3><p>Gestiona deudas a suplidores.</p></a>
+                        <a href="/gastos-generales" class="dashboard-card"><h3>💸 Registrar Gastos</h3><p>Registra salidas de caja.</p></a>
                     </div>
                 </div>
 
                 <div class="module" style="margin-bottom: 50px;">
-                    <h2>Personal y Pagos</h2>
+                    <h2>Personal y Nómina</h2>
                     <div class="dashboard">
-                        <a href="/super-nomina" class="dashboard-card" style="border-top: 5px solid #28a745;">
-                            <h3>💰 Control de Nómina</h3>
-                            <p>Gestiona sueldos, extras y descuentos quincenales.</p>
-                        </a>
-                        <a href="/gestionar-prestamos" class="dashboard-card" style="border-top: 5px solid #dc3545;">
-                            <h3>🏦 Gestión de Préstamos</h3>
-                            <p>Registra nuevos préstamos y abonos en efectivo.</p>
-                        </a>
-                        <a href="/pagar-comisiones" class="dashboard-card">
-                            <h3>💵 Pago de Comisiones</h3>
-                            <p>Revisa y paga las comisiones de tus asesores.</p>
-                        </a>
-                        <a href="/gestionar-asesores" class="dashboard-card" style="border-left: 5px solid #f6c23e;">
-                            <h3>⚖️ Configurar Comisiones</h3>
-                            <p>Ajusta comisiones</p>
-                        </a>
-                        <a href="/empleados" class="dashboard-card">
-                            <h3>👥 Gestión de Equipo</h3>
-                            <p>Configura datos de empleados y asesores.</p>
-                        </a>
-                        <a href="/historial-nomina" class="dashboard-card">
-                            <h3>📂 Historial de Pagos</h3>
-                            <p>Consulta registros y recibos de nóminas anteriores.</p>
-                        </a>
+                        <a href="/super-nomina" class="dashboard-card" style="border-top: 5px solid #28a745;"><h3>💰 Control de Nómina</h3><p>Pagos quincenales.</p></a>
+                        <a href="/gestionar-prestamos" class="dashboard-card" style="border-top: 5px solid #dc3545;"><h3>🏦 Gestión de Préstamos</h3><p>Adelantos a empleados.</p></a>
+                        <a href="/pagar-comisiones" class="dashboard-card"><h3>💵 Pago de Comisiones</h3><p>Liquidación de asesores.</p></a>
+                        <a href="/empleados" class="dashboard-card"><h3>👥 Equipo</h3><p>Directorio de empleados.</p></a>
                     </div>
                 </div>
+
             </div>
         </body></html>
         `);
@@ -365,6 +361,8 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
         if (client) client.release();
     }
 });
+
+
 app.get('/todos-los-centros', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
