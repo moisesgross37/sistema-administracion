@@ -68,35 +68,47 @@ app.get('/login', (req, res) => {
     res.sendFile(path.join(__dirname, 'login.html'));
 });
 
+// --- LOGIN SEGURO (SOLO ADMIN Y COORDINADOR) ---
 app.post('/login', async (req, res) => {
     const { username, password } = req.body;
+    let client;
     try {
-        const result = await pool.query('SELECT * FROM users WHERE username = $1 AND estado = $2', [username, 'activo']);
-        const user = result.rows[0];
-        if (!user) {
-            return res.status(401).send('Usuario o contraseña incorrectos.');
-        }
+        client = await pool.connect();
+        const result = await client.query('SELECT * FROM users WHERE username = $1', [username]);
+        
+        if (result.rows.length > 0) {
+            const user = result.rows[0];
+            
+            // 1. VERIFICAR CONTRASEÑA
+            const match = await bcrypt.compare(password, user.password);
+            
+            if (match) {
+                // 2. FILTRO DE SEGURIDAD: ¿QUÉ ROL TIENE?
+                const rol = (user.rol || '').toLowerCase(); // Convertimos a minúscula para comparar
+                
+                // Si NO es admin Y TAMPOCO es coordinador... ¡FUERA!
+                if (!rol.includes('admin') && !rol.includes('coordinador')) {
+                    req.session.error = '⛔ Acceso Restringido: Solo Administradores y Coordinadores.';
+                    return res.redirect('/login');
+                }
 
-        const isMatch = await bcrypt.compare(password, user.password);
-        if (isMatch) {
-            if (!user.rol) {
-                return res.status(403).send('Acceso denegado. Tu usuario no tiene un rol definido.');
+                // Si pasó el filtro, lo dejamos entrar
+                req.session.userId = user.id;
+                req.session.user = user;
+                return res.redirect('/');
             }
-            const userRole = user.rol.toLowerCase().trim();
-            const allowedRoles = ['administrador', 'coordinador'];
-            if (!allowedRoles.includes(userRole)) {
-                return res.status(403).send('Acceso denegado. Este sistema es solo para administradores y coordinadores.');
-            }
-            req.session.user = { id: user.id, nombre: user.nombre, username: user.username, rol: user.rol };
-            res.redirect('/');
-        } else {
-            res.status(401).send('Usuario o contraseña incorrectos.');
         }
+        req.session.error = 'Usuario o contraseña incorrectos';
+        res.redirect('/login');
     } catch (err) {
-        console.error('Error en el login:', err);
-        res.status(500).send('Error en el servidor.');
+        console.error(err);
+        req.session.error = 'Error de servidor';
+        res.redirect('/login');
+    } finally {
+        if (client) client.release();
     }
 });
+
 
 app.post('/logout', (req, res) => {
     req.session.destroy(err => {
@@ -226,23 +238,31 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         client = await pool.connect();
         
-        // 1. SEGURIDAD DE ROL (Mejorada para aceptar mayúsculas/minúsculas)
+        // SEGURIDAD DE ROL
         const userRol = (req.session.user.rol || req.session.user.role || '').toLowerCase();
-        const isAdmin = userRol === 'admin' || userRol === 'administrador';
+        const isAdmin = userRol.includes('admin'); // Solo Admin ve finanzas
 
         let financialCardHtml = ''; 
 
-        // 2. DATOS FINANCIEROS (Solo Admin)
         if (isAdmin) {
-            const CYCLE_START = '2025-08-01';
+            const CYCLE_START = '2025-08-01'; // Inicio de Temporada
+
+            // 1. CONSULTA DE TOTALES GLOBALES (Mejorada para coincidir con el reporte mensual)
             const globalStats = await client.query(`
                 SELECT 
+                    -- VENTA NETA
                     (SELECT COALESCE(SUM((preciofinalporestudiante - COALESCE(aporte_institucion, 0)) * estudiantesparafacturar), 0) 
                      FROM quotes WHERE status = 'activa' AND createdat >= $1) as venta_contratada,
+
+                    -- COBROS REALES
                     (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE payment_date >= $1) as total_cobrado,
-                    (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE expense_date >= $1) as gastos_operativos,
-                    (SELECT COALESCE(SUM(commission_amount), 0) FROM commissions WHERE status = 'pagada' AND created_at >= $1) as comisiones_pagadas,
-                    (SELECT COALESCE(SUM(net_pay), 0) FROM payroll_records WHERE pay_date >= $1) as nomina_pagada
+
+                    -- GASTOS TOTALES (SUMA DIRECTA DE LAS 3 FUENTES DE SALIDA)
+                    (
+                        (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE expense_date >= $1) +
+                        (SELECT COALESCE(SUM(commission_amount), 0) FROM commissions WHERE status = 'pagada' AND created_at >= $1) +
+                        (SELECT COALESCE(SUM(net_pay), 0) FROM payroll_records WHERE pay_date >= $1)
+                    ) as total_gastado_real
             `, [CYCLE_START]);
 
             const stats = globalStats.rows[0];
@@ -250,40 +270,67 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
             
             const ventaTotal = safe(stats.venta_contratada);
             const cobradoTotal = safe(stats.total_cobrado);
-            const nomina = safe(stats.nomina_pagada);
-            const gastoTotal = safe(stats.gastos_operativos) + safe(stats.comisiones_pagadas) + nomina;
-            const disponibilidad = cobradoTotal - gastoTotal;
+            const gastoTotalCiclo = safe(stats.total_gastado_real); // Ahora viene sumado directo de BD
+            
+            // Disponibilidad (Caja)
+            const disponibilidad = cobradoTotal - gastoTotalCiclo;
 
-            // Proyección
+            // 2. CÁLCULO DE PROMEDIO MENSUAL Y COBERTURA
             const hoy = new Date();
             const inicioCiclo = new Date(CYCLE_START);
-            const mesesPasados = Math.max(1, (hoy.getFullYear() - inicioCiclo.getFullYear()) * 12 + (hoy.getMonth() - inicioCiclo.getMonth()) + 1);
-            const promedioGasto = gastoTotal / mesesPasados;
-            const mesesVida = promedioGasto > 0 ? (disponibilidad / promedioGasto) : 0;
+            // Calculamos cuántos meses han pasado (ej: Agosto a Febrero = ~6.2 meses)
+            const diferenciaTiempo = hoy - inicioCiclo;
+            const mesesPasados = Math.max(1, diferenciaTiempo / (1000 * 60 * 60 * 24 * 30.44)); 
+            
+            // Promedio Real: Total Gastado / Meses Transcurridos
+            const promedioGastoMensual = gastoTotalCiclo / mesesPasados;
+
+            // Cobertura: ¿Para cuántos meses alcanza lo que tengo en caja?
+            // Si gasto 1.3M y tengo 4.8M -> 4.8 / 1.3 = 3.6 meses
+            const mesesVida = promedioGastoMensual > 0 ? (disponibilidad / promedioGastoMensual) : 0;
+
+            // Semáforo
             let colorInv = mesesVida >= 6 ? '#1cc88a' : (mesesVida >= 3 ? '#f6c23e' : '#e74a3b');
+            let mensajeAlerta = mesesVida >= 6 ? "✅ Finanzas Saludables" : (mesesVida >= 3 ? "⚠️ Precaución" : "🛑 ALERTA: Liquidez Baja");
 
             financialCardHtml = `
-                <div class="card" style="margin-top:20px; border-left: 5px solid ${colorInv}; padding: 20px; background: #fff;">
-                    <h3 style="margin-top:0; color: #5a5c69; border-bottom:1px solid #eee; padding-bottom:10px;">📊 Diagnóstico Financiero (Ciclo 25-26)</h3>
-                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-top: 15px;">
-                        <div style="text-align: center; padding: 10px; background: #f8f9fc; border-radius: 8px;">
-                            <small style="color:#4e73df; font-weight:bold;">VENTA NETA</small>
-                            <div style="font-size: 1.2rem; font-weight:bold; color:#5a5c69;">RD$ ${ventaTotal.toLocaleString('en-US', {maximumFractionDigits:0})}</div>
+                <div class="card" style="margin-top:20px; border-left: 5px solid ${colorInv}; padding: 25px; background: #fff; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
+                    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #eee; padding-bottom:10px; margin-bottom:15px;">
+                        <h3 style="margin:0; color: #5a5c69;">📊 Diagnóstico Financiero (Ciclo 25-26)</h3>
+                        <span style="font-size:12px; font-weight:bold; color:${colorInv}; background:${colorInv}20; padding:4px 10px; border-radius:15px;">
+                            ${mensajeAlerta}
+                        </span>
+                    </div>
+                    
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 20px;">
+                        <div style="text-align: center; padding: 15px; background: #f8f9fc; border-radius: 10px;">
+                            <small style="color:#4e73df; font-weight:bold; text-transform:uppercase;">Venta Neta Contratada</small>
+                            <div style="font-size: 1.4rem; font-weight:bold; color:#5a5c69; margin-top:5px;">RD$ ${ventaTotal.toLocaleString('en-US', {maximumFractionDigits:0})}</div>
                         </div>
-                        <div style="text-align: center; padding: 10px; background: ${disponibilidad >= 0 ? '#e6fffa' : '#fff5f5'}; border-radius: 8px;">
-                            <small style="color:${disponibilidad >= 0 ? '#2c7a7b' : '#c53030'}; font-weight:bold;">DISPONIBILIDAD REAL</small>
-                            <div style="font-size: 1.4rem; font-weight:bold; color:${disponibilidad >= 0 ? '#2c7a7b' : '#c53030'};">RD$ ${disponibilidad.toLocaleString('en-US', {minimumFractionDigits: 2})}</div>
+
+                        <div style="text-align: center; padding: 15px; background: ${disponibilidad >= 0 ? '#e6fffa' : '#fff5f5'}; border-radius: 10px; border:1px solid ${disponibilidad >= 0 ? '#b2f5ea' : '#feb2b2'};">
+                            <small style="color:${disponibilidad >= 0 ? '#2c7a7b' : '#c53030'}; font-weight:bold; text-transform:uppercase;">Disponibilidad Real (Caja)</small>
+                            <div style="font-size: 1.6rem; font-weight:bold; color:${disponibilidad >= 0 ? '#2c7a7b' : '#c53030'}; margin-top:5px;">
+                                RD$ ${disponibilidad.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                            </div>
                         </div>
-                        <div style="text-align: center; padding: 10px; background: #fffbe6; border-radius: 8px;">
-                            <small style="color:#856404; font-weight:bold;">COBERTURA</small>
-                            <div style="font-size: 1.2rem; font-weight:bold; color:#856404;">${mesesVida.toFixed(1)} Meses</div>
-                            <a href="/analisis-gastos-mensual" style="display:block; margin-top:5px; font-size:11px; color:#856404; text-decoration:underline; font-weight:bold;">🔍 Ver desglose mensual</a>
+
+                        <div style="text-align: center; padding: 15px; background: #fffbe6; border-radius: 10px; border:1px solid #fceeb5;">
+                            <small style="color:#856404; font-weight:bold; text-transform:uppercase;">Cobertura de Gastos</small>
+                            <div style="font-size: 1.6rem; font-weight:bold; color:#856404; margin-top:5px;">${mesesVida.toFixed(1)} Meses</div>
+                            <div style="font-size:11px; color:#856404; margin-top:5px;">
+                                (Basado en gasto prom: RD$ ${promedioGastoMensual.toLocaleString('en-US', {maximumFractionDigits:0})}/mes)
+                            </div>
+                            <a href="/analisis-gastos-mensual" style="display:block; margin-top:8px; font-size:11px; color:#d69e2e; text-decoration:underline; font-weight:bold;">
+                                🔍 Ver por qué gasto tanto
+                            </a>
                         </div>
                     </div>
-                </div>`;
+                </div>
+            `;
         }
 
-        // 3. VISTA CON EL BOTÓN MORADO (PERSONAL Y NÓMINA)
+        // VISTA PRINCIPAL
         res.send(`
         <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
             <div class="container">
@@ -291,7 +338,7 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
                 ${financialCardHtml} 
 
                 <div class="module" style="margin-top: 30px;">
-                    <h2>📂 Gestión de Proyectos</h2>
+                    <h2 style="color:#4e73df; border-bottom: 2px solid #e3e6f0; padding-bottom: 10px;">📂 Gestión de Proyectos</h2>
                     <div class="dashboard">
                         <a href="/proyectos-por-activar" class="dashboard-card"><h3>📬 Proyectos por Activar</h3><p>Activa cotizaciones.</p></a>
                         <a href="/clientes" class="dashboard-card"><h3>🗂️ Clientes Activos</h3><p>Ver proyectos.</p></a>
@@ -300,7 +347,7 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
                 </div>
 
                 <div class="module">
-                    <h2>💰 Finanzas y Contabilidad</h2>
+                    <h2 style="color:#f6c23e; border-bottom: 2px solid #e3e6f0; padding-bottom: 10px;">💰 Finanzas y Contabilidad</h2>
                     <div class="dashboard">
                         <a href="/caja-chica" class="dashboard-card"><h3>💵 Caja Chica</h3><p>Control efectivo.</p></a>
                         <a href="/cuentas-por-cobrar" class="dashboard-card"><h3>📊 Cuentas por Cobrar</h3><p>Abonos pendientes.</p></a>
@@ -312,7 +359,7 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
                 </div>
 
                 <div class="module" style="margin-bottom: 50px;">
-                    <h2>👥 Personal y Nómina</h2>
+                    <h2 style="color:#1cc88a; border-bottom: 2px solid #e3e6f0; padding-bottom: 10px;">👥 Personal y Nómina</h2>
                     <div class="dashboard">
                         <a href="/super-nomina" class="dashboard-card" style="border-top: 4px solid #1cc88a;"><h3>💰 Control Nómina</h3><p>Pagos quincenales.</p></a>
                         <a href="/historial-nomina" class="dashboard-card"><h3>📂 Historial Nómina</h3><p>Recibos anteriores.</p></a>
@@ -321,9 +368,9 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
                         <a href="/gestionar-asesores" class="dashboard-card"><h3>⚖️ Config. Comisiones</h3><p>Ajustar % ganancia.</p></a>
                         <a href="/empleados" class="dashboard-card"><h3>👥 Equipo</h3><p>Datos empleados.</p></a>
                         
-                        <a href="/usuarios" class="dashboard-card" style="border-left: 5px solid #6610f2; background:#f3f0ff;">
+                        <a href="/usuarios" class="dashboard-card" style="border-left: 5px solid #6610f2; background:#f8f9fc;">
                             <h3 style="color:#6610f2;">🔑 Gestionar Accesos</h3>
-                            <p>Ver usuarios y roles.</p>
+                            <p>Usuarios y roles.</p>
                         </a>
                     </div>
                 </div>
@@ -331,7 +378,6 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
         </body></html>`);
     } catch (e) { res.status(500).send("Error Dashboard: " + e.message); } finally { if (client) client.release(); }
 });
-
 
 
 app.get('/todos-los-centros', requireLogin, requireAdminOrCoord, async (req, res) => {
