@@ -229,43 +229,47 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
         // FECHA DE INICIO DEL CICLO
         const CYCLE_START = '2025-08-01';
 
-        // 1. CONSULTA FINANCIERA BLINDADA
+        // 1. CONSULTA FINANCIERA BLINDADA (AHORA CON NÓMINA REAL)
         const globalStats = await client.query(`
             SELECT 
-                -- A. VENTA (Usamos 'aporte_institucion' que ya vimos que sí existe)
+                -- A. VENTA NETA
                 (SELECT COALESCE(SUM((preciofinalporestudiante - COALESCE(aporte_institucion, 0)) * estudiantesparafacturar), 0) 
                  FROM quotes WHERE status = 'activa' AND createdat >= $1) as venta_contratada,
 
-                -- B. COBROS
+                -- B. COBROS (Entradas)
                 (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE payment_date >= $1) as total_cobrado,
 
-                -- C. GASTOS
+                -- C. GASTOS OPERATIVOS (Salidas)
                 (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE expense_date >= $1) as gastos_operativos,
 
-                -- D. COMISIONES
+                -- D. COMISIONES PAGADAS (Salidas)
                 (SELECT COALESCE(SUM(commission_amount), 0) FROM commissions WHERE status = 'pagada' AND created_at >= $1) as comisiones_pagadas,
 
-                -- E. NÓMINA (Usamos 'payroll_records' pero con 0 por seguridad hasta saber la columna de monto)
-                (SELECT 0 FROM payroll_records LIMIT 1) as nomina_pagada
+                -- E. NÓMINA REAL (ACTIVADA: Usamos 'net_pay' y 'pay_date')
+                (SELECT COALESCE(SUM(net_pay), 0) FROM payroll_records WHERE pay_date >= $1) as nomina_pagada
 
         `, [CYCLE_START]);
 
         const stats = globalStats.rows[0];
 
-        // 2. ESCUDO ANTI-NAN (Función de seguridad)
+        // 2. ESCUDO ANTI-NAN
         const safe = (val) => {
             const num = parseFloat(val);
             return isNaN(num) ? 0 : num;
         };
 
-        // 3. CÁLCULOS
+        // 3. CÁLCULOS MATEMÁTICOS
         const ventaTotal = safe(stats.venta_contratada);
         const cobradoTotal = safe(stats.total_cobrado);
-        const nomina = safe(stats.nomina_pagada); // Por ahora será 0
+        const nomina = safe(stats.nomina_pagada); 
+        
+        // GASTO TOTAL = Operativos + Comisiones + Nómina
         const gastoTotal = safe(stats.gastos_operativos) + safe(stats.comisiones_pagadas) + nomina;
+        
+        // CAJA REAL
         const disponibilidad = cobradoTotal - gastoTotal;
 
-        // Proyección (Runway)
+        // PROYECCIÓN (RUNWAY)
         const hoy = new Date();
         const inicioCiclo = new Date(CYCLE_START);
         const mesesPasados = Math.max(1, (hoy.getFullYear() - inicioCiclo.getFullYear()) * 12 + (hoy.getMonth() - inicioCiclo.getMonth()) + 1);
@@ -273,11 +277,10 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
         const promedioGasto = gastoTotal / mesesPasados;
         const mesesVida = promedioGasto > 0 ? (disponibilidad / promedioGasto) : 0;
 
-        // Semáforo
+        // SEMÁFORO VISUAL
         let colorInv = mesesVida >= 6 ? '#1cc88a' : (mesesVida >= 3 ? '#f6c23e' : '#e74a3b');
-        let msgInv = mesesVida >= 6 ? "✅ EXCELENTE. Caja saludable." : (mesesVida >= 3 ? "⚠️ PRECAUCIÓN. Controla gastos." : "🛑 ALERTA. Prioriza liquidez.");
 
-        // 4. VISTA (CON TODOS TUS BOTONES RESTAURADOS)
+        // 4. VISTA (LIMPIA Y ORDENADA)
         res.send(`
         <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
             <div class="container">
@@ -287,14 +290,19 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
                     <h3 style="margin-top:0; color: #5a5c69; border-bottom:1px solid #eee; padding-bottom:10px;">📊 Diagnóstico Financiero (Ciclo 25-26)</h3>
                     
                     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-top: 15px;">
+                        
                         <div style="text-align: center; padding: 10px; background: #f8f9fc; border-radius: 8px;">
                             <small style="color:#4e73df; font-weight:bold;">VENTA NETA</small>
                             <div style="font-size: 1.2rem; font-weight:bold; color:#5a5c69;">RD$ ${ventaTotal.toLocaleString('en-US', {maximumFractionDigits:0})}</div>
                         </div>
+
                         <div style="text-align: center; padding: 10px; background: ${disponibilidad >= 0 ? '#e6fffa' : '#fff5f5'}; border-radius: 8px;">
                             <small style="color:${disponibilidad >= 0 ? '#2c7a7b' : '#c53030'}; font-weight:bold;">DISPONIBILIDAD REAL</small>
-                            <div style="font-size: 1.4rem; font-weight:bold; color:${disponibilidad >= 0 ? '#2c7a7b' : '#c53030'};">RD$ ${disponibilidad.toLocaleString('en-US', {minimumFractionDigits:2})}</div>
+                            <div style="font-size: 1.4rem; font-weight:bold; color:${disponibilidad >= 0 ? '#2c7a7b' : '#c53030'};">
+                                RD$ ${disponibilidad.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                            </div>
                         </div>
+
                         <div style="text-align: center; padding: 10px; background: #fffbe6; border-radius: 8px;">
                             <small style="color:#856404; font-weight:bold;">COBERTURA</small>
                             <div style="font-size: 1.2rem; font-weight:bold; color:#856404;">${mesesVida.toFixed(1)} Meses</div>
@@ -331,7 +339,7 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
                         <a href="/gestionar-prestamos" class="dashboard-card" style="border-top: 4px solid #e74a3b;"><h3>🏦 Préstamos</h3><p>Adelantos a empleados.</p></a>
                         <a href="/pagar-comisiones" class="dashboard-card"><h3>💵 Pagar Comisiones</h3><p>Liquidación asesores.</p></a>
                         <a href="/gestionar-asesores" class="dashboard-card"><h3>⚖️ Config. Comisiones</h3><p>Ajustar % de ganancia.</p></a>
-                        <a href="/empleados" class="dashboard-card"><h3>busts_in_silhouette Equipo</h3><p>Datos de empleados.</p></a>
+                        <a href="/empleados" class="dashboard-card"><h3>👥 Equipo</h3><p>Datos de empleados.</p></a>
                     </div>
                 </div>
 
