@@ -226,38 +226,28 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         client = await pool.connect();
         
-        // 1. CORRECCIÓN DE SEGURIDAD: DETECTAR ROL (Español/Inglés)
-        // Buscamos 'rol' (lo que vimos en tu base de datos) o 'role' por si acaso.
+        // 1. SEGURIDAD DE ROL (Mejorada para aceptar mayúsculas/minúsculas)
         const userRol = (req.session.user.rol || req.session.user.role || '').toLowerCase();
-        
-        // Aceptamos cualquier variante de "administrador"
         const isAdmin = userRol === 'admin' || userRol === 'administrador';
 
         let financialCardHtml = ''; 
 
-        // 2. LÓGICA FINANCIERA (SOLO SI ES ADMIN)
+        // 2. DATOS FINANCIEROS (Solo Admin)
         if (isAdmin) {
             const CYCLE_START = '2025-08-01';
-
-            // Consulta Financiera (Ya probada y funcionando)
             const globalStats = await client.query(`
                 SELECT 
                     (SELECT COALESCE(SUM((preciofinalporestudiante - COALESCE(aporte_institucion, 0)) * estudiantesparafacturar), 0) 
                      FROM quotes WHERE status = 'activa' AND createdat >= $1) as venta_contratada,
-
                     (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE payment_date >= $1) as total_cobrado,
-
                     (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE expense_date >= $1) as gastos_operativos,
-
                     (SELECT COALESCE(SUM(commission_amount), 0) FROM commissions WHERE status = 'pagada' AND created_at >= $1) as comisiones_pagadas,
-
                     (SELECT COALESCE(SUM(net_pay), 0) FROM payroll_records WHERE pay_date >= $1) as nomina_pagada
             `, [CYCLE_START]);
 
             const stats = globalStats.rows[0];
-
-            // Cálculos
             const safe = (val) => parseFloat(val) || 0;
+            
             const ventaTotal = safe(stats.venta_contratada);
             const cobradoTotal = safe(stats.total_cobrado);
             const nomina = safe(stats.nomina_pagada);
@@ -270,67 +260,54 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
             const mesesPasados = Math.max(1, (hoy.getFullYear() - inicioCiclo.getFullYear()) * 12 + (hoy.getMonth() - inicioCiclo.getMonth()) + 1);
             const promedioGasto = gastoTotal / mesesPasados;
             const mesesVida = promedioGasto > 0 ? (disponibilidad / promedioGasto) : 0;
-            
             let colorInv = mesesVida >= 6 ? '#1cc88a' : (mesesVida >= 3 ? '#f6c23e' : '#e74a3b');
 
-            // HTML de la Tarjeta Financiera
             financialCardHtml = `
                 <div class="card" style="margin-top:20px; border-left: 5px solid ${colorInv}; padding: 20px; background: #fff;">
-                    <h3 style="margin-top:0; color: #5a5c69; border-bottom:1px solid #eee; padding-bottom:10px;">
-                        📊 Diagnóstico Financiero (Ciclo 25-26)
-                    </h3>
-                    
+                    <h3 style="margin-top:0; color: #5a5c69; border-bottom:1px solid #eee; padding-bottom:10px;">📊 Diagnóstico Financiero (Ciclo 25-26)</h3>
                     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-top: 15px;">
                         <div style="text-align: center; padding: 10px; background: #f8f9fc; border-radius: 8px;">
                             <small style="color:#4e73df; font-weight:bold;">VENTA NETA</small>
                             <div style="font-size: 1.2rem; font-weight:bold; color:#5a5c69;">RD$ ${ventaTotal.toLocaleString('en-US', {maximumFractionDigits:0})}</div>
                         </div>
-
                         <div style="text-align: center; padding: 10px; background: ${disponibilidad >= 0 ? '#e6fffa' : '#fff5f5'}; border-radius: 8px;">
                             <small style="color:${disponibilidad >= 0 ? '#2c7a7b' : '#c53030'}; font-weight:bold;">DISPONIBILIDAD REAL</small>
-                            <div style="font-size: 1.4rem; font-weight:bold; color:${disponibilidad >= 0 ? '#2c7a7b' : '#c53030'};">
-                                RD$ ${disponibilidad.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}
-                            </div>
+                            <div style="font-size: 1.4rem; font-weight:bold; color:${disponibilidad >= 0 ? '#2c7a7b' : '#c53030'};">RD$ ${disponibilidad.toLocaleString('en-US', {minimumFractionDigits: 2})}</div>
                         </div>
-
                         <div style="text-align: center; padding: 10px; background: #fffbe6; border-radius: 8px;">
                             <small style="color:#856404; font-weight:bold;">COBERTURA</small>
                             <div style="font-size: 1.2rem; font-weight:bold; color:#856404;">${mesesVida.toFixed(1)} Meses</div>
-                            <a href="/analisis-gastos-mensual" style="display:block; margin-top:5px; font-size:11px; color:#856404; text-decoration:underline; font-weight:bold;">
-                                🔍 Ver desglose mensual
-                            </a>
+                            <a href="/analisis-gastos-mensual" style="display:block; margin-top:5px; font-size:11px; color:#856404; text-decoration:underline; font-weight:bold;">🔍 Ver desglose mensual</a>
                         </div>
                     </div>
-                </div>
-            `;
+                </div>`;
         }
 
-        // 3. VISTA FINAL (CON BOTÓN DE USUARIOS AGREGADO)
+        // 3. VISTA CON EL BOTÓN MORADO (PERSONAL Y NÓMINA)
         res.send(`
         <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
             <div class="container">
                 ${dashboardHeader(req.session.user)}
-
                 ${financialCardHtml} 
 
                 <div class="module" style="margin-top: 30px;">
                     <h2>📂 Gestión de Proyectos</h2>
                     <div class="dashboard">
-                        <a href="/proyectos-por-activar" class="dashboard-card"><h3>📬 Proyectos por Activar</h3><p>Activa cotizaciones nuevas.</p></a>
-                        <a href="/clientes" class="dashboard-card"><h3>🗂️ Clientes Activos</h3><p>Ver proyectos en curso.</p></a>
-                        <a href="/todos-los-centros" class="dashboard-card"><h3>🏢 Directorio Centros</h3><p>Lista de todos los colegios.</p></a>
+                        <a href="/proyectos-por-activar" class="dashboard-card"><h3>📬 Proyectos por Activar</h3><p>Activa cotizaciones.</p></a>
+                        <a href="/clientes" class="dashboard-card"><h3>🗂️ Clientes Activos</h3><p>Ver proyectos.</p></a>
+                        <a href="/todos-los-centros" class="dashboard-card"><h3>🏢 Directorio Centros</h3><p>Lista colegios.</p></a>
                     </div>
                 </div>
 
                 <div class="module">
                     <h2>💰 Finanzas y Contabilidad</h2>
                     <div class="dashboard">
-                        <a href="/caja-chica" class="dashboard-card"><h3>💵 Caja Chica</h3><p>Control de efectivo diario.</p></a>
-                        <a href="/cuentas-por-cobrar" class="dashboard-card"><h3>📊 Cuentas por Cobrar</h3><p>Gestión de abonos pendientes.</p></a>
-                        <a href="/cuentas-por-pagar" class="dashboard-card"><h3>🧾 Cuentas por Pagar</h3><p>Facturas de suplidores.</p></a>
-                        <a href="/gastos-generales" class="dashboard-card"><h3>💸 Registrar Gasto</h3><p>Salidas generales o admin.</p></a>
-                        <a href="/reporte-gastos" class="dashboard-card"><h3>📉 Reporte de Gastos</h3><p>Resumen global de salidas.</p></a>
-                        <a href="/suplidores" class="dashboard-card"><h3>🚚 Suplidores</h3><p>Directorio de proveedores.</p></a>
+                        <a href="/caja-chica" class="dashboard-card"><h3>💵 Caja Chica</h3><p>Control efectivo.</p></a>
+                        <a href="/cuentas-por-cobrar" class="dashboard-card"><h3>📊 Cuentas por Cobrar</h3><p>Abonos pendientes.</p></a>
+                        <a href="/cuentas-por-pagar" class="dashboard-card"><h3>🧾 Cuentas por Pagar</h3><p>Facturas suplidores.</p></a>
+                        <a href="/gastos-generales" class="dashboard-card"><h3>💸 Registrar Gasto</h3><p>Salidas generales.</p></a>
+                        <a href="/reporte-gastos" class="dashboard-card"><h3>📉 Reporte de Gastos</h3><p>Resumen salidas.</p></a>
+                        <a href="/suplidores" class="dashboard-card"><h3>🚚 Suplidores</h3><p>Proveedores.</p></a>
                     </div>
                 </div>
 
@@ -339,28 +316,22 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
                     <div class="dashboard">
                         <a href="/super-nomina" class="dashboard-card" style="border-top: 4px solid #1cc88a;"><h3>💰 Control Nómina</h3><p>Pagos quincenales.</p></a>
                         <a href="/historial-nomina" class="dashboard-card"><h3>📂 Historial Nómina</h3><p>Recibos anteriores.</p></a>
-                        <a href="/gestionar-prestamos" class="dashboard-card" style="border-top: 4px solid #e74a3b;"><h3>🏦 Préstamos</h3><p>Adelantos a empleados.</p></a>
+                        <a href="/gestionar-prestamos" class="dashboard-card" style="border-top: 4px solid #e74a3b;"><h3>🏦 Préstamos</h3><p>Adelantos.</p></a>
                         <a href="/pagar-comisiones" class="dashboard-card"><h3>💵 Pagar Comisiones</h3><p>Liquidación asesores.</p></a>
-                        <a href="/gestionar-asesores" class="dashboard-card"><h3>⚖️ Config. Comisiones</h3><p>Ajustar % de ganancia.</p></a>
-                        <a href="/empleados" class="dashboard-card"><h3>👥 Equipo</h3><p>Datos de empleados.</p></a>
+                        <a href="/gestionar-asesores" class="dashboard-card"><h3>⚖️ Config. Comisiones</h3><p>Ajustar % ganancia.</p></a>
+                        <a href="/empleados" class="dashboard-card"><h3>👥 Equipo</h3><p>Datos empleados.</p></a>
                         
                         <a href="/usuarios" class="dashboard-card" style="border-left: 5px solid #6610f2; background:#f3f0ff;">
                             <h3 style="color:#6610f2;">🔑 Gestionar Accesos</h3>
-                            <p>Crear usuarios y contraseñas.</p>
+                            <p>Ver usuarios y roles.</p>
                         </a>
                     </div>
                 </div>
-
             </div>
-        </body></html>
-        `);
-    } catch (e) {
-        console.error("Error Dashboard:", e);
-        res.status(500).send("Error: " + e.message);
-    } finally {
-        if (client) client.release();
-    }
+        </body></html>`);
+    } catch (e) { res.status(500).send("Error Dashboard: " + e.message); } finally { if (client) client.release(); }
 });
+
 
 
 app.get('/todos-los-centros', requireLogin, requireAdminOrCoord, async (req, res) => {
@@ -5333,32 +5304,23 @@ app.get('/analisis-gastos-mensual', requireLogin, requireAdminOrCoord, async (re
         client = await pool.connect();
         const CYCLE_START = '2025-08-01';
 
-        // 1. TRAER GASTOS OPERATIVOS POR MES
-        const expensesRes = await client.query(`
-            SELECT TO_CHAR(expense_date, 'YYYY-MM') as mes, SUM(amount) as total
-            FROM expenses WHERE expense_date >= $1 GROUP BY 1 ORDER BY 1 DESC
-        `, [CYCLE_START]);
+        // Consultas
+        const expensesRes = await client.query(`SELECT TO_CHAR(expense_date, 'YYYY-MM') as mes, SUM(amount) as total FROM expenses WHERE expense_date >= $1 GROUP BY 1 ORDER BY 1 DESC`, [CYCLE_START]);
+        const payrollRes = await client.query(`SELECT TO_CHAR(pay_date, 'YYYY-MM') as mes, SUM(net_pay) as total FROM payroll_records WHERE pay_date >= $1 GROUP BY 1 ORDER BY 1 DESC`, [CYCLE_START]);
+        const commRes = await client.query(`SELECT TO_CHAR(created_at, 'YYYY-MM') as mes, SUM(commission_amount) as total FROM commissions WHERE status = 'pagada' AND created_at >= $1 GROUP BY 1 ORDER BY 1 DESC`, [CYCLE_START]);
 
-        // 2. TRAER NÓMINA POR MES
-        const payrollRes = await client.query(`
-            SELECT TO_CHAR(pay_date, 'YYYY-MM') as mes, SUM(net_pay) as total
-            FROM payroll_records WHERE pay_date >= $1 GROUP BY 1 ORDER BY 1 DESC
-        `, [CYCLE_START]);
+        // Función ULTRA SEGURA para convertir a número
+        const safeFloat = (val) => {
+            if (!val) return 0;
+            const n = parseFloat(val);
+            return isNaN(n) ? 0 : n;
+        };
 
-        // 3. TRAER COMISIONES POR MES
-        const commRes = await client.query(`
-            SELECT TO_CHAR(created_at, 'YYYY-MM') as mes, SUM(commission_amount) as total
-            FROM commissions WHERE status = 'pagada' AND created_at >= $1 GROUP BY 1 ORDER BY 1 DESC
-        `, [CYCLE_START]);
-
-        // 4. UNIFICAR LA DATA EN JAVASCRIPT
         const mapaMeses = {};
-
-        // Función auxiliar para sumar al mapa
         const sumar = (lista, tipo) => {
             lista.forEach(item => {
                 if (!mapaMeses[item.mes]) mapaMeses[item.mes] = { mes: item.mes, operativo: 0, nomina: 0, comision: 0, total: 0 };
-                mapaMeses[item.mes][tipo] = parseFloat(item.total || 0);
+                mapaMeses[item.mes][tipo] = safeFloat(item.total);
             });
         };
 
@@ -5366,17 +5328,15 @@ app.get('/analisis-gastos-mensual', requireLogin, requireAdminOrCoord, async (re
         sumar(payrollRes.rows, 'nomina');
         sumar(commRes.rows, 'comision');
 
-        // Convertir mapa a array y calcular totales por fila
         const reporte = Object.values(mapaMeses).map(m => {
             m.total = m.operativo + m.nomina + m.comision;
             return m;
-        }).sort((a, b) => b.mes.localeCompare(a.mes)); // Ordenar descendente (más reciente primero)
+        }).sort((a, b) => b.mes.localeCompare(a.mes));
 
-        // Calcular Promedio Real
         const totalGlobal = reporte.reduce((sum, m) => sum + m.total, 0);
         const promedioMensual = reporte.length > 0 ? (totalGlobal / reporte.length) : 0;
 
-        // 5. GENERAR VISTA
+        // Generar Vista
         const filasHtml = reporte.map(r => `
             <tr>
                 <td style="font-weight:bold;">📅 ${r.mes}</td>
@@ -5390,10 +5350,7 @@ app.get('/analisis-gastos-mensual', requireLogin, requireAdminOrCoord, async (re
         res.send(`
         <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
             <div class="container" style="max-width:1000px;">
-                <div style="margin-bottom:20px;">
-                    <a href="/" class="back-link">↩️ Volver al Dashboard</a>
-                </div>
-                
+                <div style="margin-bottom:20px;"><a href="/" class="back-link">↩️ Volver al Dashboard</a></div>
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
                     <h1>📉 Análisis de Gastos Mensuales</h1>
                     <div style="text-align:right; background:#fffbe6; padding:10px 20px; border-radius:8px; border:1px solid #f6c23e;">
@@ -5401,47 +5358,61 @@ app.get('/analisis-gastos-mensual', requireLogin, requireAdminOrCoord, async (re
                         <div style="font-size:1.5rem; font-weight:bold; color:#856404;">RD$ ${promedioMensual.toLocaleString('en-US', {maximumFractionDigits:0})}</div>
                     </div>
                 </div>
-
                 <div class="card" style="padding:0; overflow:hidden;">
                     <table class="modern-table" style="margin:0;">
-                        <thead style="background:#f8f9fc;">
-                            <tr>
-                                <th>Mes</th>
-                                <th style="text-align:right;">Gastos Operativos <small>(Luz, Local, Proveedores)</small></th>
-                                <th style="text-align:right;">Nómina <small>(Empleados)</small></th>
-                                <th style="text-align:right;">Comisiones <small>(Asesores)</small></th>
-                                <th style="text-align:right;">TOTAL SALIDAS</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${filasHtml || '<tr><td colspan="5" style="text-align:center; padding:20px;">No hay registros de gastos aún.</td></tr>'}
-                        </tbody>
-                        <tfoot style="background:#f1f1f1; font-weight:bold;">
-                            <tr>
-                                <td>TOTAL ACUMULADO</td>
-                                <td colspan="3" style="text-align:right;">Gasto Total del Ciclo:</td>
-                                <td style="text-align:right; color:#e74a3b;">RD$ ${totalGlobal.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
-                            </tr>
-                        </tfoot>
+                        <thead style="background:#f8f9fc;"><tr><th>Mes</th><th style="text-align:right;">Gastos Operativos</th><th style="text-align:right;">Nómina</th><th style="text-align:right;">Comisiones</th><th style="text-align:right;">TOTAL</th></tr></thead>
+                        <tbody>${filasHtml || '<tr><td colspan="5" style="text-align:center;">No hay datos.</td></tr>'}</tbody>
+                        <tfoot style="background:#f1f1f1; font-weight:bold;"><tr><td>TOTAL</td><td colspan="3"></td><td style="text-align:right;">RD$ ${totalGlobal.toLocaleString('en-US', {minimumFractionDigits: 2})}</td></tr></tfoot>
                     </table>
                 </div>
+            </div></body></html>`);
+    } catch (e) { res.status(500).send("Error: " + e.message); } finally { if (client) client.release(); }
+});
+// --- NUEVA RUTA: GESTIÓN DE USUARIOS ---
+app.get('/usuarios', requireLogin, requireAdminOrCoord, async (req, res) => {
+    // Verificar si es Admin (Seguridad extra)
+    const userRol = (req.session.user.rol || req.session.user.role || '').toLowerCase();
+    if (userRol !== 'admin' && userRol !== 'administrador') {
+        return res.send("<h3>⛔ Acceso Denegado. Solo Administradores.</h3><a href='/'>Volver</a>");
+    }
 
-                <div style="margin-top:30px; padding:20px; background:#e8f4fd; border-left:5px solid #4e73df; border-radius:5px;">
-                    <strong>💡 Nota Administrativa:</strong><br>
-                    Este reporte agrupa <b>todas</b> las salidas de dinero reales. <br>
-                    Si un mes ves el monto muy alto, revisa si hubo un pago fuerte de nómina o comisiones en esa fecha.
+    let client;
+    try {
+        client = await pool.connect();
+        // Traemos usuarios ordenados por ID
+        const result = await client.query("SELECT id, username, rol FROM users ORDER BY id ASC");
+        
+        const filas = result.rows.map(u => `
+            <tr>
+                <td>${u.id}</td>
+                <td><b>${u.username}</b></td>
+                <td><span style="background:${u.rol.toLowerCase().includes('admin') ? '#e74a3b' : '#4e73df'}; color:white; padding:3px 8px; border-radius:10px; font-size:11px;">${u.rol}</span></td>
+                <td>
+                    <button style="opacity:0.5; cursor:not-allowed;">✏️ Editar</button>
+                </td>
+            </tr>
+        `).join('');
+
+        res.send(`
+        <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
+            <div class="container" style="max-width:800px;">
+                <div style="margin-bottom:20px;"><a href="/" class="back-link">↩️ Volver al Dashboard</a></div>
+                <h1>🔑 Gestión de Accesos</h1>
+                <div class="card">
+                    <table class="modern-table">
+                        <thead><tr><th>ID</th><th>Usuario</th><th>Rol</th><th>Acciones</th></tr></thead>
+                        <tbody>${filas}</tbody>
+                    </table>
+                    <div style="margin-top:20px; padding:15px; background:#f8f9fc; border-radius:5px; font-size:12px; color:#666;">
+                        ℹ️ <b>Nota:</b> Aquí puedes ver quién tiene acceso. Para cambiar contraseñas o crear usuarios nuevos, necesitaremos agregar un formulario de registro seguro.
+                    </div>
                 </div>
             </div>
-        </body></html>
-        `);
-
-    } catch (e) {
-        console.error(e);
-        res.status(500).send("Error al generar reporte: " + e.message);
-    } finally {
-        if (client) client.release();
-    }
+        </body></html>`);
+    } catch (e) { res.status(500).send("Error Usuarios: " + e.message); } finally { if (client) client.release(); }
 });
+
+
 
 app.listen(PORT, () => {
     console.log(`✅ Servidor PCOE activo en puerto ${PORT}`);
