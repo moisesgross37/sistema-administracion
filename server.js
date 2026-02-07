@@ -1917,7 +1917,7 @@ app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, re
         client = await pool.connect();
         const advisorsRes = await client.query("SELECT DISTINCT advisorname FROM quotes WHERE status = 'activa' ORDER BY advisorname");
 
-        // USAMOS 'createdat' QUE ES EL NOMBRE REAL SEGÚN TU SHELL
+        // 1. CONSULTA SQL (Igual que antes, pero asegurando COALESCE)
         let query = `
             SELECT 
                 q.id, q.clientname, q.quotenumber, q.advisorname,
@@ -1940,84 +1940,135 @@ app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, re
 
         const result = await client.query(query, params);
         
+        // 2. ESCUDO ANTI-NAN
+        const safeNum = (val) => {
+            const n = parseFloat(val);
+            return isNaN(n) ? 0 : n;
+        };
+
         let globalVenta = 0, globalCobrado = 0, globalGastado = 0;
         const hoy = new Date();
         const proyectosConDeuda = [];
         const proyectosSaldados = [];
 
         result.rows.forEach(p => {
-            const venta = parseFloat(p.venta_total || 0);
-            const cobrado = parseFloat(p.total_cobrado || 0);
+            const venta = safeNum(p.venta_total);
+            const cobrado = safeNum(p.total_cobrado);
+            const gastado = safeNum(p.total_gastado);
             const deuda = venta - cobrado;
 
+            // Acumuladores Globales
             globalVenta += venta;
             globalCobrado += cobrado;
-            globalGastado += parseFloat(p.total_gastado || 0);
+            globalGastado += gastado;
 
-            const ultPago = p.ultimo_pago ? new Date(p.ultimo_pago) : null;
-            const diasInactivo = ultPago ? Math.floor((hoy - ultPago) / (1000 * 60 * 60 * 24)) : '---';
-            const item = { ...p, venta, cobrado, deuda, diasInactivo };
+            // Cálculo de Inactividad
+            let diasInactivo = 0;
+            let estadoInactividad = 'ok'; // ok, warning, danger, new
 
-            if (deuda > 0.01) { proyectosConDeuda.push(item); } 
+            if (p.ultimo_pago) {
+                const ultPago = new Date(p.ultimo_pago);
+                diasInactivo = Math.floor((hoy - ultPago) / (1000 * 60 * 60 * 24));
+                
+                if (diasInactivo > 45) estadoInactividad = 'danger'; // Rojo si pasaron 45 días
+                else if (diasInactivo > 30) estadoInactividad = 'warning'; // Amarillo
+            } else {
+                estadoInactividad = 'new'; // Nunca ha pagado
+            }
+
+            const item = { ...p, venta, cobrado, deuda, diasInactivo, estadoInactividad };
+
+            if (deuda > 1.00) { proyectosConDeuda.push(item); } 
             else { proyectosSaldados.push(item); }
         });
 
+        // 3. GENERADOR DE FILAS CON ESTADO MEJORADO
         const generarFilas = (lista) => lista.map(p => {
-            const colorInactividad = (p.diasInactivo !== '---' && p.diasInactivo > 30) ? 'red' : 'inherit';
+            let badgeHtml = '';
+            
+            // Lógica visual de inactividad
+            if (p.estadoInactividad === 'new') {
+                badgeHtml = `<span style="background:#eef2ff; color:#4e73df; padding:4px 8px; border-radius:12px; font-size:10px; font-weight:bold;">🆕 Sin Pagos</span>`;
+            } else if (p.estadoInactividad === 'danger') {
+                badgeHtml = `<span style="background:#ffebeb; color:#e74a3b; padding:4px 8px; border-radius:12px; font-size:10px; font-weight:bold;">⚠️ ${p.diasInactivo} días</span>`;
+            } else if (p.estadoInactividad === 'warning') {
+                badgeHtml = `<span style="background:#fff3cd; color:#856404; padding:4px 8px; border-radius:12px; font-size:10px; font-weight:bold;">⏳ ${p.diasInactivo} días</span>`;
+            } else {
+                badgeHtml = `<span style="background:#e6fffa; color:#2c7a7b; padding:4px 8px; border-radius:12px; font-size:10px; font-weight:bold;">🟢 Al día (${p.diasInactivo}d)</span>`;
+            }
+
             return `
                 <tr>
-                    <td><b>${p.clientname}</b><br><small>${p.quotenumber} | ${p.advisorname}</small></td>
-                    <td style="text-align:right;">RD$ ${p.venta.toLocaleString()}</td>
-                    <td style="text-align:right; color:#1cc88a;">RD$ ${p.cobrado.toLocaleString()}</td>
-                    <td style="text-align:right; color:${p.deuda > 0 ? '#e74a3b' : '#1cc88a'}; font-weight:bold;">RD$ ${p.deuda.toLocaleString()}</td>
-                    <td style="text-align:center; color:${colorInactividad}; font-weight:bold;">${p.diasInactivo} ${p.diasInactivo !== '---' ? 'días' : ''}</td>
-                    <td style="text-align:center;"><a href="/proyecto-detalle/${p.id}" class="btn" style="font-size:11px;">🔍 Ver</a></td>
+                    <td><b>${p.clientname}</b><br><small style="color:#858796;">${p.quotenumber} | ${p.advisorname}</small></td>
+                    <td style="text-align:right;">RD$ ${p.venta.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0})}</td>
+                    <td style="text-align:right; color:#1cc88a;">RD$ ${p.cobrado.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0})}</td>
+                    <td style="text-align:right; color:${p.deuda > 0 ? '#e74a3b' : '#1cc88a'}; font-weight:bold;">RD$ ${p.deuda.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+                    <td style="text-align:center;">${badgeHtml}</td>
+                    <td style="text-align:center;"><a href="/proyecto-detalle/${p.id}" class="btn" style="padding:5px 10px; font-size:11px; background:#4e73df; color:white; border-radius:4px; text-decoration:none;">🔍 Ver</a></td>
                 </tr>`;
         }).join('');
+
+        // CÁLCULO DE LA TEMPERATURA REAL (Flujo de Caja)
+        const flujoDeCaja = globalCobrado - globalGastado;
+        const colorFlujo = flujoDeCaja >= 0 ? '#1cc88a' : '#e74a3b'; // Verde si hay dinero, Rojo si estamos en déficit
 
         res.send(`
             <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}
                 <style>
-                    .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 25px; }
-                    .stat-card { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); border-top: 5px solid #4e73df; }
+                    .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 20px; margin-bottom: 25px; }
+                    .stat-card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); border-left: 5px solid #4e73df; }
+                    .stat-title { font-size: 0.8rem; font-weight: bold; text-transform: uppercase; margin-bottom: 5px; }
+                    .stat-value { font-size: 1.5rem; font-weight: bold; color: #5a5c69; }
                     .section-header { background: #f8f9fc; padding: 12px; margin: 30px 0 10px 0; border-radius: 5px; border-left: 5px solid #e74a3b; color: #5a5c69; font-weight: bold; }
                 </style>
             </head><body>
                 <div class="container" style="max-width:1400px;">
                     ${backToDashboardLink}
-                    <h2 style="margin-top:20px;">Reporte de Cobros Ciclo 2025-2026</h2>
+                    <h2 style="margin-top:20px; margin-bottom: 20px;">Reporte de Cobros y Flujo (2025-2026)</h2>
 
                     <div class="stat-grid">
-                        <div class="stat-card"><h3>Venta Total</h3><div>RD$ ${globalVenta.toLocaleString()}</div></div>
-                        <div class="stat-card" style="border-top-color:#1cc88a;"><h3>Cobrado</h3><div style="color:#1cc88a;">RD$ ${globalCobrado.toLocaleString()}</div></div>
-                        <div class="stat-card" style="border-top-color:#e74a3b;"><h3>Pendiente</h3><div style="color:#e74a3b;">RD$ ${(globalVenta - globalCobrado).toLocaleString()}</div></div>
-                        <div class="stat-card" style="border-top-color:#4e73df;"><h3>Ganancia Real</h3><div style="color:#4e73df;">RD$ ${(globalVenta - globalGastado).toLocaleString()}</div></div>
+                        <div class="stat-card">
+                            <div class="stat-title" style="color:#4e73df;">Venta Total Contratada</div>
+                            <div class="stat-value">RD$ ${globalVenta.toLocaleString('en-US', {maximumFractionDigits: 0})}</div>
+                        </div>
+                        <div class="stat-card" style="border-left-color:#1cc88a;">
+                            <div class="stat-title" style="color:#1cc88a;">Total Cobrado (Entradas)</div>
+                            <div class="stat-value">RD$ ${globalCobrado.toLocaleString('en-US', {maximumFractionDigits: 0})}</div>
+                        </div>
+                        <div class="stat-card" style="border-left-color:#f6c23e;">
+                            <div class="stat-title" style="color:#f6c23e;">Total Gastado (Salidas)</div>
+                            <div class="stat-value">RD$ ${globalGastado.toLocaleString('en-US', {maximumFractionDigits: 0})}</div>
+                        </div>
+                        <div class="stat-card" style="border-left-color:${colorFlujo}; background: ${flujoDeCaja < 0 ? '#fff5f5' : 'white'};">
+                            <div class="stat-title" style="color:${colorFlujo};">Disponibilidad Real (Caja)</div>
+                            <div class="stat-value" style="color:${colorFlujo};">RD$ ${flujoDeCaja.toLocaleString('en-US', {minimumFractionDigits: 2})}</div>
+                            <small style="color:gray; font-size:10px;">(Cobrado - Gastado)</small>
+                        </div>
                     </div>
 
-                    <form action="/cuentas-por-cobrar" method="GET" style="margin-bottom:20px; display:flex; gap:10px; align-items:center;">
-                        <label>Filtrar Asesor:</label>
-                        <select name="advisor" onchange="this.form.submit()" style="padding:5px;">
-                            <option value="">-- Todos --</option>
+                    <form action="/cuentas-por-cobrar" method="GET" style="margin-bottom:20px; background:white; padding:15px; border-radius:8px; display:inline-flex; align-items:center; gap:10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
+                        <label style="font-weight:bold; color:#5a5c69;">Filtrar por Asesor:</label>
+                        <select name="advisor" onchange="this.form.submit()" style="padding:8px; border:1px solid #ddd; border-radius:4px;">
+                            <option value="">-- Ver Todos --</option>
                             ${advisorsRes.rows.map(a => `<option value="${a.advisorname}" ${advisor === a.advisorname ? 'selected' : ''}>${a.advisorname}</option>`).join('')}
                         </select>
                     </form>
 
-                    <div class="section-header">⚠️ CUENTAS ACTIVAS (PRIORIDAD POR INACTIVIDAD)</div>
+                    <div class="section-header">⚠️ CUENTAS CON DEUDA PENDIENTE</div>
                     <table class="modern-table">
-                        <thead><tr><th>Proyecto</th><th>Venta</th><th>Cobrado</th><th>Pendiente</th><th>Inactividad</th><th>Acciones</th></tr></thead>
-                        <tbody>${generarFilas(proyectosConDeuda) || '<tr><td colspan="6" style="text-align:center;">No hay cuentas pendientes.</td></tr>'}</tbody>
+                        <thead><tr><th>Proyecto / Asesor</th><th style="text-align:right;">Venta</th><th style="text-align:right;">Cobrado</th><th style="text-align:right;">Pendiente</th><th style="text-align:center;">Estado Pagos</th><th style="text-align:center;">Acción</th></tr></thead>
+                        <tbody>${generarFilas(proyectosConDeuda) || '<tr><td colspan="6" style="text-align:center; padding:20px;">🎉 ¡Excelente! No hay cuentas pendientes.</td></tr>'}</tbody>
                     </table>
 
-                    <div class="section-header" style="border-left-color:#1cc88a; margin-top:50px; opacity:0.7;">✅ PROYECTOS SALDADOS O CON CRÉDITO</div>
-                    <table class="modern-table" style="opacity:0.7;">
-                        <thead><tr><th>Proyecto</th><th>Venta</th><th>Cobrado</th><th>Diferencia</th><th>Último Pago</th><th>Acciones</th></tr></thead>
-                        <tbody>${generarFilas(proyectosSaldados) || '<tr><td colspan="6" style="text-align:center;">No hay proyectos saldados.</td></tr>'}</tbody>
+                    <div class="section-header" style="border-left-color:#1cc88a; margin-top:50px; opacity:0.8;">✅ PROYECTOS SALDADOS (HISTÓRICO)</div>
+                    <table class="modern-table" style="opacity:0.8;">
+                        <thead><tr><th>Proyecto / Asesor</th><th style="text-align:right;">Venta</th><th style="text-align:right;">Cobrado</th><th style="text-align:right;">Balance</th><th style="text-align:center;">Estado Pagos</th><th style="text-align:center;">Acción</th></tr></thead>
+                        <tbody>${generarFilas(proyectosSaldados) || '<tr><td colspan="6" style="text-align:center;">No hay proyectos saldados aún.</td></tr>'}</tbody>
                     </table>
                 </div>
             </body></html>`);
     } catch (e) { res.status(500).send("Error: " + e.message); } finally { if (client) client.release(); }
 });
-
 
 app.get('/reporte-gastos', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { startDate, endDate, cycleId, missingDesc } = req.query;
