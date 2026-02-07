@@ -3068,6 +3068,77 @@ app.get('/gestionar-prestamos', requireLogin, requireAdminOrCoord, async (req, r
         res.status(500).send('<h1>Error al cargar la página ❌</h1>');
     }
 });
+// --- RUTA PARA IMPRIMIR VALE DE PRÉSTAMO (NUEVA) ---
+app.get('/prestamo/:id/print', requireLogin, async (req, res) => {
+    const loanId = req.params.id;
+    let client;
+    try {
+        client = await pool.connect();
+        
+        // Buscamos los datos del préstamo y del empleado
+        const loanRes = await client.query(`
+            SELECT l.*, e.name as employee_name, e.cedula 
+            FROM loans l
+            JOIN employees e ON l.employee_id = e.id
+            WHERE l.id = $1`, [loanId]);
+
+        if (loanRes.rows.length === 0) return res.status(404).send("Préstamo no encontrado");
+        
+        const loan = loanRes.rows[0];
+        const doc = new PDFDocument();
+
+        // Configuración del archivo
+        const filename = `VALE-PRESTAMO-${loan.employee_name.replace(/ /g, '_')}.pdf`;
+        res.setHeader('Content-disposition', 'inline; filename="' + filename + '"');
+        res.setHeader('Content-type', 'application/pdf');
+        doc.pipe(res);
+
+        // --- DISEÑO DEL VALE ---
+        
+        // Encabezado
+        doc.fontSize(20).text('VALE DE PRÉSTAMO / AVANCE', { align: 'center' });
+        doc.moveDown();
+        doc.fontSize(12).text('Fecha: ' + new Date(loan.loan_date).toLocaleDateString(), { align: 'right' });
+        doc.moveDown(2);
+
+        // Cuerpo del Recibo
+        doc.fontSize(12).text('Yo, ', { continued: true });
+        doc.font('Helvetica-Bold').text(loan.employee_name, { continued: true });
+        doc.font('Helvetica').text(', portador de la cédula No. ', { continued: true });
+        doc.font('Helvetica-Bold').text(loan.cedula || '_________________', { continued: true });
+        doc.font('Helvetica').text(', por medio de la presente certifico haber recibido la suma de:');
+        
+        doc.moveDown();
+        doc.fontSize(16).font('Helvetica-Bold').text(`RD$ ${parseFloat(loan.amount).toLocaleString('en-US', {minimumFractionDigits: 2})}`, { align: 'center' });
+        doc.moveDown();
+        
+        doc.fontSize(12).font('Helvetica').text('Por concepto de:');
+        doc.fontSize(12).font('Helvetica-Oblique').text(loan.reason || 'Préstamo personal', { indent: 20 });
+        doc.moveDown(2);
+
+        // Cláusula de Autorización
+        doc.text('Autorizo formalmente a la empresa a descontar este monto de mi salario mediante las cuotas acordadas o de mis prestaciones laborales en caso de terminación de contrato antes de saldar la deuda.');
+        
+        doc.moveDown(4);
+
+        // Firmas
+        const lineY = doc.y;
+        doc.lineWidth(1).moveTo(50, lineY).lineTo(250, lineY).stroke(); // Línea Izquierda
+        doc.lineWidth(1).moveTo(350, lineY).lineTo(550, lineY).stroke(); // Línea Derecha
+
+        doc.fontSize(10).text('Firma del Empleado (Recibido)', 50, lineY + 10, { width: 200, align: 'center' });
+        doc.text('Autorizado Por (Empresa)', 350, lineY + 10, { width: 200, align: 'center' });
+
+        // Finalizar
+        doc.end();
+
+    } catch (e) {
+        console.error(e);
+        res.status(500).send("Error al generar PDF");
+    } finally {
+        if (client) client.release();
+    }
+});
 
 // --- RUTA PARA GUARDAR UN NUEVO PRÉSTAMO ---
 app.post('/gestionar-prestamos', requireLogin, requireAdminOrCoord, async (req, res) => {
@@ -3155,6 +3226,11 @@ app.get('/prestamo/:id', requireLogin, requireAdminOrCoord, async (req, res) => 
                 <div class="container">
                     <a href="/gestionar-prestamos" class="back-link">↩️ Volver a Préstamos</a>
                     <h2>Préstamo a: ${loan.first_name} ${loan.last_name}</h2>
+                    <div style="margin-bottom: 20px;">
+    <a href="/prestamo/${loan.id}/print" target="_blank" class="btn" style="background-color: #4e73df; color: white; padding: 10px 15px; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 14px;">
+        🖨️ Imprimir Vale para Firma
+    </a>
+</div>
                     <p><strong>Fecha del Préstamo:</strong> ${new Date(loan.loan_date).toLocaleDateString()}</p>
                     <p><strong>Motivo:</strong> ${loan.reason || 'No especificado'}</p>
                     
