@@ -68,38 +68,51 @@ app.get('/login', (req, res) => {
     res.sendFile(path.join(__dirname, 'login.html'));
 });
 
-// --- LOGIN SEGURO (SOLO ADMIN Y COORDINADOR) ---
+// --- LOGIN BLINDADO: SOLO ENTRAN LOS 3 ELEGIDOS ---
 app.post('/login', async (req, res) => {
     const { username, password } = req.body;
     let client;
     try {
         client = await pool.connect();
+        
+        // 1. Buscamos al usuario en la base de datos (Puede ser cualquiera: Moises, Leudis, Isolina...)
         const result = await client.query('SELECT * FROM users WHERE username = $1', [username]);
         
         if (result.rows.length > 0) {
             const user = result.rows[0];
             
-            // 1. VERIFICAR CONTRASEÑA
+            // 2. VERIFICAR CONTRASEÑA
             const match = await bcrypt.compare(password, user.password);
             
             if (match) {
-                // 2. FILTRO DE SEGURIDAD: ¿QUÉ ROL TIENE?
-                const rol = (user.rol || '').toLowerCase(); // Convertimos a minúscula para comparar
+                // 3. EL FILTRO VIP (AQUÍ ESTÁ LA MAGIA)
+                // Lista exacta de los únicos que pueden entrar A ESTE SISTEMA.
+                // Los demás (Leudis, Isolina, etc.) serán rechazados aquí, aunque su clave esté bien.
+                const accesoPermitido = ['Moises', 'Wander', 'Yubelis'];
                 
-                // Si NO es admin Y TAMPOCO es coordinador... ¡FUERA!
-                if (!rol.includes('admin') && !rol.includes('coordinador')) {
-                    req.session.error = '⛔ Acceso Restringido: Solo Administradores y Coordinadores.';
+                if (!accesoPermitido.includes(user.username)) {
+                    // Si el usuario NO está en la lista VIP:
+                    req.session.error = '⛔ Acceso Exclusivo para Administración (Moises, Wander, Yubelis).';
                     return res.redirect('/login');
                 }
 
-                // Si pasó el filtro, lo dejamos entrar
+                // 4. Si está en la lista, ¡PASE ADELANTE!
                 req.session.userId = user.id;
                 req.session.user = user;
+                
+                // Actualizamos el rol en sesión por si acaso (para que el Dashboard sepa que es Admin)
+                // Asumimos que si están en la lista VIP, deben ver todo.
+                if (user.username === 'Moises' || user.username === 'Wander') {
+                    req.session.user.rol = 'admin'; 
+                }
+                
                 return res.redirect('/');
             }
         }
+        
         req.session.error = 'Usuario o contraseña incorrectos';
         res.redirect('/login');
+        
     } catch (err) {
         console.error(err);
         req.session.error = 'Error de servidor';
@@ -108,6 +121,7 @@ app.post('/login', async (req, res) => {
         if (client) client.release();
     }
 });
+
 
 
 app.post('/logout', (req, res) => {
