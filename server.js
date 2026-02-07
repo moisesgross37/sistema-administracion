@@ -229,27 +229,26 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
         // FECHA DE INICIO DEL CICLO (Agosto 1, 2025)
         const CYCLE_START = '2025-08-01';
 
-        // 1. CONSULTA MAESTRA GLOBAL (CORREGIDA CON TUS OBSERVACIONES)
+        // 1. CONSULTA MAESTRA (SIN la columna 'aporte' para corregir el error)
         const globalStats = await client.query(`
             SELECT 
-                -- A. VENTA TOTAL NETA (Restando el Aporte Institucional)
-                (SELECT COALESCE(SUM((preciofinalporestudiante - COALESCE(aporte, 0)) * estudiantesparafacturar), 0) 
+                -- A. VENTA TOTAL (Volvemos a la fórmula segura por ahora)
+                (SELECT COALESCE(SUM(preciofinalporestudiante * estudiantesparafacturar), 0) 
                  FROM quotes WHERE status = 'activa' AND createdat >= $1) as venta_contratada,
 
                 -- B. DINERO QUE HA ENTRADO REALMENTE (Caja)
                 (SELECT COALESCE(SUM(amount), 0) 
                  FROM payments WHERE payment_date >= $1) as total_cobrado,
 
-                -- C1. GASTOS OPERATIVOS (Suplidores + Caja Chica + Generales)
+                -- C1. GASTOS OPERATIVOS
                 (SELECT COALESCE(SUM(amount), 0) 
                  FROM expenses WHERE expense_date >= $1) as gastos_operativos,
 
-                -- C2. COMISIONES PAGADAS (Salidas a Asesores)
+                -- C2. COMISIONES PAGADAS
                 (SELECT COALESCE(SUM(commission_amount), 0) 
                  FROM commissions WHERE status = 'pagada' AND created_at >= $1) as comisiones_pagadas,
 
-                -- C3. NÓMINA PAGADA (Salidas a Empleados - NUEVO)
-                -- Buscamos en el historial de nóminas pagadas
+                -- C3. NÓMINA PAGADA
                 (SELECT COALESCE(SUM(total_paid), 0) 
                  FROM payroll_history WHERE payment_date >= $1) as nomina_pagada
 
@@ -257,19 +256,18 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
 
         const stats = globalStats.rows[0];
 
-        // 2. MATEMÁTICA FINANCIERA REAL
-        const ventaTotal = parseFloat(stats.venta_contratada); // Ya tiene el aporte restado
+        // 2. MATEMÁTICA FINANCIERA
+        const ventaTotal = parseFloat(stats.venta_contratada);
         const cobradoTotal = parseFloat(stats.total_cobrado);
         
-        // GASTO TOTAL REAL = Operativos + Comisiones + Nómina
-        // Si 'payroll_history' usa otro nombre de columna (ej: net_salary), avísame. Usé 'total_paid'.
+        // GASTO TOTAL REAL
         const nomina = parseFloat(stats.nomina_pagada || 0);
         const gastoTotal = parseFloat(stats.gastos_operativos) + parseFloat(stats.comisiones_pagadas) + nomina;
         
-        // Disponibilidad (Caja Real) = Lo que entró - Lo que salió
+        // Disponibilidad
         const disponibilidad = cobradoTotal - gastoTotal;
 
-        // 3. CÁLCULO DE PROYECCIÓN (RUNWAY)
+        // 3. CÁLCULO DE PROYECCIÓN
         const hoy = new Date();
         const inicioCiclo = new Date(CYCLE_START);
         const mesesPasados = (hoy.getFullYear() - inicioCiclo.getFullYear()) * 12 + (hoy.getMonth() - inicioCiclo.getMonth()) + 1;
@@ -304,9 +302,8 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
                     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-top: 20px;">
                         
                         <div style="text-align: center; padding: 10px; background: #f8f9fc; border-radius: 8px;">
-                            <small style="color:#4e73df; font-weight:bold;">VENTA NETA CONTRATADA</small>
+                            <small style="color:#4e73df; font-weight:bold;">VENTA TOTAL CONTRATADA</small>
                             <div style="font-size: 1.4rem; font-weight:bold; color:#5a5c69;">RD$ ${ventaTotal.toLocaleString('en-US', {maximumFractionDigits: 0})}</div>
-                            <small style="color:gray; font-size:10px;">(Ya descontado el Aporte)</small>
                         </div>
 
                         <div style="text-align: center; padding: 10px; background: ${disponibilidad >= 0 ? '#e6fffa' : '#fff5f5'}; border-radius: 8px; border: 1px solid ${disponibilidad >= 0 ? '#1cc88a' : '#e74a3b'};">
@@ -361,7 +358,6 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
         if (client) client.release();
     }
 });
-
 app.get('/todos-los-centros', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
