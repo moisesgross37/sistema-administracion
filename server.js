@@ -225,72 +225,61 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
     let client;
     try {
         client = await pool.connect();
-
-        // FECHA DE INICIO DEL CICLO
-        const CYCLE_START = '2025-08-01';
-
-        // 1. CONSULTA FINANCIERA BLINDADA (AHORA CON NÓMINA REAL)
-        const globalStats = await client.query(`
-            SELECT 
-                -- A. VENTA NETA
-                (SELECT COALESCE(SUM((preciofinalporestudiante - COALESCE(aporte_institucion, 0)) * estudiantesparafacturar), 0) 
-                 FROM quotes WHERE status = 'activa' AND createdat >= $1) as venta_contratada,
-
-                -- B. COBROS (Entradas)
-                (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE payment_date >= $1) as total_cobrado,
-
-                -- C. GASTOS OPERATIVOS (Salidas)
-                (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE expense_date >= $1) as gastos_operativos,
-
-                -- D. COMISIONES PAGADAS (Salidas)
-                (SELECT COALESCE(SUM(commission_amount), 0) FROM commissions WHERE status = 'pagada' AND created_at >= $1) as comisiones_pagadas,
-
-                -- E. NÓMINA REAL (ACTIVADA: Usamos 'net_pay' y 'pay_date')
-                (SELECT COALESCE(SUM(net_pay), 0) FROM payroll_records WHERE pay_date >= $1) as nomina_pagada
-
-        `, [CYCLE_START]);
-
-        const stats = globalStats.rows[0];
-
-        // 2. ESCUDO ANTI-NAN
-        const safe = (val) => {
-            const num = parseFloat(val);
-            return isNaN(num) ? 0 : num;
-        };
-
-        // 3. CÁLCULOS MATEMÁTICOS
-        const ventaTotal = safe(stats.venta_contratada);
-        const cobradoTotal = safe(stats.total_cobrado);
-        const nomina = safe(stats.nomina_pagada); 
         
-        // GASTO TOTAL = Operativos + Comisiones + Nómina
-        const gastoTotal = safe(stats.gastos_operativos) + safe(stats.comisiones_pagadas) + nomina;
-        
-        // CAJA REAL
-        const disponibilidad = cobradoTotal - gastoTotal;
+        // DETECTAR SI ES ADMINISTRADOR
+        // Asumo que el rol en tu base de datos se guarda como 'admin'. 
+        // Si usas 'administrador', cámbialo aquí.
+        const isAdmin = req.session.user.role === 'admin';
 
-        // PROYECCIÓN (RUNWAY)
-        const hoy = new Date();
-        const inicioCiclo = new Date(CYCLE_START);
-        const mesesPasados = Math.max(1, (hoy.getFullYear() - inicioCiclo.getFullYear()) * 12 + (hoy.getMonth() - inicioCiclo.getMonth()) + 1);
-        
-        const promedioGasto = gastoTotal / mesesPasados;
-        const mesesVida = promedioGasto > 0 ? (disponibilidad / promedioGasto) : 0;
+        let financialCardHtml = ''; // Por defecto está vacío (invisible)
 
-        // SEMÁFORO VISUAL
-        let colorInv = mesesVida >= 6 ? '#1cc88a' : (mesesVida >= 3 ? '#f6c23e' : '#e74a3b');
+        // SOLO SI ES ADMIN, CALCULAMOS Y MOSTRAMOS FINANZAS
+        if (isAdmin) {
+            const CYCLE_START = '2025-08-01';
 
-        // 4. VISTA (LIMPIA Y ORDENADA)
-        res.send(`
-        <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
-            <div class="container">
-                ${dashboardHeader(req.session.user)}
+            // 1. CONSULTA FINANCIERA (Solo se ejecuta para el Admin)
+            const globalStats = await client.query(`
+                SELECT 
+                    (SELECT COALESCE(SUM((preciofinalporestudiante - COALESCE(aporte_institucion, 0)) * estudiantesparafacturar), 0) 
+                     FROM quotes WHERE status = 'activa' AND createdat >= $1) as venta_contratada,
 
+                    (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE payment_date >= $1) as total_cobrado,
+
+                    (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE expense_date >= $1) as gastos_operativos,
+
+                    (SELECT COALESCE(SUM(commission_amount), 0) FROM commissions WHERE status = 'pagada' AND created_at >= $1) as comisiones_pagadas,
+
+                    (SELECT COALESCE(SUM(net_pay), 0) FROM payroll_records WHERE pay_date >= $1) as nomina_pagada
+            `, [CYCLE_START]);
+
+            const stats = globalStats.rows[0];
+
+            // 2. CÁLCULOS
+            const safe = (val) => parseFloat(val) || 0;
+            const ventaTotal = safe(stats.venta_contratada);
+            const cobradoTotal = safe(stats.total_cobrado);
+            const nomina = safe(stats.nomina_pagada);
+            const gastoTotal = safe(stats.gastos_operativos) + safe(stats.comisiones_pagadas) + nomina;
+            const disponibilidad = cobradoTotal - gastoTotal;
+
+            // Proyección
+            const hoy = new Date();
+            const inicioCiclo = new Date(CYCLE_START);
+            const mesesPasados = Math.max(1, (hoy.getFullYear() - inicioCiclo.getFullYear()) * 12 + (hoy.getMonth() - inicioCiclo.getMonth()) + 1);
+            const promedioGasto = gastoTotal / mesesPasados;
+            const mesesVida = promedioGasto > 0 ? (disponibilidad / promedioGasto) : 0;
+            
+            let colorInv = mesesVida >= 6 ? '#1cc88a' : (mesesVida >= 3 ? '#f6c23e' : '#e74a3b');
+
+            // 3. CONSTRUIMOS LA TARJETA HTML SOLO PARA EL ADMIN
+            financialCardHtml = `
                 <div class="card" style="margin-top:20px; border-left: 5px solid ${colorInv}; padding: 20px; background: #fff;">
-                    <h3 style="margin-top:0; color: #5a5c69; border-bottom:1px solid #eee; padding-bottom:10px;">📊 Diagnóstico Financiero (Ciclo 25-26)</h3>
+                    <h3 style="margin-top:0; color: #5a5c69; border-bottom:1px solid #eee; padding-bottom:10px;">
+                        📊 Diagnóstico Financiero (Ciclo 25-26)
+                        <span style="float:right; font-size:10px; background:#4e73df; color:white; padding:2px 6px; border-radius:4px;">VISTA ADMIN</span>
+                    </h3>
                     
                     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-top: 15px;">
-                        
                         <div style="text-align: center; padding: 10px; background: #f8f9fc; border-radius: 8px;">
                             <small style="color:#4e73df; font-weight:bold;">VENTA NETA</small>
                             <div style="font-size: 1.2rem; font-weight:bold; color:#5a5c69;">RD$ ${ventaTotal.toLocaleString('en-US', {maximumFractionDigits:0})}</div>
@@ -306,9 +295,22 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
                         <div style="text-align: center; padding: 10px; background: #fffbe6; border-radius: 8px;">
                             <small style="color:#856404; font-weight:bold;">COBERTURA</small>
                             <div style="font-size: 1.2rem; font-weight:bold; color:#856404;">${mesesVida.toFixed(1)} Meses</div>
+                            <a href="/analisis-gastos-mensual" style="display:block; margin-top:5px; font-size:11px; color:#856404; text-decoration:underline; font-weight:bold;">
+                                🔍 Ver desglose mensual
+                            </a>
                         </div>
                     </div>
                 </div>
+            `;
+        }
+
+        // 4. VISTA FINAL (Inyectamos financialCardHtml que estará vacía si no es admin)
+        res.send(`
+        <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
+            <div class="container">
+                ${dashboardHeader(req.session.user)}
+
+                ${financialCardHtml} 
 
                 <div class="module" style="margin-top: 30px;">
                     <h2>📂 Gestión de Proyectos</h2>
@@ -353,6 +355,7 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
         if (client) client.release();
     }
 });
+
 
 app.get('/todos-los-centros', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
@@ -5317,6 +5320,122 @@ app.get('/reporte-general-cobros', requireLogin, requireAdminOrCoord, async (req
     }
 });
 // --- CIERRE FINAL DEL SERVIDOR ---
+// --- NUEVO REPORTE: DESGLOSE DE GASTOS MENSUALES ---
+app.get('/analisis-gastos-mensual', requireLogin, requireAdminOrCoord, async (req, res) => {
+    let client;
+    try {
+        client = await pool.connect();
+        const CYCLE_START = '2025-08-01';
+
+        // 1. TRAER GASTOS OPERATIVOS POR MES
+        const expensesRes = await client.query(`
+            SELECT TO_CHAR(expense_date, 'YYYY-MM') as mes, SUM(amount) as total
+            FROM expenses WHERE expense_date >= $1 GROUP BY 1 ORDER BY 1 DESC
+        `, [CYCLE_START]);
+
+        // 2. TRAER NÓMINA POR MES
+        const payrollRes = await client.query(`
+            SELECT TO_CHAR(pay_date, 'YYYY-MM') as mes, SUM(net_pay) as total
+            FROM payroll_records WHERE pay_date >= $1 GROUP BY 1 ORDER BY 1 DESC
+        `, [CYCLE_START]);
+
+        // 3. TRAER COMISIONES POR MES
+        const commRes = await client.query(`
+            SELECT TO_CHAR(created_at, 'YYYY-MM') as mes, SUM(commission_amount) as total
+            FROM commissions WHERE status = 'pagada' AND created_at >= $1 GROUP BY 1 ORDER BY 1 DESC
+        `, [CYCLE_START]);
+
+        // 4. UNIFICAR LA DATA EN JAVASCRIPT
+        const mapaMeses = {};
+
+        // Función auxiliar para sumar al mapa
+        const sumar = (lista, tipo) => {
+            lista.forEach(item => {
+                if (!mapaMeses[item.mes]) mapaMeses[item.mes] = { mes: item.mes, operativo: 0, nomina: 0, comision: 0, total: 0 };
+                mapaMeses[item.mes][tipo] = parseFloat(item.total || 0);
+            });
+        };
+
+        sumar(expensesRes.rows, 'operativo');
+        sumar(payrollRes.rows, 'nomina');
+        sumar(commRes.rows, 'comision');
+
+        // Convertir mapa a array y calcular totales por fila
+        const reporte = Object.values(mapaMeses).map(m => {
+            m.total = m.operativo + m.nomina + m.comision;
+            return m;
+        }).sort((a, b) => b.mes.localeCompare(a.mes)); // Ordenar descendente (más reciente primero)
+
+        // Calcular Promedio Real
+        const totalGlobal = reporte.reduce((sum, m) => sum + m.total, 0);
+        const promedioMensual = reporte.length > 0 ? (totalGlobal / reporte.length) : 0;
+
+        // 5. GENERAR VISTA
+        const filasHtml = reporte.map(r => `
+            <tr>
+                <td style="font-weight:bold;">📅 ${r.mes}</td>
+                <td style="text-align:right; color:#5a5c69;">RD$ ${r.operativo.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+                <td style="text-align:right; color:#4e73df;">RD$ ${r.nomina.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+                <td style="text-align:right; color:#1cc88a;">RD$ ${r.comision.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+                <td style="text-align:right; font-weight:bold; color:#e74a3b; background:#fff5f5;">RD$ ${r.total.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+            </tr>
+        `).join('');
+
+        res.send(`
+        <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
+            <div class="container" style="max-width:1000px;">
+                <div style="margin-bottom:20px;">
+                    <a href="/" class="back-link">↩️ Volver al Dashboard</a>
+                </div>
+                
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+                    <h1>📉 Análisis de Gastos Mensuales</h1>
+                    <div style="text-align:right; background:#fffbe6; padding:10px 20px; border-radius:8px; border:1px solid #f6c23e;">
+                        <small style="color:#856404; font-weight:bold;">PROMEDIO MENSUAL REAL</small>
+                        <div style="font-size:1.5rem; font-weight:bold; color:#856404;">RD$ ${promedioMensual.toLocaleString('en-US', {maximumFractionDigits:0})}</div>
+                    </div>
+                </div>
+
+                <div class="card" style="padding:0; overflow:hidden;">
+                    <table class="modern-table" style="margin:0;">
+                        <thead style="background:#f8f9fc;">
+                            <tr>
+                                <th>Mes</th>
+                                <th style="text-align:right;">Gastos Operativos <small>(Luz, Local, Proveedores)</small></th>
+                                <th style="text-align:right;">Nómina <small>(Empleados)</small></th>
+                                <th style="text-align:right;">Comisiones <small>(Asesores)</small></th>
+                                <th style="text-align:right;">TOTAL SALIDAS</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${filasHtml || '<tr><td colspan="5" style="text-align:center; padding:20px;">No hay registros de gastos aún.</td></tr>'}
+                        </tbody>
+                        <tfoot style="background:#f1f1f1; font-weight:bold;">
+                            <tr>
+                                <td>TOTAL ACUMULADO</td>
+                                <td colspan="3" style="text-align:right;">Gasto Total del Ciclo:</td>
+                                <td style="text-align:right; color:#e74a3b;">RD$ ${totalGlobal.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+
+                <div style="margin-top:30px; padding:20px; background:#e8f4fd; border-left:5px solid #4e73df; border-radius:5px;">
+                    <strong>💡 Nota Administrativa:</strong><br>
+                    Este reporte agrupa <b>todas</b> las salidas de dinero reales. <br>
+                    Si un mes ves el monto muy alto, revisa si hubo un pago fuerte de nómina o comisiones en esa fecha.
+                </div>
+            </div>
+        </body></html>
+        `);
+
+    } catch (e) {
+        console.error(e);
+        res.status(500).send("Error al generar reporte: " + e.message);
+    } finally {
+        if (client) client.release();
+    }
+});
 
 app.listen(PORT, () => {
     console.log(`✅ Servidor PCOE activo en puerto ${PORT}`);
