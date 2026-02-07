@@ -226,18 +226,20 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         client = await pool.connect();
         
-        // DETECTAR SI ES ADMINISTRADOR
-        // Asumo que el rol en tu base de datos se guarda como 'admin'. 
-        // Si usas 'administrador', cámbialo aquí.
-        const isAdmin = req.session.user.role === 'admin';
+        // 1. CORRECCIÓN DE SEGURIDAD: DETECTAR ROL (Español/Inglés)
+        // Buscamos 'rol' (lo que vimos en tu base de datos) o 'role' por si acaso.
+        const userRol = (req.session.user.rol || req.session.user.role || '').toLowerCase();
+        
+        // Aceptamos cualquier variante de "administrador"
+        const isAdmin = userRol === 'admin' || userRol === 'administrador';
 
-        let financialCardHtml = ''; // Por defecto está vacío (invisible)
+        let financialCardHtml = ''; 
 
-        // SOLO SI ES ADMIN, CALCULAMOS Y MOSTRAMOS FINANZAS
+        // 2. LÓGICA FINANCIERA (SOLO SI ES ADMIN)
         if (isAdmin) {
             const CYCLE_START = '2025-08-01';
 
-            // 1. CONSULTA FINANCIERA (Solo se ejecuta para el Admin)
+            // Consulta Financiera (Ya probada y funcionando)
             const globalStats = await client.query(`
                 SELECT 
                     (SELECT COALESCE(SUM((preciofinalporestudiante - COALESCE(aporte_institucion, 0)) * estudiantesparafacturar), 0) 
@@ -254,7 +256,7 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
 
             const stats = globalStats.rows[0];
 
-            // 2. CÁLCULOS
+            // Cálculos
             const safe = (val) => parseFloat(val) || 0;
             const ventaTotal = safe(stats.venta_contratada);
             const cobradoTotal = safe(stats.total_cobrado);
@@ -271,12 +273,11 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
             
             let colorInv = mesesVida >= 6 ? '#1cc88a' : (mesesVida >= 3 ? '#f6c23e' : '#e74a3b');
 
-            // 3. CONSTRUIMOS LA TARJETA HTML SOLO PARA EL ADMIN
+            // HTML de la Tarjeta Financiera
             financialCardHtml = `
                 <div class="card" style="margin-top:20px; border-left: 5px solid ${colorInv}; padding: 20px; background: #fff;">
                     <h3 style="margin-top:0; color: #5a5c69; border-bottom:1px solid #eee; padding-bottom:10px;">
                         📊 Diagnóstico Financiero (Ciclo 25-26)
-                        <span style="float:right; font-size:10px; background:#4e73df; color:white; padding:2px 6px; border-radius:4px;">VISTA ADMIN</span>
                     </h3>
                     
                     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-top: 15px;">
@@ -304,7 +305,7 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
             `;
         }
 
-        // 4. VISTA FINAL (Inyectamos financialCardHtml que estará vacía si no es admin)
+        // 3. VISTA FINAL (CON BOTÓN DE USUARIOS AGREGADO)
         res.send(`
         <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
             <div class="container">
@@ -342,6 +343,11 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
                         <a href="/pagar-comisiones" class="dashboard-card"><h3>💵 Pagar Comisiones</h3><p>Liquidación asesores.</p></a>
                         <a href="/gestionar-asesores" class="dashboard-card"><h3>⚖️ Config. Comisiones</h3><p>Ajustar % de ganancia.</p></a>
                         <a href="/empleados" class="dashboard-card"><h3>👥 Equipo</h3><p>Datos de empleados.</p></a>
+                        
+                        <a href="/usuarios" class="dashboard-card" style="border-left: 5px solid #6610f2; background:#f3f0ff;">
+                            <h3 style="color:#6610f2;">🔑 Gestionar Accesos</h3>
+                            <p>Crear usuarios y contraseñas.</p>
+                        </a>
                     </div>
                 </div>
 
