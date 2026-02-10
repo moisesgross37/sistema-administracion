@@ -1228,39 +1228,41 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
         if (client) client.release();
     }
 });
-// --- RUTA FALTANTE: GUARDAR FACTURA EN GASTOS ---
+// =============================================================
+// 🚀 PASO 1: RUTAS PARA CUENTAS POR PAGAR (CORREGIDAS SEGÚN TU BD)
+// =============================================================
+
+// 1. RUTA PARA CREAR LA DEUDA (SIN ERROR DE COLUMNA)
 app.post('/nuevo-gasto-general', requireLogin, requireAdminOrCoord, async (req, res) => {
-    // 1. Recibimos los datos del formulario de tu código "Ferrari"
-    const { supplier_id, numero_factura, expense_date, fecha_vencimiento, amount, description, isPaid } = req.body;
+    // Recibimos los datos del formulario
+    const { supplier_id, numero_factura, expense_date, fecha_vencimiento, amount, description } = req.body;
     
     let client;
     try {
         client = await pool.connect();
         
-        // 2. Definimos si está pagado o no
-        // Si marcaste el checkbox "isPaid", el monto pagado es igual al total. Si no, es 0.
-        const paidAmount = isPaid ? amount : 0;
-
-        // 3. INSERTAMOS EN LA TABLA 'EXPENSES' (La que usa tu sistema original)
-        // Nota: Asumo que la columna 'fecha_vencimiento' existe en 'expenses'.
+        // INSERTAMOS EN LA TABLA 'EXPENSES'
+        // Correcciones aplicadas:
+        // 1. 'createdat' (sin guion bajo, según tu foto).
+        // 2. 'paid_amount' va en 0 (porque es deuda).
+        // 3. 'quote_id' va en NULL (para que sea gasto administrativo puro).
+        
         await client.query(`
             INSERT INTO expenses 
-            (supplier_id, numero_factura, expense_date, fecha_vencimiento, amount, paid_amount, description, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-        `, [supplier_id, numero_factura, expense_date, fecha_vencimiento, amount, paidAmount, description]);
+            (supplier_id, numero_factura, expense_date, fecha_vencimiento, amount, paid_amount, description, createdat, quote_id)
+            VALUES ($1, $2, $3, $4, $5, 0, $6, NOW(), NULL)
+        `, [supplier_id, numero_factura, expense_date, fecha_vencimiento, amount, description]);
 
-        // 4. Si todo sale bien, volvemos a la pantalla
+        // Éxito: volvemos a la lista
         res.redirect('/cuentas-por-pagar');
 
     } catch (e) {
-        console.error("Error al guardar gasto:", e);
-        // Si falla (por ejemplo, si no existe la columna fecha_vencimiento), te avisará aquí.
+        console.error("Error al guardar cuenta por pagar:", e);
         res.send(`
-            <div style="padding:20px; font-family:sans-serif;">
-                <h3 style="color:red;">Error al guardar</h3>
+            <div style="font-family:sans-serif; padding:20px; text-align:center;">
+                <h3 style="color:#e74a3b;">⚠️ Error Técnico</h3>
                 <p>${e.message}</p>
-                <p><b>Posible causa:</b> Verifica si la tabla 'expenses' tiene la columna 'fecha_vencimiento' y 'numero_factura'.</p>
-                <a href="/cuentas-por-pagar">Volver</a>
+                <a href="/cuentas-por-pagar">Volver a intentar</a>
             </div>
         `);
     } finally {
@@ -1268,8 +1270,39 @@ app.post('/nuevo-gasto-general', requireLogin, requireAdminOrCoord, async (req, 
     }
 });
 
-// --- RUTA FALTANTE: REGISTRAR ABONO (PAGO PARCIAL) ---
-// Tu código también tiene un formulario para "Abonar", necesitamos esto para que funcione el botón verde.
+// 2. RUTA PARA ABONAR A LA DEUDA (PAGOS PARCIALES)
+app.post('/cuentas-por-pagar/abonar', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { expenseId, paymentAmount, fundSource } = req.body;
+    let client;
+    try {
+        client = await pool.connect();
+
+        // Convertimos a número
+        const abono = parseFloat(paymentAmount);
+
+        // A. Actualizamos el gasto: Sumamos lo nuevo a lo que ya se había pagado
+        await client.query(`
+            UPDATE expenses 
+            SET paid_amount = COALESCE(paid_amount, 0) + $1 
+            WHERE id = $2
+        `, [abono, expenseId]);
+
+        // B. Guardamos el historial del abono
+        // OJO: Aquí sí usamos 'payment_date' si tu tabla history lo tiene así.
+        await client.query(`
+            INSERT INTO payment_history (expense_id, amount_paid, fund_source, payment_date)
+            VALUES ($1, $2, $3, NOW())
+        `, [expenseId, abono, fundSource]);
+
+        res.redirect('/cuentas-por-pagar');
+
+    } catch (e) {
+        console.error("Error al abonar:", e);
+        res.send("Error al registrar el abono: " + e.message);
+    } finally {
+        if (client) client.release();
+    }
+});
 app.post('/cuentas-por-pagar/abonar', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { expenseId, paymentAmount, fundSource } = req.body;
     let client;
