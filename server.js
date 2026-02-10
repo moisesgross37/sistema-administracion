@@ -1228,6 +1228,76 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
         if (client) client.release();
     }
 });
+// --- RUTA FALTANTE: GUARDAR FACTURA EN GASTOS ---
+app.post('/nuevo-gasto-general', requireLogin, requireAdminOrCoord, async (req, res) => {
+    // 1. Recibimos los datos del formulario de tu código "Ferrari"
+    const { supplier_id, numero_factura, expense_date, fecha_vencimiento, amount, description, isPaid } = req.body;
+    
+    let client;
+    try {
+        client = await pool.connect();
+        
+        // 2. Definimos si está pagado o no
+        // Si marcaste el checkbox "isPaid", el monto pagado es igual al total. Si no, es 0.
+        const paidAmount = isPaid ? amount : 0;
+
+        // 3. INSERTAMOS EN LA TABLA 'EXPENSES' (La que usa tu sistema original)
+        // Nota: Asumo que la columna 'fecha_vencimiento' existe en 'expenses'.
+        await client.query(`
+            INSERT INTO expenses 
+            (supplier_id, numero_factura, expense_date, fecha_vencimiento, amount, paid_amount, description, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+        `, [supplier_id, numero_factura, expense_date, fecha_vencimiento, amount, paidAmount, description]);
+
+        // 4. Si todo sale bien, volvemos a la pantalla
+        res.redirect('/cuentas-por-pagar');
+
+    } catch (e) {
+        console.error("Error al guardar gasto:", e);
+        // Si falla (por ejemplo, si no existe la columna fecha_vencimiento), te avisará aquí.
+        res.send(`
+            <div style="padding:20px; font-family:sans-serif;">
+                <h3 style="color:red;">Error al guardar</h3>
+                <p>${e.message}</p>
+                <p><b>Posible causa:</b> Verifica si la tabla 'expenses' tiene la columna 'fecha_vencimiento' y 'numero_factura'.</p>
+                <a href="/cuentas-por-pagar">Volver</a>
+            </div>
+        `);
+    } finally {
+        if (client) client.release();
+    }
+});
+
+// --- RUTA FALTANTE: REGISTRAR ABONO (PAGO PARCIAL) ---
+// Tu código también tiene un formulario para "Abonar", necesitamos esto para que funcione el botón verde.
+app.post('/cuentas-por-pagar/abonar', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { expenseId, paymentAmount, fundSource } = req.body;
+    let client;
+    try {
+        client = await pool.connect();
+
+        // A. Actualizamos el monto pagado en el gasto (suma lo que ya había + lo nuevo)
+        await client.query(`
+            UPDATE expenses 
+            SET paid_amount = COALESCE(paid_amount, 0) + $1 
+            WHERE id = $2
+        `, [paymentAmount, expenseId]);
+
+        // B. Guardamos el historial del abono (para que salga en el cuadrito verde)
+        await client.query(`
+            INSERT INTO payment_history (expense_id, amount_paid, fund_source, payment_date)
+            VALUES ($1, $2, $3, NOW())
+        `, [expenseId, paymentAmount, fundSource]);
+
+        res.redirect('/cuentas-por-pagar');
+
+    } catch (e) {
+        console.error(e);
+        res.send("Error al registrar abono: " + e.message);
+    } finally {
+        if (client) client.release();
+    }
+});
 // --- RUTA PARA GUARDAR UNA NUEVA FACTURA DE SUPLIDOR ---
 app.post('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { supplier_id, numero_factura, fecha_factura, fecha_vencimiento, monto_total, descripcion } = req.body;
