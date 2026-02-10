@@ -1013,19 +1013,21 @@ app.get('/cuentas-por-pagar/requisicion/:id/pdf', requireLogin, requireAdminOrCo
         if (client) client.release();
     }
 });
+// =============================================================
+// 🚀 PASO 2: VISUALIZACIÓN DE CUENTAS POR PAGAR (EL PORTERO)
+// =============================================================
 app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res) => {
-    const { supplierId } = req.query;
     let client;
     try {
         client = await pool.connect();
 
-        // 1. ESCUDO ANTI-NAN
+        // FUNCIÓN SEGURA PARA EVITAR NaN (Not a Number)
         const safeNum = (val) => {
             const num = parseFloat(val);
             return isNaN(num) ? 0.00 : num;
         };
 
-        // 2. CONSULTA DE COMISIONES PENDIENTES (LA DEUDA REAL)
+        // 1. DEUDA DE COMISIONES (SOLO PENDIENTES)
         const commRes = await client.query(`
             SELECT COALESCE(SUM(commission_amount), 0) as total 
             FROM commissions 
@@ -1033,43 +1035,35 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
         `);
         const deudaComisiones = safeNum(commRes.rows[0].total);
 
-        // 3. CONSULTA RESUMEN POR SUPLIDOR (FILTRADO)
-        // OJO: Aquí está la corrección. Filtramos para que NO salga el botón duplicado
+        // 2. RESUMEN POR SUPLIDOR (EL PORTERO EN ACCIÓN)
+        // Filtramos: quote_id IS NULL (Solo gastos de oficina, no colegios)
+        // Filtramos: > 0 (Para que aparezca tu prueba de 1 peso)
         const summaryRes = await client.query(`
             SELECT s.id, s.name, SUM(e.amount - COALESCE(e.paid_amount, 0)) as total_deuda
             FROM expenses e
             JOIN suppliers s ON e.supplier_id = s.id
-            WHERE e.caja_chica_ciclo_id IS NULL
-            AND (e.amount - COALESCE(e.paid_amount, 0)) > 1
-            AND s.name NOT ILIKE '%Comisiones Internas%' 
+            WHERE e.quote_id IS NULL 
+            AND (e.amount - COALESCE(e.paid_amount, 0)) > 0
             GROUP BY s.id, s.name
             ORDER BY total_deuda DESC
         `);
 
-        // 4. CONSULTA DETALLADA DE FACTURAS (FILTRADO)
-        // También aquí filtramos para limpiar la lista de abajo
-        let queryText = `
+        // 3. DETALLE DE FACTURAS (TABLA DE ABAJO)
+        // Mismo filtro: Solo oficina, monto > 0
+        const invoicesRes = await client.query(`
             SELECT e.*, s.name as supplier_name 
             FROM expenses e 
             JOIN suppliers s ON e.supplier_id = s.id 
-            WHERE e.caja_chica_ciclo_id IS NULL
-            AND (e.amount - COALESCE(e.paid_amount, 0)) > 1
-            AND s.name NOT ILIKE '%Comisiones Internas%'`; 
+            WHERE e.quote_id IS NULL
+            AND (e.amount - COALESCE(e.paid_amount, 0)) > 0
+            ORDER BY e.expense_date ASC
+        `);
         
-        const params = [];
-        if (supplierId) {
-            params.push(supplierId);
-            queryText += ` AND e.supplier_id = $${params.length}`;
-        }
-
-        const invoicesRes = await client.query(queryText + " ORDER BY e.expense_date ASC", params);
-        
+        // Historial de pagos para mostrar los abonos pequeñitos
         const historyRes = await client.query("SELECT * FROM payment_history ORDER BY payment_date DESC");
         const suppliersRes = await client.query("SELECT id, name FROM suppliers ORDER BY name ASC");
 
-        // --- GENERACIÓN DE TARJETAS ---
-        
-        // A. Tarjeta de Comisiones (La Oficial - Botón Rojo)
+        // --- GENERACIÓN DE TARJETAS DE RESUMEN ---
         let summaryCards = `
             <div class="summary-box" style="border-top: 4px solid #e74a3b; min-width: 220px; text-align:center; padding: 15px; background: white; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
                 <small style="color:#e74a3b; font-weight:bold;">Comisiones Internas (Asesores)</small>
@@ -1078,7 +1072,6 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
             </div>
         `;
 
-        // B. Tarjetas de Suplidores (Externos - Botones Azules)
         summaryCards += summaryRes.rows.map(s => `
             <div class="summary-box" style="border-top: 4px solid #4e73df; min-width: 220px; text-align:center; padding: 15px; background: white; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
                 <small style="color:gray;">${s.name}</small>
@@ -1096,13 +1089,11 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
                 ${summaryCards}
             </div>
 
-            <div style="display: grid; grid-template-columns: 380px 1fr; gap: 30px;">
+            <div style="display: grid; grid-template-columns: 350px 1fr; gap: 30px;">
                 
                 <div class="form-container" style="background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); height: fit-content;">
                     <h3 style="margin-top:0;">➕ Registrar Factura</h3>
                     <form action="/nuevo-gasto-general" method="POST">
-                         <input type="hidden" name="type" value="Sin Valor Fiscal">
-                        
                         <div class="form-group">
                             <label>Suplidor:</label>
                             <select name="supplier_id" required style="width:100%; padding:8px;">
@@ -1110,29 +1101,18 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
                                 ${suppliersRes.rows.map(s => `<option value="${s.id}">${s.name}</option>`).join('')}
                             </select>
                         </div>
-                        
                         <div class="form-group">
                             <label>Número de Factura:</label>
                             <input type="text" name="numero_factura" placeholder="Ej: B0100000123" style="width:100%; padding:8px;">
                         </div>
-
                         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
                             <div class="form-group"><label>Fecha Factura:</label><input type="date" name="expense_date" required style="width:100%; padding:8px;"></div>
                             <div class="form-group"><label>Vencimiento:</label><input type="date" name="fecha_vencimiento" style="width:100%; padding:8px;"></div>
                         </div>
-
                         <div class="form-group"><label>Monto Total:</label><input type="number" name="amount" step="0.01" required style="width:100%; padding:8px;"></div>
                         <div class="form-group"><label>Concepto / Detalle:</label><textarea name="description" rows="2" style="width:100%; padding:8px;"></textarea></div>
 
-                        <div style="margin: 15px 0; padding: 12px; background: #fff8e1; border-radius: 8px; border: 1px solid #ffe082;">
-                            <label style="display: flex; align-items: center; cursor: pointer; font-weight: bold; color: #795548;">
-                                <input type="checkbox" name="isPaid" value="true" style="margin-right: 10px; width: 18px; height: 18px;">
-                                💰 ¿Pago al Contado?
-                            </label>
-                            <small style="display:block; margin-top:5px; color: #8d6e63;">Si marcas esto, la factura se guardará como PAGADA.</small>
-                        </div>
-
-                        <button type="submit" class="btn btn-activar" style="width:100%; padding: 12px; font-weight: bold;">💾 Guardar Registro</button>
+                        <button type="submit" class="btn btn-activar" style="width:100%; padding: 12px; font-weight: bold; margin-top:15px; background:#4e73df; color:white; border:none; border-radius:5px;">💾 Guardar Deuda</button>
                     </form>
                 </div>
 
@@ -1143,8 +1123,8 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
                             <tr style="background: #f8f9fc; text-align: left;">
                                 <th style="padding:10px;">Fecha / Vence</th>
                                 <th style="padding:10px;">Suplidor / Concepto</th>
-                                <th style="text-align:right; padding:10px;">Balance e Historial</th>
-                                <th style="padding:10px;">Acción de Pago</th>
+                                <th style="text-align:right; padding:10px;">Balance</th>
+                                <th style="padding:10px;">Abonar</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -1157,63 +1137,59 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
                                 const diffDias = vencimiento ? Math.ceil((vencimiento - hoy) / (1000 * 60 * 60 * 24)) : null;
 
                                 let colorAlerta = '#6c757d'; 
-                                let mensajeAlerta = 'Sin fecha';
+                                let mensajeAlerta = '';
                                 let bgFila = 'transparent';
 
                                 if (vencimiento) {
                                     if (diffDias < 0) {
                                         colorAlerta = '#e74a3b'; 
                                         bgFila = '#fff5f5';
-                                        mensajeAlerta = `⚠️ VENCIDA HACE ${Math.abs(diffDias)} DÍAS`;
+                                        mensajeAlerta = `⚠️ VENCIDA (${Math.abs(diffDias)} días)`;
                                     } else if (diffDias <= 3) {
                                         colorAlerta = '#f6c23e'; 
                                         bgFila = '#fffbe6';
-                                        mensajeAlerta = `⏳ Vence en ${diffDias === 0 ? 'HOY' : diffDias + ' días'}`;
+                                        mensajeAlerta = `⏳ Vence pronto`;
                                     } else {
                                         colorAlerta = '#1cc88a'; 
-                                        mensajeAlerta = `✅ A tiempo (${diffDias} días)`;
+                                        mensajeAlerta = `✅ A tiempo`;
                                     }
                                 }
 
                                 const misAbonos = historyRes.rows.filter(h => h.expense_id === i.id);
                                 const abonosHtml = misAbonos.map(a => `
-                                    <div style="font-size:10px; color:#2c7a7b; background:#f0fff4; padding:2px 5px; margin-top:2px; border-radius:3px; border-left: 2px solid #38a169;">
-                                        ✅ $${safeNum(a.amount_paid).toLocaleString()} (${a.fund_source || 'Banco'})
+                                    <div style="font-size:10px; color:#2c7a7b; background:#f0fff4; padding:2px 5px; margin-top:2px;">
+                                        ✅ Abono: $${safeNum(a.amount_paid).toLocaleString()} (${a.fund_source})
                                     </div>`).join('');
 
                                 return `
                                 <tr style="background-color: ${bgFila}; border-bottom: 1px solid #eee;">
                                     <td style="border-left: 5px solid ${colorAlerta}; padding: 10px;">
                                         <div style="font-weight:bold;">${new Date(i.expense_date).toLocaleDateString()}</div>
-                                        <div style="font-size:11px; color:${colorAlerta}; font-weight:bold; margin-top:3px;">
-                                            ${mensajeAlerta}
-                                        </div>
+                                        <div style="font-size:10px; color:${colorAlerta}; font-weight:bold;">${mensajeAlerta}</div>
                                     </td>
                                     <td style="padding: 10px;">
                                         <b>${i.supplier_name}</b>
-                                        ${i.numero_factura ? `<span style="font-size:10px; background:#eef2ff; color:#4e73df; padding:2px 6px; border-radius:10px;">#${i.numero_factura}</span>` : ''}
-                                        <small style="color:#5a5c69; display:block; margin-top:5px;">${i.description || 'Sin concepto'}</small>
+                                        ${i.numero_factura ? `<br><small style="color:#4e73df;">Fact: ${i.numero_factura}</small>` : ''}
+                                        <div style="font-size:12px; color:#555; margin-top:4px;">${i.description || '-'}</div>
                                     </td>
                                     <td style="text-align:right; padding: 10px;">
-                                        <div style="font-size:11px; color:gray;">Original: $${montoOriginal.toLocaleString('en-US', {minimumFractionDigits: 2})}</div>
-                                        <div style="font-weight:bold; color:#e74a3b; border-bottom:1px solid #eee; padding-bottom:3px; font-size:1.1rem;">
-                                            Pendiente: RD$ ${pendiente.toLocaleString('en-US', {minimumFractionDigits: 2})}
-                                        </div>
-                                        <div style="margin-top:5px; text-align:left;">${abonosHtml}</div>
+                                        <div style="font-size:11px; color:#888;">Total: $${montoOriginal.toLocaleString()}</div>
+                                        <div style="font-weight:bold; color:#e74a3b; font-size:1.1rem;">$${pendiente.toLocaleString()}</div>
+                                        <div style="margin-top:5px;">${abonosHtml}</div>
                                     </td>
                                     <td style="padding: 10px;">
-                                        <form action="/cuentas-por-pagar/abonar" method="POST" style="display:flex; flex-direction:column; gap:5px;">
+                                        <form action="/cuentas-por-pagar/abonar" method="POST" style="display:flex; gap:5px; align-items:center;">
                                             <input type="hidden" name="expenseId" value="${i.id}">
-                                            <input type="number" name="paymentAmount" step="0.01" max="${pendiente.toFixed(2)}" placeholder="Monto" required style="padding:6px; border:1px solid #ddd; width:100%;">
-                                            <select name="fundSource" required style="padding:6px; font-size:11px; border:1px solid #ddd;">
-                                                <option value="Banco">🏦 Banco (Transferencia)</option>
-                                                <option value="Caja Chica">💵 Caja Chica (Efectivo)</option>
+                                            <input type="number" name="paymentAmount" step="0.01" max="${pendiente.toFixed(2)}" placeholder="$ Abono" required style="width:80px; padding:5px; font-size:12px;">
+                                            <select name="fundSource" style="width:80px; padding:5px; font-size:12px;">
+                                                <option value="Banco">Banco</option>
+                                                <option value="Caja Chica">Efectivo</option>
                                             </select>
-                                            <button type="submit" class="btn btn-activar" style="padding:8px; font-size:11px; font-weight:bold; background: #1cc88a; color: white;">Registrar Pago</button>
+                                            <button type="submit" style="padding:5px 8px; background:#1cc88a; color:white; border:none; border-radius:4px; cursor:pointer;">Pagar</button>
                                         </form>
                                     </td>
                                 </tr>`;
-                            }).join('') || '<tr><td colspan="4" style="text-align:center; padding:40px; color:gray;">🙌 No hay facturas pendientes.</td></tr>'}
+                            }).join('') || '<tr><td colspan="4" style="text-align:center; padding:30px; color:#888;">🙌 No hay cuentas por pagar pendientes.</td></tr>'}
                         </tbody>
                     </table>
                 </div>
@@ -1222,8 +1198,8 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
     </body></html>`
         );
     } catch (e) {
-        console.error("Error en Cuentas por Pagar:", e);
-        res.status(500).send("Error en el servidor: " + e.message);
+        console.error("Error Cuentas x Pagar:", e);
+        res.status(500).send("Error: " + e.message);
     } finally {
         if (client) client.release();
     }
