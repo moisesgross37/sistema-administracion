@@ -2180,19 +2180,28 @@ app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, re
     } catch (e) { res.status(500).send("Error: " + e.message); } finally { if (client) client.release(); }
 });
 
+// =============================================================
+// 📊 REPORTE DE GASTOS (FUSIÓN: AUDITORÍA + VISUALIZACIÓN DE PROYECTOS)
+// =============================================================
 app.get('/reporte-gastos', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { startDate, endDate, cycleId, missingDesc } = req.query;
     let client;
     try {
         client = await pool.connect();
         
-        // 1. Buscamos los ciclos para el selector de filtros
+        // --- 1. FUNCIÓN DE SEGURIDAD (ADIÓS NaN) ---
+        const safeNum = (val) => {
+            const num = parseFloat(val);
+            return isNaN(num) ? 0.00 : num;
+        };
+
+        // --- 2. SELECTOR DE CICLOS (SE QUEDA IGUAL) ---
         const cyclesRes = await client.query("SELECT id, fecha_inicio FROM caja_chica_ciclos ORDER BY id DESC LIMIT 15");
         const cycleOptions = cyclesRes.rows.map(c => 
             `<option value="${c.id}" ${cycleId == c.id ? 'selected' : ''}>Ciclo #${c.id} (${new Date(c.fecha_inicio).toLocaleDateString()})</option>`
         ).join('');
 
-        // 2. COMPARATIVA MENSUAL (Dinero Real que salió de la cuenta)
+        // --- 3. COMPARATIVA MENSUAL (CORREGIDA PARA NO DAR NaN) ---
         const compRes = await client.query(`
             SELECT 
                 SUM(CASE WHEN date_trunc('month', expense_date) = date_trunc('month', current_date) THEN paid_amount ELSE 0 END) as mes_actual,
@@ -2200,11 +2209,19 @@ app.get('/reporte-gastos', requireLogin, requireAdminOrCoord, async (req, res) =
             FROM expenses`);
         
         const comp = compRes.rows[0];
-        const mesActual = parseFloat(comp.mes_actual || 0);
-        const mesPasado = parseFloat(comp.mes_pasado || 0);
-        const variacion = mesPasado > 0 ? ((mesActual - mesPasado) / mesPasado * 100).toFixed(1) : 0;
+        const mesActual = safeNum(comp.mes_actual);
+        const mesPasado = safeNum(comp.mes_pasado);
+        
+        // Evitamos división por cero para que no salga Infinity o NaN
+        let variacion = 0;
+        if (mesPasado > 0) {
+            variacion = ((mesActual - mesPasado) / mesPasado * 100).toFixed(1);
+        } else if (mesActual > 0) {
+            variacion = 100; // Si antes era 0 y ahora hay gastos, subió 100%
+        }
 
-        // 3. Consulta dinámica: Solo mostramos donde hubo PAGO real
+        // --- 4. CONSULTA DINÁMICA (MEJORADA CON PROYECTOS) ---
+        // Agregamos LEFT JOIN quotes para saber el nombre del colegio
         let whereClause = "WHERE e.paid_amount > 0"; 
         const params = [];
 
@@ -2213,23 +2230,25 @@ app.get('/reporte-gastos', requireLogin, requireAdminOrCoord, async (req, res) =
         if (cycleId) { params.push(cycleId); whereClause += ` AND e.caja_chica_ciclo_id = $${params.length}`; }
         if (missingDesc === 'true') { whereClause += ` AND (e.description IS NULL OR e.description = '')`; }
 
-        // Datos para la tabla con Fuente de Fondos
+        // AQUÍ ESTÁ LA MEJORA CLAVE: Traemos 'q.clientname'
         const tableQuery = `
-            SELECT e.*, s.name as supplier_name 
+            SELECT e.*, s.name as supplier_name, q.clientname as nombre_proyecto
             FROM expenses e 
             LEFT JOIN suppliers s ON e.supplier_id = s.id 
+            LEFT JOIN quotes q ON e.quote_id = q.id
             ${whereClause} 
             ORDER BY e.expense_date DESC`;
         
         const expensesRes = await client.query(tableQuery, params);
         
-        // Datos para el gráfico (Suma de PAID_AMOUNT)
+        // --- 5. GRÁFICO (AGREGAMOS CATEGORÍA 'PROYECTO') ---
         const chartQuery = `
             SELECT 
                 CASE 
-                    WHEN description LIKE '%fiscal%' THEN 'Con Valor Fiscal'
-                    WHEN caja_chica_ciclo_id IS NOT NULL THEN 'Caja Chica'
-                    ELSE 'Facturas Suplidores'
+                    WHEN quote_id IS NOT NULL THEN 'Gastos de Proyectos' -- Nueva categoría
+                    WHEN description ILIKE '%fiscal%' THEN 'Con Valor Fiscal'
+                    WHEN caja_chica_ciclo_id IS NOT NULL THEN 'Caja Chica Admin'
+                    ELSE 'Facturas Admin'
                 END as categoria,
                 SUM(paid_amount) as total
             FROM expenses e
@@ -2238,7 +2257,7 @@ app.get('/reporte-gastos', requireLogin, requireAdminOrCoord, async (req, res) =
         
         const chartRes = await client.query(chartQuery, params);
         const labels = chartRes.rows.map(r => r.categoria);
-        const totals = chartRes.rows.map(r => parseFloat(r.total));
+        const totals = chartRes.rows.map(r => safeNum(r.total));
         const granTotal = totals.reduce((a, b) => a + b, 0);
 
         res.send(`
@@ -2264,7 +2283,7 @@ app.get('/reporte-gastos', requireLogin, requireAdminOrCoord, async (req, res) =
                             <div class="summary-box" style="border-top: 5px solid ${variacion > 0 ? '#e74a3b' : '#1cc88a'};">
                                 <small>VARIACIÓN</small>
                                 <div style="font-size:1.6rem; font-weight:bold; color: ${variacion > 0 ? '#e74a3b' : '#1cc88a'};">
-                                    ${variacion > 0 ? '▲' : '▼'} ${Math.abs(variacion)}%
+                                    ${variacion > 0 ? '▲' : '▼'} ${variacion}%
                                 </div>
                             </div>
                         </div>
@@ -2289,24 +2308,33 @@ app.get('/reporte-gastos', requireLogin, requireAdminOrCoord, async (req, res) =
                         <div>
                             <div class="summary-box" style="margin-bottom:20px; border-left: 8px solid var(--danger);">
                                 <small>TOTAL PAGADO EN ESTE PERIODO:</small>
-                                <div class="amount" style="font-size:2.2rem; color:var(--danger);">RD$ ${granTotal.toLocaleString('en-US', {minimumFractionDigits: 2})}</div>
+                                <div class="amount" style="font-size:2.2rem; color:var(--danger);">RD$ ${safeNum(granTotal).toLocaleString('en-US', {minimumFractionDigits: 2})}</div>
                             </div>
                             <div class="card">
                                 <table class="modern-table">
                                     <thead><tr><th>Fecha</th><th>Detalle / Origen</th><th style="text-align:right;">Monto Pagado</th></tr></thead>
                                     <tbody>
-                                        ${expensesRes.rows.map(e => `
+                                        ${expensesRes.rows.map(e => {
+                                            // Lógica visual para distinguir Proyecto vs Admin
+                                            let etiqueta = '';
+                                            if (e.nombre_proyecto) {
+                                                etiqueta = `<span style="font-size:10px; background:#e3f2fd; color:#0d47a1; padding:2px 6px; border-radius:4px; font-weight:bold;">🏫 ${e.nombre_proyecto}</span>`;
+                                            } else {
+                                                etiqueta = `<span style="font-size:10px; background:#f3e5f5; color:#7b1fa2; padding:2px 6px; border-radius:4px;">🏢 Admin / Oficina</span>`;
+                                            }
+
+                                            return `
                                             <tr>
                                                 <td>${new Date(e.expense_date).toLocaleDateString()}</td>
                                                 <td>
-                                                    <b>${e.supplier_name || 'Gasto'}</b><br>
-                                                    <small>${e.description || '<span style="color:red;">⚠️ Sin descripción</span>'}</small><br>
-                                                    <span style="font-size:10px; background:#e2e8f0; padding:2px 6px; border-radius:10px; color:#4a5568;">
-                                                        📍 Fuente: ${e.fund_source || 'Banco'}
-                                                    </span>
+                                                    ${etiqueta}<br>
+                                                    <b>${e.supplier_name || 'Varios'}</b><br>
+                                                    <small style="color:#555;">${e.description || '<span style="color:red;">⚠️ Sin descripción</span>'}</small><br>
+                                                    <span style="font-size:10px; color:#888;">📍 ${e.fund_source || 'Banco'}</span>
                                                 </td>
-                                                <td style="text-align:right; font-weight:bold;">$${parseFloat(e.paid_amount).toFixed(2)}</td>
-                                            </tr>`).join('')}
+                                                <td style="text-align:right; font-weight:bold;">$${safeNum(e.paid_amount).toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+                                            </tr>`;
+                                        }).join('')}
                                     </tbody>
                                 </table>
                             </div>
@@ -2352,6 +2380,7 @@ app.get('/reporte-gastos', requireLogin, requireAdminOrCoord, async (req, res) =
             </body></html>`);
     } catch (e) { res.status(500).send(e.message); } finally { if (client) client.release(); }
 });
+
 app.get('/reporte-gastos-pdf', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { startDate, endDate, missingDesc, cycleId } = req.query;
     let client;
