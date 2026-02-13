@@ -3738,6 +3738,151 @@ app.get('/historial-nomina', requireLogin, requireAdminOrCoord, async (req, res)
             </body></html>`);
     } catch (e) { res.status(500).send(e.message); } finally { if (client) client.release(); }
 });
+
+// =============================================================
+// 🖨️ REPORTE: REQUISICIÓN DE NÓMINA (PARA ADMINISTRACIÓN)
+// =============================================================
+app.get('/nomina/requisicion', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { fecha } = req.query; // Esperamos la fecha: ?fecha=2026-02-15
+    
+    if (!fecha) return res.send("⚠️ Error: Falta la fecha de la nómina.");
+
+    let client;
+    try {
+        client = await pool.connect();
+
+        // 1. Buscamos los datos detallados
+        // Usamos COALESCE para que si es NULL ponga 0.00
+        const query = `
+            SELECT 
+                e.name || ' ' || e.last_name as nombre_completo,
+                e.position as cargo,
+                pr.base_salary_paid as sueldo_bruto,
+                pr.bonuses as incentivos,
+                pr.loan_deduction as prestamos, 
+                (pr.deductions - COALESCE(pr.loan_deduction, 0)) as otros_descuentos,
+                pr.net_pay as neto_a_pagar,
+                pr.notes as notas
+            FROM payroll_records pr
+            JOIN employees e ON pr.employee_id = e.id
+            WHERE pr.pay_date = $1
+            ORDER BY e.name ASC
+        `;
+        
+        const result = await client.query(query, [fecha]);
+        const nomina = result.rows;
+
+        // 2. Calculamos los TOTALES de abajo
+        let t_bruto = 0, t_incentivos = 0, t_prestamos = 0, t_otros = 0, t_neto = 0;
+
+        nomina.forEach(fila => {
+            t_bruto += parseFloat(fila.sueldo_bruto || 0);
+            t_incentivos += parseFloat(fila.incentivos || 0);
+            t_prestamos += parseFloat(fila.prestamos || 0);
+            t_otros += parseFloat(fila.otros_descuentos || 0);
+            t_neto += parseFloat(fila.neto_a_pagar || 0);
+        });
+
+        // 3. Generamos el HTML para Imprimir
+        res.send(`
+        <!DOCTYPE html>
+        <html lang="es">
+        <head>
+            <meta charset="UTF-8">
+            <title>Requisición Nómina - ${fecha}</title>
+            <style>
+                body { font-family: 'Helvetica', sans-serif; padding: 40px; }
+                .header { text-align: center; margin-bottom: 30px; }
+                h1 { margin: 0; font-size: 24px; text-transform: uppercase; }
+                h3 { margin: 5px 0; color: #555; }
+                
+                table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 12px; }
+                th, td { border: 1px solid #ddd; padding: 8px; text-align: right; }
+                th { background-color: #f2f2f2; text-align: center; font-weight: bold; }
+                .text-left { text-align: left; }
+                
+                .totales-row td { background-color: #e3f2fd; font-weight: bold; border-top: 2px solid #000; }
+                
+                .firmas { margin-top: 80px; display: flex; justify-content: space-between; page-break-inside: avoid; }
+                .firma-box { width: 40%; border-top: 1px solid #000; text-align: center; padding-top: 10px; }
+                
+                @media print {
+                    .no-print { display: none; }
+                    body { padding: 0; }
+                }
+            </style>
+        </head>
+        <body>
+            <div class="no-print" style="margin-bottom: 20px;">
+                <button onclick="window.print()" style="padding: 10px 20px; background: #2c3e50; color: white; cursor: pointer;">🖨️ Imprimir / Guardar PDF</button>
+                <button onclick="window.history.back()" style="padding: 10px 20px;">⬅️ Volver</button>
+            </div>
+
+            <div class="header">
+                <h1>Be Eventos y Espectáculos</h1>
+                <h3>Requisición de Nómina de Personal</h3>
+                <p>Fecha de Corte: <strong>${new Date(fecha).toLocaleDateString()}</strong></p>
+            </div>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th class="text-left">Colaborador</th>
+                        <th class="text-left">Cargo</th>
+                        <th>Sueldo Base</th>
+                        <th>Incentivos</th>
+                        <th>(-) Préstamos</th>
+                        <th>(-) Otros Desc.</th>
+                        <th>NETO A PAGAR</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${nomina.map(row => `
+                    <tr>
+                        <td class="text-left"><b>${row.nombre_completo}</b></td>
+                        <td class="text-left" style="font-size:10px; color:#666;">${row.cargo || '-'}</td>
+                        <td>${parseFloat(row.sueldo_bruto).toFixed(2)}</td>
+                        <td>${parseFloat(row.incentivos).toFixed(2)}</td>
+                        <td style="color: #c0392b;">${parseFloat(row.prestamos).toFixed(2)}</td>
+                        <td style="color: #c0392b;">${parseFloat(row.otros_descuentos).toFixed(2)}</td>
+                        <td style="font-weight:bold;">${parseFloat(row.neto_a_pagar).toFixed(2)}</td>
+                    </tr>
+                    `).join('')}
+                    
+                    <tr class="totales-row">
+                        <td colspan="2" style="text-align: center;">TOTALES GENERALES</td>
+                        <td>${t_bruto.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+                        <td>${t_incentivos.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+                        <td style="color: #c0392b;">${t_prestamos.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+                        <td style="color: #c0392b;">${t_otros.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+                        <td style="font-size: 14px;">RD$ ${t_neto.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <div class="firmas">
+                <div class="firma-box">
+                    PREPARADO POR<br>
+                    <small>Recursos Humanos</small>
+                </div>
+                <div class="firma-box">
+                    AUTORIZADO POR<br>
+                    <small>Administración / Gerencia</small>
+                </div>
+            </div>
+        </body>
+        </html>
+        `);
+
+    } catch (e) {
+        console.error(e);
+        res.status(500).send("Error generando requisición: " + e.message);
+    } finally {
+        if (client) client.release();
+    }
+});
+
+
 app.get('/ver-detalle-nomina/:payroll_id', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { payroll_id } = req.params;
     let client;
@@ -4881,6 +5026,9 @@ app.get('/ver-recibo/:payroll_id/:employee_id', requireLogin, requireAdminOrCoor
 
     } catch (e) { res.status(500).send(e.message); } finally { if (client) client.release(); }
 });
+// =============================================================
+// 🚀 PROCESAR NÓMINA (VERSIÓN 2.0: Con Préstamos y Gastos)
+// =============================================================
 app.post('/procesar-super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { nomina, pay_date } = req.body;
     let client;
@@ -4895,60 +5043,76 @@ app.post('/procesar-super-nomina', requireLogin, requireAdminOrCoord, async (req
             const netPay = parseFloat(entry.net_pay || 0);
             totalLote += netPay;
 
-            // 1. GUARDAR SUELDO BASE (Corregido con RETURNING id)
+            // Preparamos los valores numéricos
+            const sueldoBase = parseFloat(entry.base_salary || entry.sueldo || 0);
+            const bonos = parseFloat(entry.bonuses || 0);
+            const deduccionTotal = parseFloat(entry.deductions || 0);
+            const prestamoDeduccion = parseFloat(entry.loan_deduction || 0); // EL DATO NUEVO
+
+            // 1. GUARDAR EN PAYROLL_RECORDS (Ahora llenamos 'loan_deduction')
             const recordRes = await client.query(
                 `INSERT INTO payroll_records 
-                (employee_id, pay_date, base_salary_paid, bonuses, deductions, net_pay, payroll_id) 
-                VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+                (employee_id, pay_date, base_salary_paid, bonuses, deductions, loan_deduction, net_pay, payroll_id) 
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
                 [
                     entry.employee_id, 
                     pay_date || new Date(), 
-                    parseFloat(entry.base_salary || entry.sueldo || 0), 
-                    parseFloat(entry.bonuses || 0), 
-                    parseFloat(entry.deductions || 0), 
+                    sueldoBase, 
+                    bonos, 
+                    deduccionTotal,   // El total de descuentos
+                    prestamoDeduccion, // La parte que es préstamo (Nueva Columna)
                     netPay, 
                     batchPayrollId
                 ]
             );
             
-            // Definimos el ID que acabamos de crear para usarlo en préstamos
             const newRecordId = recordRes.rows[0].id;
 
-            // 2. Registrar Descuento de Préstamo (Usando el ID de arriba)
-            if (entry.loan_id && entry.loan_deduction > 0) {
+            // 2. Registrar PAGO en la tabla de Préstamos (Si aplica)
+            if (entry.loan_id && prestamoDeduccion > 0) {
                 await client.query(
                     `INSERT INTO loan_payments (loan_id, payment_date, amount_paid, payment_method, payroll_record_id) 
                      VALUES ($1, CURRENT_DATE, $2, 'Descuento Nómina', $3)`,
-                    [entry.loan_id, entry.loan_deduction, newRecordId]
+                    [entry.loan_id, prestamoDeduccion, newRecordId]
                 );
             }
 
-            // 3. Registrar Extras y AFECTAR CENTROS (Aquí estaba el fallo)
-            for (const extra of entry.extras) {
-                const montoExtra = parseFloat(extra.amount || 0);
-                const centroId = extra.quote_id || extra.centro_id || extra.proyecto_id; // Atrapamos el ID del centro
+            // 3. Registrar Extras y Vincular a Centros
+            if (entry.extras && Array.isArray(entry.extras)) {
+                for (const extra of entry.extras) {
+                    const montoExtra = parseFloat(extra.amount || 0);
+                    const centroId = extra.quote_id || extra.centro_id || extra.proyecto_id;
 
-                if (montoExtra > 0) {
-                    // Guardamos el extra vinculado al centro
-                    await client.query(
-                        `INSERT INTO payroll_extras (employee_id, quote_id, amount, description, payroll_id) 
-                         VALUES ($1, $2, $3, $4, $5)`,
-                        [entry.employee_id, centroId || null, montoExtra, extra.desc, batchPayrollId]
-                    );
-                    
-                    // SI HAY CENTRO: Insertamos el Gasto para que se reste de la utilidad
-                    if (centroId) {
+                    if (montoExtra > 0) {
                         await client.query(
-                            `INSERT INTO expenses (quote_id, amount, description, expense_date, supplier_id, type) 
-                             VALUES ($1, $2, $3, CURRENT_DATE, (SELECT id FROM suppliers LIMIT 1), 'Nómina Interna')`,
-                            [centroId, montoExtra, `Pago Nómina Extra: ${extra.desc}`]
+                            `INSERT INTO payroll_extras (employee_id, quote_id, amount, description, payroll_id) 
+                             VALUES ($1, $2, $3, $4, $5)`,
+                            [entry.employee_id, centroId || null, montoExtra, extra.desc, batchPayrollId]
                         );
+                        
+                        // Si es de un centro, creamos el gasto específico del centro
+                        if (centroId) {
+                            await client.query(
+                                `INSERT INTO expenses (quote_id, amount, description, expense_date, supplier_id, type) 
+                                 VALUES ($1, $2, $3, CURRENT_DATE, (SELECT id FROM suppliers LIMIT 1), 'Nómina Extra')`,
+                                [centroId, montoExtra, `Pago Nómina Extra: ${extra.desc}`]
+                            );
+                        }
                     }
                 }
             }
+        } // Fin del For
+
+        // 4. CREAR EL GASTO GLOBAL DE NÓMINA (Para que afecte tus finanzas generales)
+        if (totalLote > 0) {
+            await client.query(
+                `INSERT INTO expenses (amount, description, expense_date, supplier_id, type, fund_source) 
+                 VALUES ($1, $2, $3, (SELECT id FROM suppliers LIMIT 1), 'Nómina', 'Banco')`,
+                [totalLote, `Pago Nómina General (${new Date(pay_date).toLocaleDateString()})`, pay_date || new Date()]
+            );
         }
 
-        // 4. CREAR EL RESUMEN EN EL HISTORIAL (Blindado)
+        // 5. Registro Histórico Simple
         await client.query(
             `INSERT INTO payment_history (id, amount_paid, payment_date, payment_method, fund_source) 
              VALUES ($1, $2, CURRENT_TIMESTAMP, $3, $4)`,
@@ -4960,12 +5124,13 @@ app.post('/procesar-super-nomina', requireLogin, requireAdminOrCoord, async (req
 
     } catch (e) {
         if (client) await client.query('ROLLBACK');
-        console.error("Error crítico:", e.message);
+        console.error("Error crítico en nómina:", e.message);
         res.status(500).json({ success: false, message: e.message });
     } finally {
         if (client) client.release();
     }
 });
+
 app.get('/imprimir-desembolso/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { id } = req.params;
     let client;
