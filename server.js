@@ -3696,11 +3696,12 @@ app.get('/historial-nomina', requireLogin, requireAdminOrCoord, async (req, res)
         // 1. Buscamos en la tabla CORRECTA (payroll_records)
         // Agrupamos por el ID del Lote para que no se mezclen.
         const query = `
+    const query = `
     SELECT 
         payroll_id,
         MAX(pay_date) as fecha_pago,
         COUNT(employee_id) as total_empleados,
-        SUM(CAST(net_pay AS NUMERIC)) as total_pagado,
+        SUM(NULLIF(net_pay, 0)) as total_pagado,
         MAX(createdat) as fecha_creacion
     FROM payroll_records
     WHERE payroll_id IS NOT NULL
@@ -3779,19 +3780,18 @@ app.get('/nomina/requisicion', requireLogin, requireAdminOrCoord, async (req, re
         client = await pool.connect();
 
         const query = `
-            SELECT 
-                e.nombre as colaborador,
-                pr.base_salary_paid as sueldo_bruto,
-                pr.bonuses as incentivos,
-                COALESCE(pr.loan_deduction, 0) as prestamos, 
-                (COALESCE(pr.deductions, 0) - COALESCE(pr.loan_deduction, 0)) as otros_descuentos,
-                pr.net_pay as neto_a_pagar,
-                pr.pay_date
-            FROM payroll_records pr
-            JOIN employees e ON pr.employee_id = e.id
-            WHERE CAST(pr.payroll_id AS TEXT) = $1
-            ORDER BY e.nombre ASC
-        `;
+    SELECT 
+        e.nombre as colaborador,
+        pr.base_salary_paid as sueldo_bruto,
+        pr.bonuses as incentivos,
+        COALESCE(pr.loan_deduction, 0) as prestamos, 
+        COALESCE(pr.deductions, 0) as total_deducciones,
+        pr.net_pay as neto_a_pagar
+    FROM payroll_records pr
+    JOIN employees e ON pr.employee_id = e.id
+    WHERE CAST(pr.payroll_id AS TEXT) = $1
+    ORDER BY e.nombre ASC
+`;
         
         const result = await client.query(query, [id]);
         const nomina = result.rows;
