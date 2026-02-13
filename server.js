@@ -3771,8 +3771,8 @@ app.get('/historial-nomina', requireLogin, requireAdminOrCoord, async (req, res)
 });
 
 app.get('/nomina/requisicion', requireLogin, requireAdminOrCoord, async (req, res) => {
-    const { fecha } = req.query;
-    if (!fecha) return res.send("⚠️ Error: Falta la fecha.");
+    const { id } = req.query; // RECIBE EL ID DEL LOTE
+    if (!id) return res.send("⚠️ Error: Falta el ID de nómina.");
 
     let client;
     try {
@@ -3785,17 +3785,18 @@ app.get('/nomina/requisicion', requireLogin, requireAdminOrCoord, async (req, re
                 pr.bonuses as incentivos,
                 COALESCE(pr.loan_deduction, 0) as prestamos, 
                 (COALESCE(pr.deductions, 0) - COALESCE(pr.loan_deduction, 0)) as otros_descuentos,
-                pr.net_pay as neto_a_pagar
+                pr.net_pay as neto_a_pagar,
+                pr.pay_date
             FROM payroll_records pr
             JOIN employees e ON pr.employee_id = e.id
-            WHERE pr.pay_date = $1
+            WHERE CAST(pr.payroll_id AS TEXT) = $1
             ORDER BY e.nombre ASC
         `;
         
-        const result = await client.query(query, [fecha]);
+        const result = await client.query(query, [id]);
         const nomina = result.rows;
 
-        if (nomina.length === 0) return res.send("<h1>No hay datos para esta fecha.</h1>");
+        if (nomina.length === 0) return res.send("<h1>No se encontraron datos para este lote.</h1>");
 
         let t_neto = 0;
         const filasHtml = nomina.map(row => {
@@ -3815,7 +3816,7 @@ app.get('/nomina/requisicion', requireLogin, requireAdminOrCoord, async (req, re
         <html>
         <head><style>body{font-family:sans-serif;padding:30px;} table{width:100%;border-collapse:collapse;} th,td{border:1px solid #ccc;padding:10px;text-align:right;}</style></head>
         <body>
-            <h2>Be Eventos - Requisición de Pago: ${fecha}</h2>
+            <h2>Be Eventos - Requisición Lote: ${id}</h2>
             <table>
                 <thead><tr><th>Colaborador</th><th>Sueldo</th><th>Bonos</th><th>Préstamos</th><th>Otros</th><th>Neto</th></tr></thead>
                 <tbody>${filasHtml}<tr><td colspan="5">TOTAL A PAGAR</td><td>RD$ ${t_neto.toFixed(2)}</td></tr></tbody>
@@ -3825,20 +3826,16 @@ app.get('/nomina/requisicion', requireLogin, requireAdminOrCoord, async (req, re
     } catch (e) { res.status(500).send("Error: " + e.message); } finally { if (client) client.release(); }
 });
 
-// =============================================================
-// 📄 VER DETALLE DE NÓMINA (CON BOTÓN DE REQUISICIÓN)
-// =============================================================
 app.get('/ver-detalle-nomina/:payroll_id', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { payroll_id } = req.params;
     let client;
     try {
         client = await pool.connect();
         
-        // 1. Buscamos los empleados y la fecha de esa nómina
         const query = `
             SELECT DISTINCT 
                 e.id, 
-                e.name || ' ' || e.last_name as nombre_completo,
+                e.nombre as nombre_completo,
                 pr.pay_date
             FROM employees e
             JOIN payroll_records pr ON e.id = pr.employee_id
@@ -3847,10 +3844,8 @@ app.get('/ver-detalle-nomina/:payroll_id', requireLogin, requireAdminOrCoord, as
         
         const resDetalle = await client.query(query, [payroll_id.toString().trim()]);
         
-        // Obtenemos la fecha para el botón de reporte
         const fechaNomina = resDetalle.rows.length > 0 ? new Date(resDetalle.rows[0].pay_date).toISOString().split('T')[0] : '';
 
-        // Generamos la tabla de empleados
         let filas = resDetalle.rows.map(emp => {
             return `
             <tr>
@@ -3871,49 +3866,22 @@ app.get('/ver-detalle-nomina/:payroll_id', requireLogin, requireAdminOrCoord, as
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
                         <a href="/historial-nomina" style="text-decoration:none; color:#007bff; font-weight:bold;">← Volver al Archivo</a>
                         
-                        ${fechaNomina ? 
-                            `<a href="/nomina/requisicion?fecha=${fechaNomina}" target="_blank" class="btn" style="background:#28a745; color:white; padding:10px 20px; font-weight:bold; text-decoration:none; border-radius:6px;">
+                        ${payroll_id ? 
+                            `<a href="/nomina/requisicion?id=${payroll_id}" target="_blank" class="btn" style="background:#28a745; color:white; padding:10px 20px; font-weight:bold; text-decoration:none; border-radius:6px;">
                                 🖨️ IMPRIMIR REQUISICIÓN DE PAGO (PDF)
                              </a>` 
                             : ''}
                     </div>
 
                     <h1 style="margin-top:10px;">Detalle de Pagos: Lote #${payroll_id}</h1>
-                    <p style="color:#666;">Fecha de Proceso: ${fechaNomina}</p>
-                    
                     <table class="modern-table" style="background:white; margin-top:30px; width:100%;">
-                        <thead>
-                            <tr><th>Colaborador</th><th style="text-align:center;">Acciones Individuales</th></tr>
-                        </thead>
-                        <tbody>
-                            ${filas || '<tr><td colspan="2" style="text-align:center; padding:20px;">No se encontraron registros para este lote.</td></tr>'}
-                        </tbody>
+                        <thead><tr><th>Colaborador</th><th style="text-align:center;">Acciones</th></tr></thead>
+                        <tbody>${filas || '<tr><td colspan="2">No se encontraron registros.</td></tr>'}</tbody>
                     </table>
-
-                    <div style="margin-top: 60px; border: 1px dashed #ff4d4d; padding: 25px; border-radius: 12px; background: #fff5f5;">
-                        <h4 style="color: #ff4d4d; margin-top: 0;">⚠️ Zona de Peligro</h4>
-                        <p style="font-size: 14px; color: #666;">Si anulas este lote, se eliminarán los gastos en proyectos y abonos a préstamos.</p>
-                        <button class="btn" style="background: #ff4d4d; color: white; padding: 12px 25px; cursor:pointer;" onclick="anularLote('${payroll_id}')">
-                            Anular Nómina Completa
-                        </button>
-                    </div>
                 </div>
-
-                <script>
-                    async function anularLote(id) {
-                        if(!confirm("¿ESTÁS SEGURO? Esta acción borrará todo lo vinculado a esta quincena.")) return;
-                        try {
-                            const res = await fetch('/anular-nomina/' + id, { method: 'POST' });
-                            const result = await res.json();
-                            if(result.success) { alert(result.message); window.location.href = "/historial-nomina"; }
-                            else { alert("Error: " + result.message); }
-                        } catch(e) { alert("Error de conexión."); }
-                    }
-                </script>
             </body></html>`);
-    } catch (e) { res.status(500).send("Error en detalle: " + e.message); } finally { if (client) client.release(); }
+    } catch (e) { res.status(500).send("Error: " + e.message); } finally { if (client) client.release(); }
 });
-
 // =======================================================
 // NUEVA RUTA PARA GENERAR PDF DE RECIBO DE NÓMINA
 // =======================================================
