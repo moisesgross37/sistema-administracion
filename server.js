@@ -3771,148 +3771,100 @@ app.get('/historial-nomina', requireLogin, requireAdminOrCoord, async (req, res)
 });
 
 // =============================================================
-// 🖨️ REPORTE: REQUISICIÓN DE NÓMINA (PARA ADMINISTRACIÓN)
+// 🖨️ REQUISICIÓN DE NÓMINA CORREGIDA
 // =============================================================
 app.get('/nomina/requisicion', requireLogin, requireAdminOrCoord, async (req, res) => {
-    const { fecha } = req.query; // Esperamos la fecha: ?fecha=2026-02-15
-    
-    if (!fecha) return res.send("⚠️ Error: Falta la fecha de la nómina.");
+    const { fecha } = req.query;
+    if (!fecha) return res.send("⚠️ Error: Falta la fecha.");
 
     let client;
     try {
         client = await pool.connect();
 
-        // 1. Buscamos los datos detallados
-        // Usamos COALESCE para que si es NULL ponga 0.00
+        // Consulta simplificada para evitar errores de nombres de columnas
         const query = `
             SELECT 
-                e.name || ' ' || e.last_name as nombre_completo,
+                e.nombre as colaborador,
                 e.position as cargo,
                 pr.base_salary_paid as sueldo_bruto,
                 pr.bonuses as incentivos,
-                pr.loan_deduction as prestamos, 
-                (pr.deductions - COALESCE(pr.loan_deduction, 0)) as otros_descuentos,
-                pr.net_pay as neto_a_pagar,
-                pr.notes as notas
+                COALESCE(pr.loan_deduction, 0) as prestamos, 
+                (COALESCE(pr.deductions, 0) - COALESCE(pr.loan_deduction, 0)) as otros_descuentos,
+                pr.net_pay as neto_a_pagar
             FROM payroll_records pr
             JOIN employees e ON pr.employee_id = e.id
             WHERE pr.pay_date = $1
-            ORDER BY e.name ASC
+            ORDER BY e.nombre ASC
         `;
         
         const result = await client.query(query, [fecha]);
         const nomina = result.rows;
 
-        // 2. Calculamos los TOTALES de abajo
+        if (nomina.length === 0) return res.send("<h1>No hay datos para esta fecha.</h1>");
+
         let t_bruto = 0, t_incentivos = 0, t_prestamos = 0, t_otros = 0, t_neto = 0;
 
-        nomina.forEach(fila => {
-            t_bruto += parseFloat(fila.sueldo_bruto || 0);
-            t_incentivos += parseFloat(fila.incentivos || 0);
-            t_prestamos += parseFloat(fila.prestamos || 0);
-            t_otros += parseFloat(fila.otros_descuentos || 0);
-            t_neto += parseFloat(fila.neto_a_pagar || 0);
-        });
+        const filasHtml = nomina.map(row => {
+            t_bruto += parseFloat(row.sueldo_bruto || 0);
+            t_incentivos += parseFloat(row.incentivos || 0);
+            t_prestamos += parseFloat(row.prestamos || 0);
+            t_otros += parseFloat(row.otros_descuentos || 0);
+            t_neto += parseFloat(row.neto_a_pagar || 0);
 
-        // 3. Generamos el HTML para Imprimir
+            return `
+            <tr>
+                <td style="text-align:left;"><b>${row.colaborador}</b></td>
+                <td style="text-align:left; font-size:10px;">${row.cargo || '-'}</td>
+                <td>${parseFloat(row.sueldo_bruto || 0).toFixed(2)}</td>
+                <td>${parseFloat(row.incentivos || 0).toFixed(2)}</td>
+                <td style="color:red;">${parseFloat(row.prestamos || 0).toFixed(2)}</td>
+                <td style="color:red;">${parseFloat(row.otros_descuentos || 0).toFixed(2)}</td>
+                <td style="font-weight:bold;">${parseFloat(row.neto_a_pagar || 0).toFixed(2)}</td>
+            </tr>`;
+        }).join('');
+
         res.send(`
-        <!DOCTYPE html>
-        <html lang="es">
+        <html>
         <head>
-            <meta charset="UTF-8">
-            <title>Requisición Nómina - ${fecha}</title>
+            <title>Requisición - ${fecha}</title>
             <style>
-                body { font-family: 'Helvetica', sans-serif; padding: 40px; }
-                .header { text-align: center; margin-bottom: 30px; }
-                h1 { margin: 0; font-size: 24px; text-transform: uppercase; }
-                h3 { margin: 5px 0; color: #555; }
-                
-                table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 12px; }
-                th, td { border: 1px solid #ddd; padding: 8px; text-align: right; }
-                th { background-color: #f2f2f2; text-align: center; font-weight: bold; }
-                .text-left { text-align: left; }
-                
-                .totales-row td { background-color: #e3f2fd; font-weight: bold; border-top: 2px solid #000; }
-                
-                .firmas { margin-top: 80px; display: flex; justify-content: space-between; page-break-inside: avoid; }
-                .firma-box { width: 40%; border-top: 1px solid #000; text-align: center; padding-top: 10px; }
-                
-                @media print {
-                    .no-print { display: none; }
-                    body { padding: 0; }
-                }
+                body { font-family: sans-serif; padding: 30px; }
+                table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+                th, td { border: 1px solid #ccc; padding: 10px; text-align: right; font-size: 12px; }
+                th { background: #eee; text-align: center; }
+                .total { background: #f0f7ff; font-weight: bold; }
             </style>
         </head>
         <body>
-            <div class="no-print" style="margin-bottom: 20px;">
-                <button onclick="window.print()" style="padding: 10px 20px; background: #2c3e50; color: white; cursor: pointer;">🖨️ Imprimir / Guardar PDF</button>
-                <button onclick="window.history.back()" style="padding: 10px 20px;">⬅️ Volver</button>
-            </div>
-
-            <div class="header">
-                <h1>Be Eventos y Espectáculos</h1>
-                <h3>Requisición de Nómina de Personal</h3>
-                <p>Fecha de Corte: <strong>${new Date(fecha).toLocaleDateString()}</strong></p>
-            </div>
-
+            <button onclick="window.print()" style="margin-bottom:20px; padding:10px;">🖨️ Imprimir PDF</button>
+            <h2 style="margin-bottom:0;">Be Eventos</h2>
+            <h3>Requisición de Pago de Nómina: ${fecha}</h3>
             <table>
                 <thead>
                     <tr>
-                        <th class="text-left">Colaborador</th>
-                        <th class="text-left">Cargo</th>
-                        <th>Sueldo Base</th>
-                        <th>Incentivos</th>
-                        <th>(-) Préstamos</th>
-                        <th>(-) Otros Desc.</th>
-                        <th>NETO A PAGAR</th>
+                        <th>Colaborador</th><th>Cargo</th><th>Sueldo</th><th>Bonos</th><th>Préstamos</th><th>Otros</th><th>Neto</th>
                     </tr>
                 </thead>
                 <tbody>
-                    ${nomina.map(row => `
-                    <tr>
-                        <td class="text-left"><b>${row.nombre_completo}</b></td>
-                        <td class="text-left" style="font-size:10px; color:#666;">${row.cargo || '-'}</td>
-                        <td>${parseFloat(row.sueldo_bruto).toFixed(2)}</td>
-                        <td>${parseFloat(row.incentivos).toFixed(2)}</td>
-                        <td style="color: #c0392b;">${parseFloat(row.prestamos).toFixed(2)}</td>
-                        <td style="color: #c0392b;">${parseFloat(row.otros_descuentos).toFixed(2)}</td>
-                        <td style="font-weight:bold;">${parseFloat(row.neto_a_pagar).toFixed(2)}</td>
-                    </tr>
-                    `).join('')}
-                    
-                    <tr class="totales-row">
-                        <td colspan="2" style="text-align: center;">TOTALES GENERALES</td>
-                        <td>${t_bruto.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
-                        <td>${t_incentivos.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
-                        <td style="color: #c0392b;">${t_prestamos.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
-                        <td style="color: #c0392b;">${t_otros.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
-                        <td style="font-size: 14px;">RD$ ${t_neto.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+                    ${filasHtml}
+                    <tr class="total">
+                        <td colspan="2" style="text-align:center;">TOTALES</td>
+                        <td>${t_bruto.toFixed(2)}</td>
+                        <td>${t_incentivos.toFixed(2)}</td>
+                        <td>${t_prestamos.toFixed(2)}</td>
+                        <td>${t_otros.toFixed(2)}</td>
+                        <td>RD$ ${t_neto.toFixed(2)}</td>
                     </tr>
                 </tbody>
             </table>
-
-            <div class="firmas">
-                <div class="firma-box">
-                    PREPARADO POR<br>
-                    <small>Recursos Humanos</small>
-                </div>
-                <div class="firma-box">
-                    AUTORIZADO POR<br>
-                    <small>Administración / Gerencia</small>
-                </div>
-            </div>
         </body>
-        </html>
-        `);
-
+        </html>`);
     } catch (e) {
-        console.error(e);
-        res.status(500).send("Error generando requisición: " + e.message);
+        res.status(500).send("Error: " + e.message);
     } finally {
         if (client) client.release();
     }
 });
-
 // =============================================================
 // 📄 VER DETALLE DE NÓMINA (CON BOTÓN DE REQUISICIÓN)
 // =============================================================
