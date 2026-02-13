@@ -3685,58 +3685,89 @@ app.post('/guardar-nomina', requireLogin, requireAdminOrCoord, async (req, res) 
         client.release();
     }
 });
+// =============================================================
+// 📅 HISTORIAL DE NÓMINAS (VERSIÓN 3.0: LA DEFINITIVA)
+// =============================================================
 app.get('/historial-nomina', requireLogin, requireAdminOrCoord, async (req, res) => {
     let client;
     try {
         client = await pool.connect();
-        
-        // Agrupamos los extras por payroll_id para identificar las quincenas
-        const resNomina = await client.query(`
-            SELECT payroll_id, 
-                   MIN(payment_date) as fecha_lote, 
-                   SUM(amount) as total_pagado_extras,
-                   COUNT(DISTINCT employee_id) as total_empleados
-            FROM payroll_extras 
-            GROUP BY payroll_id 
-            ORDER BY payroll_id DESC
-        `);
 
-        let lotesHtml = resNomina.rows.map(lote => {
-            const fecha = new Date(lote.fecha_lote);
-            const quincena = fecha.getDate() <= 15 ? "1ra Quincena" : "2da Quincena";
-            const mes = fecha.toLocaleString('es-ES', { month: 'long' });
-            const año = fecha.getFullYear();
+        // 1. Buscamos en la tabla CORRECTA (payroll_records)
+        // Agrupamos por el ID del Lote para que no se mezclen.
+        const query = `
+            SELECT 
+                payroll_id,
+                MAX(pay_date) as fecha_pago,
+                COUNT(employee_id) as total_empleados,
+                SUM(net_pay) as total_pagado,
+                MAX(createdat) as fecha_creacion
+            FROM payroll_records
+            WHERE payroll_id IS NOT NULL
+            GROUP BY payroll_id
+            ORDER BY fecha_pago DESC, payroll_id DESC
+        `;
 
+        const result = await client.query(query);
+        const nominas = result.rows;
+
+        // 2. Generamos las tarjetas HTML
+        let tarjetasHtml = nominas.map(n => {
+            // Formato de fecha bonito
+            const fechaObj = new Date(n.fecha_pago);
+            const fechaTexto = fechaObj.toLocaleDateString('es-DO', { day: 'numeric', month: 'long', year: 'numeric' });
+            
+            // Calculamos si es 1ra o 2da quincena para el título (Opcional, pero ayuda visualmente)
+            const dia = fechaObj.getDate();
+            const quincenaTexto = dia <= 15 ? "1ra Quincena" : "2da Quincena";
+            const mesTexto = fechaObj.toLocaleString('es-DO', { month: 'long' });
+
+            const total = parseFloat(n.total_pagado).toLocaleString('en-US', { minimumFractionDigits: 2 });
+            
             return `
-            <div class="card-nomina" style="display: flex; justify-content: space-between; align-items: center; padding: 20px; border: 1px solid #ddd; border-radius: 10px; margin-bottom: 15px; background: white;">
-                <div>
-                    <h3 style="margin:0; color:#0056b3;">${quincena} de ${mes} ${año}</h3>
-                    <p style="margin:5px 0 0; color:#666;">Fecha de proceso: ${fecha.toLocaleDateString()}</p>
-                </div>
-                <div style="text-align: center;">
-                    <span style="display:block; font-weight:bold;">${lote.total_empleados}</span>
-                    <small>Colaboradores</small>
-                </div>
-                <div>
-                    <a href="/ver-detalle-nomina/${lote.payroll_id}" class="btn" style="background:#28a745; color:white; text-decoration:none; padding:10px 20px; border-radius:5px;">Ver Detalle y Recibos</a>
+            <div class="card" style="border-left: 5px solid #4e73df; margin-bottom: 20px; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.05);">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <div>
+                        <h3 style="margin:0; color:#4e73df;">📅 ${quincenaTexto} de ${mesTexto}</h3>
+                        <small style="color:#858796;">Fecha de Proceso: ${fechaTexto} • Lote ID: ${n.payroll_id}</small>
+                        <p style="margin-top:10px; font-weight:bold; font-size: 1.1em;">
+                            👥 ${n.total_empleados} Colaboradores | 💰 Total: RD$ ${total}
+                        </p>
+                    </div>
+                    <div>
+                        <a href="/ver-detalle-nomina/${n.payroll_id}" class="btn" style="background:#4e73df; color:white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">
+                            Ver Detalle y Recibos ➔
+                        </a>
+                    </div>
                 </div>
             </div>`;
         }).join('');
 
         res.send(`
             <!DOCTYPE html><html lang="es">
-            <head>${commonHtmlHead.replace('<title>Panel de Administración</title>', '<title>Historial de Quincenas</title>')}</head>
+            <head>${commonHtmlHead}
+                <title>Historial de Nóminas</title>
+            </head>
             <body>
                 <div class="container" style="max-width: 900px;">
-                    ${backToDashboardLink}
-                    <h1>Archivo Histórico de Nóminas</h1>
-                    <p>Selecciona una quincena para ver los pagos detallados e imprimir recibos.</p>
-                    <div style="margin-top: 30px;">
-                        ${lotesHtml.length > 0 ? lotesHtml : '<p style="text-align:center; padding:50px;">Aún no has procesado ninguna nómina con el nuevo sistema.</p>'}
+                    <div style="margin-bottom: 20px;">${backToDashboardLink}</div>
+                    
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:30px;">
+                        <h1>🗂️ Archivo de Nóminas</h1>
+                        <a href="/generar-nomina" class="btn" style="background:#1cc88a; color:white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">+ Nueva Nómina</a>
                     </div>
+
+                    ${tarjetasHtml || '<div class="card" style="text-align:center; padding:40px;"><h3>📭 No hay nóminas registradas aún.</h3></div>'}
                 </div>
-            </body></html>`);
-    } catch (e) { res.status(500).send(e.message); } finally { if (client) client.release(); }
+            </body></html>
+        `);
+
+    } catch (e) {
+        console.error(e);
+        res.status(500).send("Error cargando historial: " + e.message);
+    } finally {
+        if (client) client.release();
+    }
 });
 
 // =============================================================
