@@ -3686,51 +3686,42 @@ app.post('/guardar-nomina', requireLogin, requireAdminOrCoord, async (req, res) 
     }
 });
 // =============================================================
-// 📅 HISTORIAL DE NÓMINAS (VERSIÓN 3.0: LA DEFINITIVA)
+// 📅 HISTORIAL DE NÓMINAS (CORREGIDO PARA EVITAR CEROS)
 // =============================================================
 app.get('/historial-nomina', requireLogin, requireAdminOrCoord, async (req, res) => {
     let client;
     try {
         client = await pool.connect();
 
-        // 1. Buscamos en la tabla CORRECTA (payroll_records)
-        // Agrupamos por el ID del Lote para que no se mezclen.
+        // Consulta corregida: Aseguramos que los nombres de columnas tengan comillas si es necesario
+        // y que el alias 'as' esté bien puesto.
         const query = `
-    const query = `
-    SELECT 
-        payroll_id,
-        MAX(pay_date) as fecha_pago,
-        COUNT(employee_id) as total_empleados,
-        SUM(NULLIF(net_pay, 0)) as total_pagado,
-        MAX(createdat) as fecha_creacion
-    FROM payroll_records
-    WHERE payroll_id IS NOT NULL
-    GROUP BY payroll_id
-    ORDER BY fecha_pago DESC, payroll_id DESC
-`;
+            SELECT 
+                payroll_id,
+                MAX(pay_date) as fecha_pago,
+                COUNT(employee_id) as total_empleados,
+                SUM(CAST(COALESCE(net_pay, 0) AS NUMERIC)) as total_pagado,
+                MAX(createdat) as fecha_creacion
+            FROM payroll_records
+            WHERE payroll_id IS NOT NULL
+            GROUP BY payroll_id
+            ORDER BY fecha_pago DESC, payroll_id DESC
+        `;
 
         const result = await client.query(query);
         const nominas = result.rows;
 
-        // 2. Generamos las tarjetas HTML
         let tarjetasHtml = nominas.map(n => {
-            // Formato de fecha bonito
             const fechaObj = new Date(n.fecha_pago);
             const fechaTexto = fechaObj.toLocaleDateString('es-DO', { day: 'numeric', month: 'long', year: 'numeric' });
-            
-            // Calculamos si es 1ra o 2da quincena para el título (Opcional, pero ayuda visualmente)
-            const dia = fechaObj.getDate();
-            const quincenaTexto = dia <= 15 ? "1ra Quincena" : "2da Quincena";
-            const mesTexto = fechaObj.toLocaleString('es-DO', { month: 'long' });
-
-            const total = parseFloat(n.total_pagado).toLocaleString('en-US', { minimumFractionDigits: 2 });
+            const total = parseFloat(n.total_pagado || 0).toLocaleString('en-US', { minimumFractionDigits: 2 });
             
             return `
             <div class="card" style="border-left: 5px solid #4e73df; margin-bottom: 20px; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.05);">
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                     <div>
-                        <h3 style="margin:0; color:#4e73df;">📅 ${quincenaTexto} de ${mesTexto}</h3>
-                        <small style="color:#858796;">Fecha de Proceso: ${fechaTexto} • Lote ID: ${n.payroll_id}</small>
+                        <h3 style="margin:0; color:#4e73df;">📅 Nómina: ${fechaTexto}</h3>
+                        <small style="color:#858796;">Lote ID: ${n.payroll_id}</small>
                         <p style="margin-top:10px; font-weight:bold; font-size: 1.1em;">
                             👥 ${n.total_empleados} Colaboradores | 💰 Total: RD$ ${total}
                         </p>
@@ -3746,26 +3737,19 @@ app.get('/historial-nomina', requireLogin, requireAdminOrCoord, async (req, res)
 
         res.send(`
             <!DOCTYPE html><html lang="es">
-            <head>${commonHtmlHead}
-                <title>Historial de Nóminas</title>
-            </head>
+            <head>${commonHtmlHead}</head>
             <body>
                 <div class="container" style="max-width: 900px;">
                     <div style="margin-bottom: 20px;">${backToDashboardLink}</div>
-                    
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:30px;">
-                        <h1>🗂️ Archivo de Nóminas</h1>
-                        <a href="/generar-nomina" class="btn" style="background:#1cc88a; color:white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">+ Nueva Nómina</a>
-                    </div>
-
-                    ${tarjetasHtml || '<div class="card" style="text-align:center; padding:40px;"><h3>📭 No hay nóminas registradas aún.</h3></div>'}
+                    <h1>🗂️ Archivo de Nóminas</h1>
+                    ${tarjetasHtml || '<div class="card" style="text-align:center; padding:40px;"><h3>📭 No hay nóminas registradas.</h3></div>'}
                 </div>
             </body></html>
         `);
 
     } catch (e) {
         console.error(e);
-        res.status(500).send("Error cargando historial: " + e.message);
+        res.status(500).send("Error en historial: " + e.message);
     } finally {
         if (client) client.release();
     }
