@@ -3696,17 +3696,17 @@ app.get('/historial-nomina', requireLogin, requireAdminOrCoord, async (req, res)
         // 1. Buscamos en la tabla CORRECTA (payroll_records)
         // Agrupamos por el ID del Lote para que no se mezclen.
         const query = `
-            SELECT 
-                payroll_id,
-                MAX(pay_date) as fecha_pago,
-                COUNT(employee_id) as total_empleados,
-                SUM(net_pay) as total_pagado,
-                MAX(createdat) as fecha_creacion
-            FROM payroll_records
-            WHERE payroll_id IS NOT NULL
-            GROUP BY payroll_id
-            ORDER BY fecha_pago DESC, payroll_id DESC
-        `;
+    SELECT 
+        payroll_id,
+        MAX(pay_date) as fecha_pago,
+        COUNT(employee_id) as total_empleados,
+        SUM(CAST(net_pay AS NUMERIC)) as total_pagado,
+        MAX(createdat) as fecha_creacion
+    FROM payroll_records
+    WHERE payroll_id IS NOT NULL
+    GROUP BY payroll_id
+    ORDER BY fecha_pago DESC, payroll_id DESC
+`;
 
         const result = await client.query(query);
         const nominas = result.rows;
@@ -3770,9 +3770,6 @@ app.get('/historial-nomina', requireLogin, requireAdminOrCoord, async (req, res)
     }
 });
 
-// =============================================================
-// 🖨️ REQUISICIÓN DE NÓMINA CORREGIDA
-// =============================================================
 app.get('/nomina/requisicion', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { fecha } = req.query;
     if (!fecha) return res.send("⚠️ Error: Falta la fecha.");
@@ -3781,11 +3778,9 @@ app.get('/nomina/requisicion', requireLogin, requireAdminOrCoord, async (req, re
     try {
         client = await pool.connect();
 
-        // Consulta simplificada para evitar errores de nombres de columnas
         const query = `
             SELECT 
                 e.nombre as colaborador,
-                e.position as cargo,
                 pr.base_salary_paid as sueldo_bruto,
                 pr.bonuses as incentivos,
                 COALESCE(pr.loan_deduction, 0) as prestamos, 
@@ -3802,19 +3797,12 @@ app.get('/nomina/requisicion', requireLogin, requireAdminOrCoord, async (req, re
 
         if (nomina.length === 0) return res.send("<h1>No hay datos para esta fecha.</h1>");
 
-        let t_bruto = 0, t_incentivos = 0, t_prestamos = 0, t_otros = 0, t_neto = 0;
-
+        let t_neto = 0;
         const filasHtml = nomina.map(row => {
-            t_bruto += parseFloat(row.sueldo_bruto || 0);
-            t_incentivos += parseFloat(row.incentivos || 0);
-            t_prestamos += parseFloat(row.prestamos || 0);
-            t_otros += parseFloat(row.otros_descuentos || 0);
             t_neto += parseFloat(row.neto_a_pagar || 0);
-
             return `
             <tr>
                 <td style="text-align:left;"><b>${row.colaborador}</b></td>
-                <td style="text-align:left; font-size:10px;">${row.cargo || '-'}</td>
                 <td>${parseFloat(row.sueldo_bruto || 0).toFixed(2)}</td>
                 <td>${parseFloat(row.incentivos || 0).toFixed(2)}</td>
                 <td style="color:red;">${parseFloat(row.prestamos || 0).toFixed(2)}</td>
@@ -3825,46 +3813,18 @@ app.get('/nomina/requisicion', requireLogin, requireAdminOrCoord, async (req, re
 
         res.send(`
         <html>
-        <head>
-            <title>Requisición - ${fecha}</title>
-            <style>
-                body { font-family: sans-serif; padding: 30px; }
-                table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-                th, td { border: 1px solid #ccc; padding: 10px; text-align: right; font-size: 12px; }
-                th { background: #eee; text-align: center; }
-                .total { background: #f0f7ff; font-weight: bold; }
-            </style>
-        </head>
+        <head><style>body{font-family:sans-serif;padding:30px;} table{width:100%;border-collapse:collapse;} th,td{border:1px solid #ccc;padding:10px;text-align:right;}</style></head>
         <body>
-            <button onclick="window.print()" style="margin-bottom:20px; padding:10px;">🖨️ Imprimir PDF</button>
-            <h2 style="margin-bottom:0;">Be Eventos</h2>
-            <h3>Requisición de Pago de Nómina: ${fecha}</h3>
+            <h2>Be Eventos - Requisición de Pago: ${fecha}</h2>
             <table>
-                <thead>
-                    <tr>
-                        <th>Colaborador</th><th>Cargo</th><th>Sueldo</th><th>Bonos</th><th>Préstamos</th><th>Otros</th><th>Neto</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${filasHtml}
-                    <tr class="total">
-                        <td colspan="2" style="text-align:center;">TOTALES</td>
-                        <td>${t_bruto.toFixed(2)}</td>
-                        <td>${t_incentivos.toFixed(2)}</td>
-                        <td>${t_prestamos.toFixed(2)}</td>
-                        <td>${t_otros.toFixed(2)}</td>
-                        <td>RD$ ${t_neto.toFixed(2)}</td>
-                    </tr>
-                </tbody>
+                <thead><tr><th>Colaborador</th><th>Sueldo</th><th>Bonos</th><th>Préstamos</th><th>Otros</th><th>Neto</th></tr></thead>
+                <tbody>${filasHtml}<tr><td colspan="5">TOTAL A PAGAR</td><td>RD$ ${t_neto.toFixed(2)}</td></tr></tbody>
             </table>
-        </body>
-        </html>`);
-    } catch (e) {
-        res.status(500).send("Error: " + e.message);
-    } finally {
-        if (client) client.release();
-    }
+            <button onclick="window.print()">🖨️ Imprimir</button>
+        </body></html>`);
+    } catch (e) { res.status(500).send("Error: " + e.message); } finally { if (client) client.release(); }
 });
+
 // =============================================================
 // 📄 VER DETALLE DE NÓMINA (CON BOTÓN DE REQUISICIÓN)
 // =============================================================
