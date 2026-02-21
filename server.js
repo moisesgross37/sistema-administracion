@@ -5645,15 +5645,8 @@ app.post('/cuentas-por-pagar/abonar', requireLogin, requireAdminOrCoord, async (
 
         await client.query('COMMIT'); // Guardamos los cambios
 
-        // 3. LA MAGIA: Le decimos al navegador que abra el recibo y recargue la tabla
-        res.send(`
-            <script>
-                // Abre el recibo en una pestaña nueva
-                window.open('/imprimir-abono-suplidor/${nuevoAbonoId}', '_blank');
-                // Redirige la pestaña actual de vuelta a las cuentas por pagar
-                window.location.href = '/cuentas-por-pagar';
-            </script>
-        `);
+        // Redirigimos DIRECTAMENTE a la pantalla del recibo de manera natural (sin bloqueos de Chrome)
+        res.redirect('/imprimir-abono-suplidor/' + nuevoAbonoId);
 
     } catch (e) {
         if (client) await client.query('ROLLBACK'); // Si hay error, cancelamos todo
