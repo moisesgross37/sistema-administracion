@@ -3603,7 +3603,7 @@ app.get('/generar-nomina', requireLogin, requireAdminOrCoord, async (req, res) =
                     </form>
                 </div>
 
-                <script>
+   <script>
     // 1. Lógica visual: Actualizar el neto cuando se escribe
     document.querySelectorAll('.payroll-input').forEach(input => {
         input.addEventListener('input', (event) => {
@@ -3619,21 +3619,26 @@ app.get('/generar-nomina', requireLogin, requireAdminOrCoord, async (req, res) =
 
     // 2. Lógica de Envío: Armar el JSON y enviar a la Súper Nómina
     document.getElementById('payroll-form').addEventListener('submit', async (e) => {
-        e.preventDefault(); // Evita que la página recargue o haga doble envío
+        e.preventDefault(); // Evita que la página recargue
 
         const submitBtn = e.target.querySelector('button[type="submit"]');
-        submitBtn.disabled = true; // Bloquea el botón para evitar doble clic
+        submitBtn.disabled = true; 
         submitBtn.textContent = 'Procesando... ⏳';
 
         const payDate = document.getElementById('pay_date').value;
         const nominaArray = [];
 
-        // Recorremos cada fila de empleado para armar el paquete
+        // Recorremos cada fila para armar el paquete (Sin backticks problemáticos)
         document.querySelectorAll('tbody tr[data-employee-id]').forEach(row => {
             const employeeId = row.dataset.employeeId;
             const baseSalary = parseFloat(row.querySelector('[data-base-salary]').dataset.baseSalary) || 0;
-            const bonuses = parseFloat(row.querySelector(`input[name="bonuses_${employeeId}"]`).value) || 0;
-            const deductions = parseFloat(row.querySelector(`input[name="deductions_${employeeId}"]`).value) || 0;
+            
+            // Usamos comillas simples y el signo + para que Node.js no se confunda
+            const inputBono = row.querySelector('input[name="bonuses_' + employeeId + '"]');
+            const inputDesc = row.querySelector('input[name="deductions_' + employeeId + '"]');
+            
+            const bonuses = inputBono ? (parseFloat(inputBono.value) || 0) : 0;
+            const deductions = inputDesc ? (parseFloat(inputDesc.value) || 0) : 0;
             const netPay = baseSalary + bonuses - deductions;
 
             nominaArray.push({
@@ -3641,13 +3646,13 @@ app.get('/generar-nomina', requireLogin, requireAdminOrCoord, async (req, res) =
                 base_salary: baseSalary,
                 bonuses: bonuses,
                 deductions: deductions,
-                loan_deduction: deductions, // Pasamos las deducciones iniciales como préstamo
-                net_pay: netPay, // ¡Ahora sí enviamos el número real!
+                loan_deduction: deductions,
+                net_pay: netPay,
                 extras: []
             });
         });
 
-        // Enviamos el paquete al servidor correcto
+        // Enviamos el paquete
         try {
             const response = await fetch('/procesar-super-nomina', {
                 method: 'POST',
@@ -3659,7 +3664,7 @@ app.get('/generar-nomina', requireLogin, requireAdminOrCoord, async (req, res) =
             
             if (result.success) {
                 alert('✅ Nómina procesada con éxito!');
-                window.location.href = '/historial-nomina'; // Redirige al historial
+                window.location.href = '/historial-nomina';
             } else {
                 alert('❌ Error: ' + result.message);
                 submitBtn.disabled = false;
