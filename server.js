@@ -1373,67 +1373,6 @@ app.post('/nuevo-gasto-general', requireLogin, requireAdminOrCoord, async (req, 
     }
 });
 
-// 2. RUTA PARA ABONAR A LA DEUDA (PAGOS PARCIALES)
-app.post('/cuentas-por-pagar/abonar', requireLogin, requireAdminOrCoord, async (req, res) => {
-    const { expenseId, paymentAmount, fundSource } = req.body;
-    let client;
-    try {
-        client = await pool.connect();
-
-        // Convertimos a número
-        const abono = parseFloat(paymentAmount);
-
-        // A. Actualizamos el gasto: Sumamos lo nuevo a lo que ya se había pagado
-        await client.query(`
-            UPDATE expenses 
-            SET paid_amount = COALESCE(paid_amount, 0) + $1 
-            WHERE id = $2
-        `, [abono, expenseId]);
-
-        // B. Guardamos el historial del abono
-        // OJO: Aquí sí usamos 'payment_date' si tu tabla history lo tiene así.
-        await client.query(`
-            INSERT INTO payment_history (expense_id, amount_paid, fund_source, payment_date)
-            VALUES ($1, $2, $3, NOW())
-        `, [expenseId, abono, fundSource]);
-
-        res.redirect('/cuentas-por-pagar');
-
-    } catch (e) {
-        console.error("Error al abonar:", e);
-        res.send("Error al registrar el abono: " + e.message);
-    } finally {
-        if (client) client.release();
-    }
-});
-app.post('/cuentas-por-pagar/abonar', requireLogin, requireAdminOrCoord, async (req, res) => {
-    const { expenseId, paymentAmount, fundSource } = req.body;
-    let client;
-    try {
-        client = await pool.connect();
-
-        // A. Actualizamos el monto pagado en el gasto (suma lo que ya había + lo nuevo)
-        await client.query(`
-            UPDATE expenses 
-            SET paid_amount = COALESCE(paid_amount, 0) + $1 
-            WHERE id = $2
-        `, [paymentAmount, expenseId]);
-
-        // B. Guardamos el historial del abono (para que salga en el cuadrito verde)
-        await client.query(`
-            INSERT INTO payment_history (expense_id, amount_paid, fund_source, payment_date)
-            VALUES ($1, $2, $3, NOW())
-        `, [expenseId, paymentAmount, fundSource]);
-
-        res.redirect('/cuentas-por-pagar');
-
-    } catch (e) {
-        console.error(e);
-        res.send("Error al registrar abono: " + e.message);
-    } finally {
-        if (client) client.release();
-    }
-});
 // --- RUTA PARA GUARDAR UNA NUEVA FACTURA DE SUPLIDOR ---
 app.post('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { supplier_id, numero_factura, fecha_factura, fecha_vencimiento, monto_total, descripcion } = req.body;
@@ -5673,52 +5612,53 @@ app.get('/reporte-suplidor-pdf/:id', requireLogin, requireAdminOrCoord, async (r
         doc.end();
     } catch (e) { res.status(500).send(e.message); } finally { if (client) client.release(); }
 });
+// =============================================================
+// 💰 RUTA DEFINITIVA PARA ABONAR (CON RECIBO AUTOMÁTICO)
+// =============================================================
 app.post('/cuentas-por-pagar/abonar', requireLogin, requireAdminOrCoord, async (req, res) => {
-    // 1. EXTRAER fundSource (Esto es lo que faltaba)
-    const { expenseId, paymentAmount, paymentMethod, fundSource } = req.body;
-    
+    const { expenseId, paymentAmount, fundSource } = req.body;
     let client;
+    
     try {
         client = await pool.connect();
-        await client.query('BEGIN');
+        await client.query('BEGIN'); // Iniciamos una transacción segura
 
-        // 2. Registrar el abono en el historial con su origen real
-        await client.query(
-            "INSERT INTO payment_history (expense_id, amount_paid, payment_method, fund_source) VALUES ($1, $2, $3, $4)",
-            [
-                expenseId, 
-                paymentAmount, 
-                paymentMethod || 'Abono Directo', 
-                fundSource || 'Banco' // Si no viene nada, asumimos Banco
-            ]
-        );
+        // 1. Guardar el abono y capturar su ID nuevo de inmediato
+        const insertRes = await client.query(`
+            INSERT INTO payment_history (expense_id, amount_paid, fund_source, payment_date)
+            VALUES ($1, $2, $3, NOW())
+            RETURNING id
+        `, [expenseId, paymentAmount, fundSource || 'Banco']);
 
-        // 3. Obtener datos actuales de la factura
-        const expenseRes = await client.query("SELECT amount, paid_amount FROM expenses WHERE id = $1", [expenseId]);
-        
-        if (expenseRes.rows.length === 0) {
-            throw new Error("Factura no encontrada");
-        }
+        const nuevoAbonoId = insertRes.rows[0].id;
 
-        const expense = expenseRes.rows[0];
-        const nuevoTotalPagado = parseFloat(expense.paid_amount || 0) + parseFloat(paymentAmount);
-        
-        // 4. Determinar si la factura se cierra o sigue abonada
-        let nuevoEstado = (nuevoTotalPagado >= parseFloat(expense.amount)) ? 'Pagada' : 'Abonada';
+        // 2. Actualizar la factura sumando lo pagado
+        await client.query(`
+            UPDATE expenses 
+            SET paid_amount = COALESCE(paid_amount, 0) + $1,
+                status = CASE 
+                            WHEN (COALESCE(paid_amount, 0) + $1) >= amount THEN 'Pagada' 
+                            ELSE 'Abonada' 
+                         END
+            WHERE id = $2
+        `, [paymentAmount, expenseId]);
 
-        // 5. Actualizar la factura (Guardamos también el último fund_source usado)
-        await client.query(
-            "UPDATE expenses SET paid_amount = $1, status = $2, fund_source = $3 WHERE id = $4",
-            [nuevoTotalPagado, nuevoEstado, fundSource || 'Banco', expenseId]
-        );
+        await client.query('COMMIT'); // Guardamos los cambios
 
-        await client.query('COMMIT');
-        res.redirect('/cuentas-por-pagar');
+        // 3. LA MAGIA: Le decimos al navegador que abra el recibo y recargue la tabla
+        res.send(`
+            <script>
+                // Abre el recibo en una pestaña nueva
+                window.open('/imprimir-abono-suplidor/${nuevoAbonoId}', '_blank');
+                // Redirige la pestaña actual de vuelta a las cuentas por pagar
+                window.location.href = '/cuentas-por-pagar';
+            </script>
+        `);
 
     } catch (e) {
-        if (client) await client.query('ROLLBACK');
-        console.error("Error en Abono PCOE:", e.message);
-        res.status(500).send("Error al procesar el abono: " + e.message);
+        if (client) await client.query('ROLLBACK'); // Si hay error, cancelamos todo
+        console.error("Error al abonar:", e);
+        res.status(500).send("Error al registrar el abono: " + e.message);
     } finally {
         if (client) client.release();
     }
