@@ -4878,14 +4878,15 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
                             if(sueldo > 0 || totalExtras > 0 || deduccion > 0) {
                                 payload.push({ 
                                     employee_id: empId, 
-                                    salary: sueldo, 
+                                    base_salary: sueldo,         // CORREGIDO: Antes decía "salary", por eso el backend no lo veía
+                                    bonuses: totalExtras,        // NUEVO: Mandamos el total de actividades para que lo sume al Neto
                                     loan_id: loanId, 
                                     loan_deduction: deduccion,
+                                    deductions: 0,               // Aseguramos que no viaje vacío
                                     extras: extras 
                                 });
                                 resumen += "- " + nombre + ": RD$ " + (sueldo + totalExtras - deduccion).toFixed(2) + "\\n";
                             }
-                        });
 
                         if(payload.length === 0) return alert("No hay datos para procesar.");
 
