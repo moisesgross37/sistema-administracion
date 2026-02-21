@@ -3082,20 +3082,19 @@ app.get('/gestionar-avances', requireLogin, requireAdminOrCoord, async (req, res
         res.status(500).send('<h1>Error al cargar la página ❌</h1>');
     }
 });
-// =======================================================
-//   NUEVAS RUTAS PARA GESTIÓN DE PRÉSTAMOS
-// =======================================================
-
-// --- PÁGINA PRINCIPAL DE GESTIÓN DE PRÉSTAMOS ---
+// --- PÁGINA PRINCIPAL DE GESTIÓN DE PRÉSTAMOS (MODERNA Y SEPARADA) ---
 app.get('/gestionar-prestamos', requireLogin, requireAdminOrCoord, async (req, res) => {
+    let client;
     try {
-        const client = await pool.connect();
-        // Obtenemos todos los empleados (para el selector) y los préstamos activos con su total pagado
+        client = await pool.connect();
+        
+        // 1. Obtenemos empleados y préstamos, calculando el balance directamente en SQL
         const [employeesResult, loansResult] = await Promise.all([
             client.query('SELECT id, first_name, last_name FROM employees ORDER BY first_name ASC'),
             client.query(`
                 SELECT l.*, e.first_name, e.last_name, 
-                       COALESCE(lp.total_pagado, 0) as total_pagado
+                       COALESCE(lp.total_pagado, 0) as total_pagado,
+                       (l.loan_amount - COALESCE(lp.total_pagado, 0)) as balance_pendiente
                 FROM loans l
                 JOIN employees e ON l.employee_id = e.id
                 LEFT JOIN (
@@ -3103,57 +3102,163 @@ app.get('/gestionar-prestamos', requireLogin, requireAdminOrCoord, async (req, r
                     FROM loan_payments 
                     GROUP BY loan_id
                 ) lp ON l.id = lp.loan_id
-                WHERE l.status = 'activo'
                 ORDER BY l.loan_date DESC
             `)
         ]);
-        client.release();
 
         const employees = employeesResult.rows;
-        const loans = loansResult.rows;
+        const allLoans = loansResult.rows;
+
+        // 2. Filtramos los préstamos en Activos (con deuda) y Pagados (balance 0)
+        const prestamosActivos = allLoans.filter(l => l.balance_pendiente > 0);
+        const prestamosPagados = allLoans.filter(l => l.balance_pendiente <= 0);
 
         let employeesOptionsHtml = employees.map(e => `<option value="${e.id}">${e.first_name} ${e.last_name}</option>`).join('');
         
-        let loansHtml = loans.map(l => {
-            const balancePendiente = parseFloat(l.loan_amount) - parseFloat(l.total_pagado);
-            return `<tr style="cursor: pointer;" onclick="window.location.href='/prestamo/${l.id}';">
-                <td>${new Date(l.loan_date).toLocaleDateString()}</td>
-                <td>${l.first_name} ${l.last_name}</td>
-                <td>$${parseFloat(l.loan_amount).toFixed(2)}</td>
-                <td style="font-weight: bold; color: #dc3545;">$${balancePendiente.toFixed(2)}</td>
-                <td>${l.reason || ''}</td>
-            </tr>`
-        }).join('') || '<tr><td colspan="5">No hay préstamos activos registrados.</td></tr>';
+        // 3. Generamos las filas HTML para los Activos
+        let activosHtml = prestamosActivos.map(l => `
+            <tr style="cursor: pointer; transition: background 0.2s;" onmouseover="this.style.background='#f8f9fa'" onmouseout="this.style.background='white'" onclick="window.location.href='/prestamo/${l.id}';">
+                <td>${new Date(l.loan_date).toLocaleDateString('es-DO')}</td>
+                <td style="font-weight: bold;">${l.first_name} ${l.last_name}</td>
+                <td>RD$ ${parseFloat(l.loan_amount).toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+                <td style="font-weight: bold; color: #dc3545; font-size: 1.1em;">RD$ ${parseFloat(l.balance_pendiente).toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+                <td style="color: #6c757d; font-style: italic;">${l.reason || 'Sin motivo especificado'}</td>
+            </tr>
+        `).join('') || '<tr><td colspan="5" style="text-align:center; padding: 20px;">No hay préstamos activos registrados.</td></tr>';
 
+        // 4. Generamos las filas HTML para los Pagados (Diseño más sutil)
+        let pagadosHtml = prestamosPagados.map(l => `
+            <tr style="cursor: pointer; background: #fdfdfd;" onclick="window.location.href='/prestamo/${l.id}';">
+                <td style="color: #6c757d;">${new Date(l.loan_date).toLocaleDateString('es-DO')}</td>
+                <td style="color: #6c757d;">${l.first_name} ${l.last_name}</td>
+                <td style="color: #6c757d;">RD$ ${parseFloat(l.loan_amount).toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+                <td style="font-weight: bold; color: #28a745;">¡Saldado!</td>
+                <td style="color: #adb5bd; font-style: italic;">${l.reason || '-'}</td>
+            </tr>
+        `).join('') || '<tr><td colspan="5" style="text-align:center; padding: 20px; color: #6c757d;">No hay historial de préstamos pagados.</td></tr>';
+
+        // 5. Renderizamos la Vista con CSS Inyectado para el Formulario Grid
         res.send(`
-            <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
-                <div class="container">
-                    ${backToDashboardLink}
-                    <h2>Gestionar Préstamos a Colaboradores</h2>
-                    <div class="form-container">
-                        <h3>Registrar Nuevo Préstamo</h3>
+            <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}
+            <style>
+                .modern-form {
+                    background: white;
+                    padding: 30px;
+                    border-radius: 12px;
+                    box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+                    border: 1px solid #eaeaea;
+                }
+                .form-grid {
+                    display: grid;
+                    grid-template-columns: 1fr 1fr;
+                    gap: 20px;
+                    margin-bottom: 20px;
+                }
+                .form-group label {
+                    display: block;
+                    font-weight: 600;
+                    margin-bottom: 8px;
+                    color: #495057;
+                }
+                .form-group input, .form-group select, .form-group textarea {
+                    width: 100%;
+                    padding: 10px 12px;
+                    border: 1px solid #ced4da;
+                    border-radius: 6px;
+                    font-size: 14px;
+                    box-sizing: border-box;
+                    transition: border-color 0.2s;
+                }
+                .form-group input:focus, .form-group select:focus {
+                    border-color: #4e73df;
+                    outline: none;
+                }
+                .full-width {
+                    grid-column: 1 / -1;
+                }
+                .btn-primary {
+                    background: #4e73df;
+                    color: white;
+                    padding: 12px 25px;
+                    border: none;
+                    border-radius: 6px;
+                    font-size: 16px;
+                    font-weight: bold;
+                    cursor: pointer;
+                    width: 100%;
+                    transition: background 0.3s;
+                }
+                .btn-primary:hover { background: #2e59d9; }
+                .table-container {
+                    background: white;
+                    border-radius: 10px;
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.03);
+                    overflow: hidden;
+                    margin-bottom: 40px;
+                }
+                table { width: 100%; border-collapse: collapse; }
+                th { background: #f8f9fa; padding: 15px; text-align: left; color: #495057; border-bottom: 2px solid #dee2e6; }
+                td { padding: 15px; border-bottom: 1px solid #eaeaea; }
+            </style>
+            </head><body>
+                <div class="container" style="max-width: 1000px; padding-bottom: 50px;">
+                    <div style="margin-bottom: 20px;">${backToDashboardLink}</div>
+                    <h1 style="color: #2c3e50; margin-bottom: 30px;">🏦 Gestión de Préstamos</h1>
+                    
+                    <div class="modern-form">
+                        <h3 style="margin-top: 0; color: #4e73df; border-bottom: 2px solid #f8f9fa; padding-bottom: 10px;">Registrar Nuevo Préstamo</h3>
                         <form action="/gestionar-prestamos" method="POST">
-                            <div class="form-group"><label>Colaborador:</label><select name="employee_id" required><option value="">Seleccione...</option>${employeesOptionsHtml}</select></div>
-                            <div class="form-group"><label>Fecha del Préstamo:</label><input type="date" name="loan_date" required></div>
-                            <div class="form-group"><label>Monto del Préstamo:</label><input type="number" name="loan_amount" step="0.01" required></div>
-                            <div class="form-group"><label>Motivo / Concepto (Opcional):</label><textarea name="reason" rows="2"></textarea></div>
-                            <button type="submit" class="btn">Guardar Préstamo</button>
+                            <div class="form-grid">
+                                <div class="form-group">
+                                    <label>👤 Colaborador:</label>
+                                    <select name="employee_id" required>
+                                        <option value="">Seleccione un colaborador...</option>
+                                        ${employeesOptionsHtml}
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label>📅 Fecha del Préstamo:</label>
+                                    <input type="date" name="loan_date" required>
+                                </div>
+                                <div class="form-group">
+                                    <label>💰 Monto (RD$):</label>
+                                    <input type="number" name="loan_amount" step="0.01" placeholder="Ej: 5000.00" required>
+                                </div>
+                                <div class="form-group full-width">
+                                    <label>📝 Motivo / Concepto (Opcional):</label>
+                                    <textarea name="reason" rows="2" placeholder="Ej: Avance de sueldo para emergencia..."></textarea>
+                                </div>
+                            </div>
+                            <button type="submit" class="btn-primary">Registrar Préstamo</button>
                         </form>
                     </div>
-                    <hr style="margin: 40px 0;">
-                    <h3>Préstamos Activos (Pendientes de Pago)</h3>
-                    <table>
-                        <thead><tr><th>Fecha Préstamo</th><th>Colaborador</th><th>Monto Original</th><th>Balance Pendiente</th><th>Motivo</th></tr></thead>
-                        <tbody>${loansHtml}</tbody>
-                    </table>
+
+                    <h3 style="margin-top: 50px; color: #dc3545;">🔴 Préstamos Activos (Con Deuda)</h3>
+                    <div class="table-container">
+                        <table>
+                            <thead><tr><th>Fecha</th><th>Colaborador</th><th>Monto Original</th><th>Balance Pendiente</th><th>Motivo</th></tr></thead>
+                            <tbody>${activosHtml}</tbody>
+                        </table>
+                    </div>
+
+                    <h3 style="margin-top: 40px; color: #28a745;">✅ Historial de Préstamos Saldados</h3>
+                    <div class="table-container" style="opacity: 0.8;">
+                        <table>
+                            <thead><tr><th>Fecha</th><th>Colaborador</th><th>Monto Original</th><th>Estado</th><th>Motivo</th></tr></thead>
+                            <tbody>${pagadosHtml}</tbody>
+                        </table>
+                    </div>
                 </div>
             </body></html>
         `);
     } catch (error) {
         console.error("Error al cargar la página de préstamos:", error);
         res.status(500).send('<h1>Error al cargar la página ❌</h1>');
+    } finally {
+        if (client) client.release();
     }
 });
+
 // --- RUTA PARA IMPRIMIR VALE DE PRÉSTAMO (CORREGIDA) ---
 app.get('/prestamo/:id/print', requireLogin, async (req, res) => {
     const loanId = req.params.id;
