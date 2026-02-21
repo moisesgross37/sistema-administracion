@@ -1102,7 +1102,7 @@ app.get('/cuentas-por-pagar/requisicion/:id/pdf', requireLogin, requireAdminOrCo
     }
 });
 // =============================================================
-// 🚀 PASO 2: VISUALIZACIÓN DE CUENTAS POR PAGAR (EL PORTERO)
+// 🚀 PASO 2: VISUALIZACIÓN DE CUENTAS POR PAGAR (CONSOLIDADO ACORDEÓN)
 // =============================================================
 app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res) => {
     let client;
@@ -1124,8 +1124,6 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
         const deudaComisiones = safeNum(commRes.rows[0].total);
 
         // 2. RESUMEN POR SUPLIDOR (EL PORTERO EN ACCIÓN)
-        // Filtramos: quote_id IS NULL (Solo gastos de oficina, no colegios)
-        // Filtramos: > 0 (Para que aparezca tu prueba de 1 peso)
         const summaryRes = await client.query(`
             SELECT s.id, s.name, SUM(e.amount - COALESCE(e.paid_amount, 0)) as total_deuda
             FROM expenses e
@@ -1136,8 +1134,7 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
             ORDER BY total_deuda DESC
         `);
 
-        // 3. DETALLE DE FACTURAS (TABLA DE ABAJO)
-        // Mismo filtro: Solo oficina, monto > 0
+        // 3. DETALLE DE FACTURAS
         const invoicesRes = await client.query(`
             SELECT e.*, s.name as supplier_name 
             FROM expenses e 
@@ -1147,11 +1144,10 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
             ORDER BY e.expense_date ASC
         `);
         
-        // Historial de pagos para mostrar los abonos pequeñitos
         const historyRes = await client.query("SELECT * FROM payment_history ORDER BY payment_date DESC");
         const suppliersRes = await client.query("SELECT id, name FROM suppliers ORDER BY name ASC");
 
-        // --- GENERACIÓN DE TARJETAS DE RESUMEN ---
+        // --- GENERACIÓN DE TARJETAS DE RESUMEN (ARRIBA) ---
         let summaryCards = `
             <div class="summary-box" style="border-top: 4px solid #e74a3b; min-width: 220px; text-align:center; padding: 15px; background: white; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
                 <small style="color:#e74a3b; font-weight:bold;">Comisiones Internas (Asesores)</small>
@@ -1166,6 +1162,101 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
                 <div style="font-weight:bold; font-size:1.2rem; margin:10px 0; color: #5a5c69;">RD$ ${safeNum(s.total_deuda).toLocaleString('en-US', {minimumFractionDigits: 2})}</div>
                 <a href="/reporte-suplidor-pdf/${s.id}" target="_blank" class="btn" style="padding:4px 8px; font-size:10px; background:#eef2ff; color:#4e73df;">🖨️ Estado de Cuenta PDF</a>
             </div>`).join('');
+
+        // --- GENERACIÓN DE TABLA CONSOLIDADA (ACORDEÓN) ---
+        let acordeonHtml = summaryRes.rows.map(suplidor => {
+            // Buscamos todas las facturas que le pertenecen SOLO a este suplidor
+            const susFacturas = invoicesRes.rows.filter(i => i.supplier_id === suplidor.id);
+            
+            // Construimos las filas internas (las facturas individuales)
+            const facturasHtml = susFacturas.map(i => {
+                const montoOriginal = safeNum(i.amount);
+                const yaPagado = safeNum(i.paid_amount);
+                const pendiente = montoOriginal - yaPagado;
+                const hoy = new Date();
+                const vencimiento = i.fecha_vencimiento ? new Date(i.fecha_vencimiento) : null;
+                const diffDias = vencimiento ? Math.ceil((vencimiento - hoy) / (1000 * 60 * 60 * 24)) : null;
+
+                let colorAlerta = '#6c757d'; 
+                let mensajeAlerta = '';
+                let bgFila = 'transparent';
+
+                if (vencimiento) {
+                    if (diffDias < 0) {
+                        colorAlerta = '#e74a3b'; 
+                        bgFila = '#fff5f5';
+                        mensajeAlerta = `⚠️ VENCIDA (${Math.abs(diffDias)} días)`;
+                    } else if (diffDias <= 3) {
+                        colorAlerta = '#f6c23e'; 
+                        bgFila = '#fffbe6';
+                        mensajeAlerta = `⏳ Vence pronto`;
+                    } else {
+                        colorAlerta = '#1cc88a'; 
+                        mensajeAlerta = `✅ A tiempo`;
+                    }
+                }
+
+                const misAbonos = historyRes.rows.filter(h => h.expense_id === i.id);
+                const abonosHtml = misAbonos.map(a => `
+                    <div style="font-size:10px; color:#2c7a7b; background:#f0fff4; padding:2px 5px; margin-top:2px;">
+                        ✅ Abono: $${safeNum(a.amount_paid).toLocaleString()} (${a.fund_source})
+                    </div>`).join('');
+
+                return `
+                <tr style="background-color: ${bgFila}; border-bottom: 1px solid #eee;">
+                    <td style="border-left: 4px solid ${colorAlerta}; padding: 10px; width: 20%;">
+                        <div style="font-weight:bold;">${new Date(i.expense_date).toLocaleDateString()}</div>
+                        <div style="font-size:10px; color:${colorAlerta}; font-weight:bold;">${mensajeAlerta}</div>
+                    </td>
+                    <td style="padding: 10px; width: 35%;">
+                        ${i.numero_factura ? `<strong style="color:#4e73df;">Fact: ${i.numero_factura}</strong><br>` : ''}
+                        <div style="font-size:13px; color:#555;">${i.description || '-'}</div>
+                    </td>
+                    <td style="text-align:right; padding: 10px; width: 20%;">
+                        <div style="font-size:11px; color:#888;">Total: $${montoOriginal.toLocaleString()}</div>
+                        <div style="font-weight:bold; color:#e74a3b; font-size:1.1rem;">$${pendiente.toLocaleString()}</div>
+                        <div style="margin-top:5px;">${abonosHtml}</div>
+                    </td>
+                    <td style="padding: 10px; width: 25%;">
+                        <form action="/cuentas-por-pagar/abonar" method="POST" style="display:flex; gap:5px; align-items:center;">
+                            <input type="hidden" name="expenseId" value="${i.id}">
+                            <input type="number" name="paymentAmount" step="0.01" max="${pendiente.toFixed(2)}" placeholder="$ Abono" required style="width:70px; padding:5px; font-size:12px;">
+                            <select name="fundSource" style="width:80px; padding:5px; font-size:12px;">
+                                <option value="Banco">Banco</option>
+                                <option value="Caja Chica">Efectivo</option>
+                            </select>
+                            <button type="submit" style="padding:5px 8px; background:#1cc88a; color:white; border:none; border-radius:4px; cursor:pointer;">Pagar</button>
+                        </form>
+                    </td>
+                </tr>`;
+            }).join('');
+
+            // RETORNAMOS EL ENCABEZADO CONSOLIDADO Y LAS FACTURAS OCULTAS DEBAJO
+            return `
+            <tr style="background-color: white; border-bottom: 2px solid #e3e6f0; cursor: pointer; transition: background 0.2s;" onmouseover="this.style.background='#f8f9fc'" onmouseout="this.style.background='white'" onclick="toggleFacturas('suplidor-${suplidor.id}')">
+                <td style="padding: 15px;">
+                    <strong style="font-size: 16px; color: #2c3e50;">🏢 ${suplidor.name}</strong>
+                    <div style="font-size: 12px; color: #858796; margin-top: 4px;">📌 ${susFacturas.length} factura(s) pendiente(s)</div>
+                </td>
+                <td style="padding: 15px; text-align: right;">
+                    <span style="font-size: 18px; font-weight: bold; color: #e74a3b;">
+                        RD$ ${safeNum(suplidor.total_deuda).toLocaleString('en-US', {minimumFractionDigits: 2})}
+                    </span>
+                </td>
+                <td style="padding: 15px; text-align: center;">
+                    <button type="button" class="btn" style="background: #eaecf4; color: #4e73df; font-weight: bold; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer;">
+                        Ver Facturas ⬇️
+                    </button>
+                </td>
+            </tr>
+            <tr id="suplidor-${suplidor.id}" style="display: none; background-color: #fafbfc;">
+                <td colspan="3" style="padding: 0; border-bottom: 3px solid #4e73df;">
+                    <table style="width: 100%; border-collapse: collapse;">
+                        ${facturasHtml}
+                    </table>
+                </td>
+            </tr>`;
+        }).join('') || '<tr><td colspan="3" style="text-align:center; padding:40px; color:#888;">🙌 No hay deudas pendientes registradas.</td></tr>';
 
         res.send(`
     <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
@@ -1205,84 +1296,34 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
                 </div>
 
                 <div class="card" style="padding: 20px;">
-                    <h3 style="margin:0; margin-bottom:20px;">Detalle de Facturas Pendientes</h3>
+                    <h3 style="margin:0; margin-bottom:20px;">Estado de Cuentas Consolidadas</h3>
                     <table class="modern-table" style="width: 100%; border-collapse: collapse;">
                         <thead>
                             <tr style="background: #f8f9fc; text-align: left;">
-                                <th style="padding:10px;">Fecha / Vence</th>
-                                <th style="padding:10px;">Suplidor / Concepto</th>
-                                <th style="text-align:right; padding:10px;">Balance</th>
-                                <th style="padding:10px;">Abonar</th>
+                                <th style="padding:15px; border-bottom: 2px solid #e3e6f0;">Suplidor / Empresa</th>
+                                <th style="padding:15px; text-align:right; border-bottom: 2px solid #e3e6f0;">Deuda Total Acumulada</th>
+                                <th style="padding:15px; text-align:center; border-bottom: 2px solid #e3e6f0;">Acciones</th>
                             </tr>
                         </thead>
                         <tbody>
-                            ${invoicesRes.rows.map(i => {
-                                const montoOriginal = safeNum(i.amount);
-                                const yaPagado = safeNum(i.paid_amount);
-                                const pendiente = montoOriginal - yaPagado;
-                                const hoy = new Date();
-                                const vencimiento = i.fecha_vencimiento ? new Date(i.fecha_vencimiento) : null;
-                                const diffDias = vencimiento ? Math.ceil((vencimiento - hoy) / (1000 * 60 * 60 * 24)) : null;
-
-                                let colorAlerta = '#6c757d'; 
-                                let mensajeAlerta = '';
-                                let bgFila = 'transparent';
-
-                                if (vencimiento) {
-                                    if (diffDias < 0) {
-                                        colorAlerta = '#e74a3b'; 
-                                        bgFila = '#fff5f5';
-                                        mensajeAlerta = `⚠️ VENCIDA (${Math.abs(diffDias)} días)`;
-                                    } else if (diffDias <= 3) {
-                                        colorAlerta = '#f6c23e'; 
-                                        bgFila = '#fffbe6';
-                                        mensajeAlerta = `⏳ Vence pronto`;
-                                    } else {
-                                        colorAlerta = '#1cc88a'; 
-                                        mensajeAlerta = `✅ A tiempo`;
-                                    }
-                                }
-
-                                const misAbonos = historyRes.rows.filter(h => h.expense_id === i.id);
-                                const abonosHtml = misAbonos.map(a => `
-                                    <div style="font-size:10px; color:#2c7a7b; background:#f0fff4; padding:2px 5px; margin-top:2px;">
-                                        ✅ Abono: $${safeNum(a.amount_paid).toLocaleString()} (${a.fund_source})
-                                    </div>`).join('');
-
-                                return `
-                                <tr style="background-color: ${bgFila}; border-bottom: 1px solid #eee;">
-                                    <td style="border-left: 5px solid ${colorAlerta}; padding: 10px;">
-                                        <div style="font-weight:bold;">${new Date(i.expense_date).toLocaleDateString()}</div>
-                                        <div style="font-size:10px; color:${colorAlerta}; font-weight:bold;">${mensajeAlerta}</div>
-                                    </td>
-                                    <td style="padding: 10px;">
-                                        <b>${i.supplier_name}</b>
-                                        ${i.numero_factura ? `<br><small style="color:#4e73df;">Fact: ${i.numero_factura}</small>` : ''}
-                                        <div style="font-size:12px; color:#555; margin-top:4px;">${i.description || '-'}</div>
-                                    </td>
-                                    <td style="text-align:right; padding: 10px;">
-                                        <div style="font-size:11px; color:#888;">Total: $${montoOriginal.toLocaleString()}</div>
-                                        <div style="font-weight:bold; color:#e74a3b; font-size:1.1rem;">$${pendiente.toLocaleString()}</div>
-                                        <div style="margin-top:5px;">${abonosHtml}</div>
-                                    </td>
-                                    <td style="padding: 10px;">
-                                        <form action="/cuentas-por-pagar/abonar" method="POST" style="display:flex; gap:5px; align-items:center;">
-                                            <input type="hidden" name="expenseId" value="${i.id}">
-                                            <input type="number" name="paymentAmount" step="0.01" max="${pendiente.toFixed(2)}" placeholder="$ Abono" required style="width:80px; padding:5px; font-size:12px;">
-                                            <select name="fundSource" style="width:80px; padding:5px; font-size:12px;">
-                                                <option value="Banco">Banco</option>
-                                                <option value="Caja Chica">Efectivo</option>
-                                            </select>
-                                            <button type="submit" style="padding:5px 8px; background:#1cc88a; color:white; border:none; border-radius:4px; cursor:pointer;">Pagar</button>
-                                        </form>
-                                    </td>
-                                </tr>`;
-                            }).join('') || '<tr><td colspan="4" style="text-align:center; padding:30px; color:#888;">🙌 No hay cuentas por pagar pendientes.</td></tr>'}
+                            ${acordeonHtml}
                         </tbody>
                     </table>
                 </div>
             </div>
         </div>
+
+        <script>
+            // FUNCIÓN MÁGICA PARA DESPLEGAR LAS FACTURAS
+            function toggleFacturas(idFilas) {
+                const elemento = document.getElementById(idFilas);
+                if (elemento.style.display === "none") {
+                    elemento.style.display = "table-row";
+                } else {
+                    elemento.style.display = "none";
+                }
+            }
+        </script>
     </body></html>`
         );
     } catch (e) {
@@ -1292,10 +1333,6 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
         if (client) client.release();
     }
 });
-// =============================================================
-// 🚀 PASO 1: RUTAS PARA CUENTAS POR PAGAR (CORREGIDAS SEGÚN TU BD)
-// =============================================================
-
 // 1. RUTA PARA CREAR LA DEUDA (SIN ERROR DE COLUMNA)
 app.post('/nuevo-gasto-general', requireLogin, requireAdminOrCoord, async (req, res) => {
     // Recibimos los datos del formulario
