@@ -3746,23 +3746,21 @@ app.post('/guardar-nomina', requireLogin, requireAdminOrCoord, async (req, res) 
     } finally {
         client.release();
     }
-});
-// =============================================================
-// 📅 HISTORIAL DE NÓMINAS (CORREGIDO PARA EVITAR CEROS)
+});// =============================================================
+// 📅 HISTORIAL DE NÓMINAS (BLINDADO CONTRA TEXTOS Y CEROS)
 // =============================================================
 app.get('/historial-nomina', requireLogin, requireAdminOrCoord, async (req, res) => {
     let client;
     try {
         client = await pool.connect();
 
-        // Consulta corregida: Aseguramos que los nombres de columnas tengan comillas si es necesario
-        // y que el alias 'as' esté bien puesto.
+        // CERO-PROOF SQL: NULLIF convierte textos vacíos en NULL para que COALESCE pueda actuar
         const query = `
             SELECT 
                 payroll_id,
                 MAX(pay_date) as fecha_pago,
                 COUNT(employee_id) as total_empleados,
-                SUM(CAST(COALESCE(net_pay, 0) AS NUMERIC)) as total_pagado,
+                SUM(CAST(COALESCE(NULLIF(net_pay::text, ''), '0') AS NUMERIC)) as total_pagado,
                 MAX(createdat) as fecha_creacion
             FROM payroll_records
             WHERE payroll_id IS NOT NULL
