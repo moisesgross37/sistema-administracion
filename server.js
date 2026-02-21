@@ -3579,7 +3579,7 @@ app.get('/generar-nomina', requireLogin, requireAdminOrCoord, async (req, res) =
                 <div class="container">
                     ${backToDashboardLink}
                     <h2>Generar Nómina Quincenal</h2>
-                    <form id="payroll-form" action="/guardar-nomina" method="POST">
+                   <form id="payroll-form">
                         <div class="form-group">
                             <label for="pay_date">Fecha de Pago:</label>
                             <input type="date" id="pay_date" name="pay_date" required>
@@ -3604,19 +3604,76 @@ app.get('/generar-nomina', requireLogin, requireAdminOrCoord, async (req, res) =
                 </div>
 
                 <script>
-                    document.querySelectorAll('.payroll-input').forEach(input => {
-                        input.addEventListener('input', (event) => {
-                            const row = event.target.closest('tr');
-                            const baseSalary = parseFloat(row.querySelector('[data-base-salary]').dataset.baseSalary);
-                            const bonuses = parseFloat(row.querySelector('input[name^="bonuses"]').value) || 0;
-                            const deductions = parseFloat(row.querySelector('input[name^="deductions"]').value) || 0;
-                            
-                            const netPay = baseSalary + bonuses - deductions;
-                            
-                            row.querySelector('.net-pay').textContent = '$' + netPay.toFixed(2);
-                        });
-                    });
-                </script>
+    // 1. Lógica visual: Actualizar el neto cuando se escribe
+    document.querySelectorAll('.payroll-input').forEach(input => {
+        input.addEventListener('input', (event) => {
+            const row = event.target.closest('tr');
+            const baseSalary = parseFloat(row.querySelector('[data-base-salary]').dataset.baseSalary);
+            const bonuses = parseFloat(row.querySelector('input[name^="bonuses"]').value) || 0;
+            const deductions = parseFloat(row.querySelector('input[name^="deductions"]').value) || 0;
+            
+            const netPay = baseSalary + bonuses - deductions;
+            row.querySelector('.net-pay').textContent = '$' + netPay.toFixed(2);
+        });
+    });
+
+    // 2. Lógica de Envío: Armar el JSON y enviar a la Súper Nómina
+    document.getElementById('payroll-form').addEventListener('submit', async (e) => {
+        e.preventDefault(); // Evita que la página recargue o haga doble envío
+
+        const submitBtn = e.target.querySelector('button[type="submit"]');
+        submitBtn.disabled = true; // Bloquea el botón para evitar doble clic
+        submitBtn.textContent = 'Procesando... ⏳';
+
+        const payDate = document.getElementById('pay_date').value;
+        const nominaArray = [];
+
+        // Recorremos cada fila de empleado para armar el paquete
+        document.querySelectorAll('tbody tr[data-employee-id]').forEach(row => {
+            const employeeId = row.dataset.employeeId;
+            const baseSalary = parseFloat(row.querySelector('[data-base-salary]').dataset.baseSalary) || 0;
+            const bonuses = parseFloat(row.querySelector(`input[name="bonuses_${employeeId}"]`).value) || 0;
+            const deductions = parseFloat(row.querySelector(`input[name="deductions_${employeeId}"]`).value) || 0;
+            const netPay = baseSalary + bonuses - deductions;
+
+            nominaArray.push({
+                employee_id: employeeId,
+                base_salary: baseSalary,
+                bonuses: bonuses,
+                deductions: deductions,
+                loan_deduction: deductions, // Pasamos las deducciones iniciales como préstamo
+                net_pay: netPay, // ¡Ahora sí enviamos el número real!
+                extras: []
+            });
+        });
+
+        // Enviamos el paquete al servidor correcto
+        try {
+            const response = await fetch('/procesar-super-nomina', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pay_date: payDate, nomina: nominaArray })
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                alert('✅ Nómina procesada con éxito!');
+                window.location.href = '/historial-nomina'; // Redirige al historial
+            } else {
+                alert('❌ Error: ' + result.message);
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Guardar y Procesar Nómina';
+            }
+        } catch (error) {
+            alert('❌ Error de conexión al procesar.');
+            console.error(error);
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Guardar y Procesar Nómina';
+        }
+    });
+</script>
+
             </body></html>
         `);
     } catch (error) {
