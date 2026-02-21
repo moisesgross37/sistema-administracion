@@ -4559,6 +4559,10 @@ const rentabilidad = totalAbonado - totalGastado;
                            style="background-color: #5a5c69; color: white; padding: 8px 16px; font-size: 13px; font-weight: bold; text-decoration: none; border-radius: 6px; display: inline-flex; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); transition: background 0.2s;">
                            📄 Ver Cotización Original (PDF)
                         </a>
+                        <a href="/proyecto-informe/${quote.id}" target="_blank" class="btn" 
+                           style="background-color: #17a2b8; color: white; padding: 8px 16px; font-size: 13px; font-weight: bold; text-decoration: none; border-radius: 6px; display: inline-flex; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); transition: background 0.2s; margin-left: 10px;">
+                           📊 Imprimir Informe del Proyecto
+                        </a>
                     </div>
 
                     <div class="summary">
@@ -4643,6 +4647,152 @@ const rentabilidad = totalAbonado - totalGastado;
         if (!res.headersSent) res.status(500).send('Error al cargar el proyecto ❌');
     } finally {
         if (client) client.release();
+    }
+});
+
+// =============================================================
+// 📊 GENERAR INFORME IMPRIMIBLE DEL PROYECTO
+// =============================================================
+app.get('/proyecto-informe/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const quoteId = req.params.id;
+    let client;
+    try {
+        client = await pool.connect();
+        
+        // 1. Buscamos los datos exactos del proyecto
+        const quoteResult = await client.query(`SELECT * FROM quotes WHERE id = $1`, [quoteId]);
+        if (quoteResult.rows.length === 0) return res.status(404).send('Proyecto no encontrado');
+        const quote = quoteResult.rows[0];
+
+        // 2. Buscamos ingresos, egresos y ajustes
+        const [paymentsResult, expensesResult, adjustmentsResult] = await Promise.all([
+            client.query(`SELECT * FROM payments WHERE quote_id = $1 ORDER BY payment_date ASC`, [quoteId]),
+            client.query(`SELECT e.*, s.name as supplier_name FROM expenses e JOIN suppliers s ON e.supplier_id = s.id WHERE e.quote_id = $1 ORDER BY e.expense_date ASC`, [quoteId]),
+            client.query(`SELECT * FROM ajustes_cotizacion WHERE quote_id = $1`, [quoteId])
+        ]);
+
+        const payments = paymentsResult.rows;
+        const expenses = expensesResult.rows;
+
+        // 3. Calculamos los totales (Igual que en tu pantalla principal)
+        const montoOriginal = parseFloat(quote.preciofinalporestudiante || 0) * parseFloat(quote.estudiantesparafacturar || 0);
+        const totalAjustes = adjustmentsResult.rows.reduce((sum, adj) => sum + (parseFloat(adj.monto_ajuste) || 0), 0);
+        const totalVenta = montoOriginal + totalAjustes;
+        const totalAbonado = payments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
+        const totalGastado = expenses.reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
+        const rentabilidad = totalAbonado - totalGastado;
+
+        // 4. Armamos las tablas de HTML para imprimir
+        const rowsAbonos = payments.map(p => `
+            <tr>
+                <td style="text-align:center;">${new Date(p.payment_date).toLocaleDateString('es-DO')}</td>
+                <td>${p.comment || 'Abono general'}</td>
+                <td style="text-align:right; color:#27ae60; font-weight:bold;">$${parseFloat(p.amount).toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+            </tr>
+        `).join('') || '<tr><td colspan="3" style="text-align:center;">No hay abonos registrados</td></tr>';
+
+        const rowsGastos = expenses.map(e => `
+            <tr>
+                <td style="text-align:center;">${new Date(e.expense_date).toLocaleDateString('es-DO')}</td>
+                <td><b>${e.supplier_name}</b> - ${e.description}</td>
+                <td style="text-align:center;">${e.type || 'N/A'}</td>
+                <td style="text-align:right; color:#c0392b; font-weight:bold;">$${parseFloat(e.amount).toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+            </tr>
+        `).join('') || '<tr><td colspan="4" style="text-align:center;">No hay gastos registrados</td></tr>';
+
+        // 5. Renderizamos el diseño del PDF/Impresión
+        res.send(`
+            <!DOCTYPE html><html lang="es"><head>
+                <meta charset="UTF-8">
+                <title>Informe - ${quote.clientname}</title>
+                <style>
+                    body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #333; padding: 30px; margin: 0; background: #fff; }
+                    .header { text-align: center; border-bottom: 2px solid #2c3e50; padding-bottom: 20px; margin-bottom: 30px; }
+                    .header h1 { margin: 0; color: #2c3e50; font-size: 24px; text-transform: uppercase; }
+                    .header p { margin: 5px 0 0; color: #7f8c8d; font-size: 14px; }
+                    .summary-grid { display: flex; justify-content: space-between; margin-bottom: 40px; }
+                    .summary-card { width: 23%; padding: 15px; border: 1px solid #ddd; border-radius: 8px; text-align: center; background: #fdfdfd; }
+                    .summary-card h3 { margin: 0 0 10px 0; font-size: 11px; color: #7f8c8d; text-transform: uppercase; letter-spacing: 1px; }
+                    .summary-card p { margin: 0; font-size: 20px; font-weight: bold; }
+                    
+                    /* Colores para las tarjetas */
+                    .val-venta { color: #2980b9; }
+                    .val-abonado { color: #27ae60; }
+                    .val-gastado { color: #e67e22; }
+                    .val-renta { color: #8e44ad; }
+
+                    .section-title { font-size: 16px; color: #2c3e50; border-bottom: 1px solid #ccc; padding-bottom: 5px; margin-top: 30px; margin-bottom: 15px; }
+                    table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 12px; }
+                    th, td { border: 1px solid #ddd; padding: 10px; }
+                    th { background-color: #f4f6f7; color: #2c3e50; text-transform: uppercase; font-size: 11px; }
+                    
+                    @media print {
+                        .no-print { display: none !important; }
+                        body { padding: 0; }
+                    }
+                </style>
+            </head><body>
+                <div class="no-print" style="text-align: right; margin-bottom: 20px;">
+                    <button onclick="window.print()" style="padding: 10px 20px; background: #4e73df; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold;">🖨️ Imprimir o Guardar PDF</button>
+                    <button onclick="window.close()" style="padding: 10px 20px; background: #e74a3b; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; margin-left: 10px;">❌ Cerrar</button>
+                </div>
+
+                <div class="header">
+                    <h1>Be Eventos</h1>
+                    <h2 style="margin: 10px 0 5px 0; color: #34495e;">INFORME DE RENTABILIDAD DE PROYECTO</h2>
+                    <p><strong>Centro:</strong> ${quote.clientname}</p>
+                    <p><strong>ID Cotización:</strong> #${quote.quotenumber} | <strong>Asesor:</strong> ${quote.advisorname}</p>
+                    <p><strong>Fecha de Emisión:</strong> ${new Date().toLocaleDateString('es-DO')} a las ${new Date().toLocaleTimeString('es-DO')}</p>
+                </div>
+
+                <div class="summary-grid">
+                    <div class="summary-card">
+                        <h3>Monto Total Venta</h3>
+                        <p class="val-venta">$${totalVenta.toLocaleString('en-US', {minimumFractionDigits: 2})}</p>
+                    </div>
+                    <div class="summary-card">
+                        <h3>Total Recaudado</h3>
+                        <p class="val-abonado">$${totalAbonado.toLocaleString('en-US', {minimumFractionDigits: 2})}</p>
+                    </div>
+                    <div class="summary-card">
+                        <h3>Total Gastado</h3>
+                        <p class="val-gastado">$${totalGastado.toLocaleString('en-US', {minimumFractionDigits: 2})}</p>
+                    </div>
+                    <div class="summary-card">
+                        <h3>Rentabilidad Final</h3>
+                        <p class="val-renta">$${rentabilidad.toLocaleString('en-US', {minimumFractionDigits: 2})}</p>
+                    </div>
+                </div>
+
+                <div class="section-title">DETALLE DE INGRESOS (ABONOS)</div>
+                <table>
+                    <thead><tr><th style="width:15%;">Fecha</th><th>Descripción del Abono</th><th style="width:25%;">Monto Recibido</th></tr></thead>
+                    <tbody>${rowsAbonos}</tbody>
+                </table>
+
+                <div class="section-title">DETALLE DE EGRESOS (GASTOS)</div>
+                <table>
+                    <thead><tr><th style="width:15%;">Fecha</th><th>Suplidor / Concepto</th><th style="width:20%;">Comprobante</th><th style="width:25%;">Monto Pagado</th></tr></thead>
+                    <tbody>${rowsGastos}</tbody>
+                </table>
+
+                <div style="margin-top: 50px; text-align: center; color: #7f8c8d; font-size: 11px;">
+                    <p>_________________________________________</p>
+                    <p>Firma / Sello de Revisión Administrativa</p>
+                    <p>Este documento es un informe interno generado por Be Gestion.</p>
+                </div>
+
+                <script>
+                    // Dispara la ventana de impresión automáticamente al abrir
+                    window.onload = function() { window.print(); }
+                </script>
+            </body></html>
+        `);
+    } catch (e) {
+        console.error(e);
+        res.status(500).send("Error al generar el informe");
+    } finally {
+        if(client) client.release();
     }
 });
 
