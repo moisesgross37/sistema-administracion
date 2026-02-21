@@ -5018,16 +5018,25 @@ app.post('/procesar-super-nomina', requireLogin, requireAdminOrCoord, async (req
         let totalLote = 0;
 
         for (const entry of nomina) {
-            const netPay = parseFloat(entry.net_pay || 0);
-            totalLote += netPay;
+            // FUNCIÓN SALVAVIDAS: Limpia cualquier texto (RD$, comas, espacios) y lo vuelve un número real
+            const limpiarNumero = (valor) => {
+                if (!valor) return 0;
+                return parseFloat(String(valor).replace(/[^0-9.-]+/g, "")) || 0;
+            };
 
-            // Preparamos los valores numéricos
-            const sueldoBase = parseFloat(entry.base_salary || entry.sueldo || 0);
-            const bonos = parseFloat(entry.bonuses || 0);
-            const deduccionTotal = parseFloat(entry.deductions || 0);
-            const prestamoDeduccion = parseFloat(entry.loan_deduction || 0); // EL DATO NUEVO
+            const sueldoBase = limpiarNumero(entry.base_salary || entry.sueldo);
+            const bonos = limpiarNumero(entry.bonuses);
+            const prestamoDeduccion = limpiarNumero(entry.loan_deduction);
+            
+            // Sumamos las deducciones normales y el préstamo por si el frontend no los unió
+            const deduccionTotal = limpiarNumero(entry.deductions) + prestamoDeduccion; 
 
-            // 1. GUARDAR EN PAYROLL_RECORDS (Ahora llenamos 'loan_deduction')
+            // ¡EL TRUCO MAGISTRAL! Calculamos el Neto en el servidor para no confiar en la pantalla
+            const netPayCalculado = sueldoBase + bonos - deduccionTotal;
+            
+            totalLote += netPayCalculado;
+
+            // 1. GUARDAR EN PAYROLL_RECORDS (Usando nuestros números limpios y el neto calculado)
             const recordRes = await client.query(
                 `INSERT INTO payroll_records 
                 (employee_id, pay_date, base_salary_paid, bonuses, deductions, loan_deduction, net_pay, payroll_id) 
@@ -5037,9 +5046,9 @@ app.post('/procesar-super-nomina', requireLogin, requireAdminOrCoord, async (req
                     pay_date || new Date(), 
                     sueldoBase, 
                     bonos, 
-                    deduccionTotal,   // El total de descuentos
-                    prestamoDeduccion, // La parte que es préstamo (Nueva Columna)
-                    netPay, 
+                    deduccionTotal,   // Ahora sí incluye el préstamo de Yubelis
+                    prestamoDeduccion, 
+                    netPayCalculado,  // Usamos nuestro cálculo blindado
                     batchPayrollId
                 ]
             );
