@@ -420,7 +420,6 @@ app.get('/clientes', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
         // Buscamos directamente las cotizaciones que YA activaste ('activa')
-        // Sin el INNER JOIN para que Tomas y Lilian aparezcan de inmediato
         const result = await client.query(`
             SELECT id, clientname, advisorname, quotenumber 
             FROM quotes 
@@ -430,8 +429,9 @@ app.get('/clientes', requireLogin, requireAdminOrCoord, async (req, res) => {
         const projects = result.rows;
         client.release();
 
+        // Le agregamos la clase "project-row" a cada fila para que el buscador sepa qué ocultar
         let projectsHtml = projects.map(proj => `
-            <tr>
+            <tr class="project-row">
                 <td style="font-weight: bold; color: var(--primary);"># ${proj.quotenumber}</td>
                 <td>
                     <a href="/proyecto-detalle/${proj.id}" style="text-decoration: none; font-weight: 600; color: var(--primary);">
@@ -445,9 +445,97 @@ app.get('/clientes', requireLogin, requireAdminOrCoord, async (req, res) => {
                     </a>
                 </td>
             </tr>
-        `).join('') || '<tr><td colspan="4" style="text-align: center; padding: 40px;">No hay proyectos activos.</td></tr>';
+        `).join('') || '<tr id="no-results"><td colspan="4" style="text-align: center; padding: 40px; color: #6c757d;">No hay proyectos activos.</td></tr>';
 
-        res.send(`<!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body><div class="container">${backToDashboardLink}<h2>Proyectos y Centros Activos</h2><table><thead><tr><th>ID Cotización</th><th>Nombre del Cliente / Proyecto</th><th>Asesor</th><th>Acciones</th></tr></thead><tbody>${projectsHtml}</tbody></table></div></body></html>`);
+        // Renderizamos la vista completa con el buscador y su estilo
+        res.send(`
+            <!DOCTYPE html>
+            <html lang="es">
+            <head>
+                ${commonHtmlHead}
+                <style>
+                    /* Estilos para que el buscador se vea moderno */
+                    .search-wrapper {
+                        margin-bottom: 25px;
+                        position: relative;
+                        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+                        border-radius: 8px;
+                    }
+                    .search-icon {
+                        position: absolute;
+                        left: 15px;
+                        top: 50%;
+                        transform: translateY(-50%);
+                        font-size: 18px;
+                        color: #aeb5be;
+                    }
+                    .search-input {
+                        width: 100%;
+                        padding: 15px 15px 15px 45px;
+                        font-size: 16px;
+                        border: 1px solid #ced4da;
+                        border-radius: 8px;
+                        box-sizing: border-box;
+                        transition: all 0.3s;
+                    }
+                    .search-input:focus {
+                        border-color: #4e73df;
+                        outline: none;
+                        box-shadow: 0 0 0 3px rgba(78, 115, 223, 0.25);
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="container" style="max-width: 1100px; padding-bottom: 40px;">
+                    <div style="margin-bottom: 20px;">${backToDashboardLink}</div>
+                    <h2>Proyectos y Centros Activos</h2>
+                    
+                    <div class="search-wrapper">
+                        <span class="search-icon">🔍</span>
+                        <input type="text" id="buscadorCentros" class="search-input" onkeyup="filtrarTabla()" placeholder="Buscar por nombre de centro, asesor o ID de cotización...">
+                    </div>
+
+                    <table id="tablaCentros" style="width: 100%; border-collapse: collapse; background: white; box-shadow: 0 2px 5px rgba(0,0,0,0.05); border-radius: 8px; overflow: hidden;">
+                        <thead style="background: #f8f9fa;">
+                            <tr>
+                                <th style="padding: 15px; text-align: left; border-bottom: 2px solid #dee2e6;">ID Cotización</th>
+                                <th style="padding: 15px; text-align: left; border-bottom: 2px solid #dee2e6;">Nombre del Cliente / Proyecto</th>
+                                <th style="padding: 15px; text-align: left; border-bottom: 2px solid #dee2e6;">Asesor</th>
+                                <th style="padding: 15px; text-align: center; border-bottom: 2px solid #dee2e6;">Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${projectsHtml}
+                        </tbody>
+                    </table>
+                </div>
+
+                <script>
+                    function filtrarTabla() {
+                        // Capturamos lo que el usuario está escribiendo y lo pasamos a minúsculas
+                        const input = document.getElementById("buscadorCentros");
+                        const filtro = input.value.toLowerCase();
+                        
+                        // Seleccionamos todas las filas de proyectos
+                        const filas = document.getElementsByClassName("project-row");
+
+                        // Recorremos cada fila una por una
+                        for (let i = 0; i < filas.length; i++) {
+                            // Capturamos TODO el texto de esa fila (ID, Nombre y Asesor)
+                            const textoFila = filas[i].textContent || filas[i].innerText;
+                            
+                            // Si el texto de la fila incluye lo que escribimos, la mostramos. Si no, la ocultamos.
+                            if (textoFila.toLowerCase().indexOf(filtro) > -1) {
+                                filas[i].style.display = "";
+                            } else {
+                                filas[i].style.display = "none";
+                            }
+                        }
+                    }
+                </script>
+            </body>
+            </html>
+        `);
     } catch (error) {
         console.error("Error en /clientes:", error);
         res.status(500).send('<h1>Error al obtener la lista ❌</h1>');
