@@ -4551,9 +4551,14 @@ const rentabilidad = totalAbonado - totalGastado;
             <body>
                 <div class="container">
                     ${backToDashboardLink}
-                    <div style="margin-bottom: 30px;">
-                        <h1 style="margin:0;">${quote.clientname}</h1>
-                        <p style="color: var(--gray);">Cotización #${quote.quotenumber} &bull; Asesor: ${quote.advisorname}</p>
+                    <div style="margin-bottom: 30px; position: relative;">
+                        <h1 style="margin:0; color: #2c3e50;">${quote.clientname}</h1>
+                        <p style="color: #6c757d; margin-bottom: 15px; font-size: 15px;">Cotización #${quote.quotenumber} &bull; Asesor: ${quote.advisorname}</p>
+                        
+                        <a href="/ver-cotizacion-pdf/${quote.id}" target="_blank" class="btn" 
+                           style="background-color: #5a5c69; color: white; padding: 8px 16px; font-size: 13px; font-weight: bold; text-decoration: none; border-radius: 6px; display: inline-flex; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); transition: background 0.2s;">
+                           📄 Ver Cotización Original (PDF)
+                        </a>
                     </div>
 
                     <div class="summary">
