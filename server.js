@@ -4831,7 +4831,7 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
                         </button>
                     </div>
                 </div>
-                <script>
+<script>
                     const projectOptionsHtml = '${projectOptions}';
                     function addExtraRow(empId) {
                         const container = document.getElementById('extras-container-' + empId);
@@ -4875,18 +4875,20 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
                                 }
                             });
 
+                            // NUESTRO PARCHE DE ETIQUETAS CORRECTAS
                             if(sueldo > 0 || totalExtras > 0 || deduccion > 0) {
                                 payload.push({ 
                                     employee_id: empId, 
-                                    base_salary: sueldo,         // CORREGIDO: Antes decía "salary", por eso el backend no lo veía
-                                    bonuses: totalExtras,        // NUEVO: Mandamos el total de actividades para que lo sume al Neto
+                                    base_salary: sueldo,         
+                                    bonuses: totalExtras,        
                                     loan_id: loanId, 
                                     loan_deduction: deduccion,
-                                    deductions: 0,               // Aseguramos que no viaje vacío
+                                    deductions: 0,               
                                     extras: extras 
                                 });
                                 resumen += "- " + nombre + ": RD$ " + (sueldo + totalExtras - deduccion).toFixed(2) + "\\n";
                             }
+                        }); // <-- ESTA ES LA LLAVE QUE SE HABÍA PERDIDO
 
                         if(payload.length === 0) return alert("No hay datos para procesar.");
 
@@ -4906,7 +4908,7 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
                         }
                     }
                 </script>
-            </body></html>`);
+                </body></html>`);
     } catch (e) { res.status(500).send(e.message); } finally { if (client) client.release(); }
 });
 app.get('/ver-recibo/:payroll_id/:employee_id', requireLogin, requireAdminOrCoord, async (req, res) => {
