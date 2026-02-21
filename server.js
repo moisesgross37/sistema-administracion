@@ -3825,19 +3825,20 @@ app.get('/nomina/requisicion', requireLogin, requireAdminOrCoord, async (req, re
     try {
         client = await pool.connect();
 
+        // CERO-PROOF SQL APLICADO: Forzamos a que todo sea número (NUMERIC)
         const query = `
-    SELECT 
-        e.nombre as colaborador,
-        pr.base_salary_paid as sueldo_bruto,
-        pr.bonuses as incentivos,
-        COALESCE(pr.loan_deduction, 0) as prestamos, 
-        COALESCE(pr.deductions, 0) as total_deducciones,
-        pr.net_pay as neto_a_pagar
-    FROM payroll_records pr
-    JOIN employees e ON pr.employee_id = e.id
-    WHERE CAST(pr.payroll_id AS TEXT) = $1
-    ORDER BY e.nombre ASC
-`;
+        SELECT 
+            e.nombre as colaborador,
+            CAST(COALESCE(NULLIF(pr.base_salary_paid::text, ''), '0') AS NUMERIC) as sueldo_bruto,
+            CAST(COALESCE(NULLIF(pr.bonuses::text, ''), '0') AS NUMERIC) as incentivos,
+            CAST(COALESCE(NULLIF(pr.loan_deduction::text, ''), '0') AS NUMERIC) as prestamos, 
+            CAST(COALESCE(NULLIF(pr.deductions::text, ''), '0') AS NUMERIC) as otros_descuentos,
+            CAST(COALESCE(NULLIF(pr.net_pay::text, ''), '0') AS NUMERIC) as neto_a_pagar
+        FROM payroll_records pr
+        JOIN employees e ON pr.employee_id = e.id
+        WHERE CAST(pr.payroll_id AS TEXT) = $1
+        ORDER BY e.nombre ASC
+        `;
         
         const result = await client.query(query, [id]);
         const nomina = result.rows;
@@ -3846,6 +3847,7 @@ app.get('/nomina/requisicion', requireLogin, requireAdminOrCoord, async (req, re
 
         let t_neto = 0;
         const filasHtml = nomina.map(row => {
+            // Ahora sí sumará correctamente los valores numéricos
             t_neto += parseFloat(row.neto_a_pagar || 0);
             return `
             <tr>
@@ -3867,9 +3869,13 @@ app.get('/nomina/requisicion', requireLogin, requireAdminOrCoord, async (req, re
                 <thead><tr><th>Colaborador</th><th>Sueldo</th><th>Bonos</th><th>Préstamos</th><th>Otros</th><th>Neto</th></tr></thead>
                 <tbody>${filasHtml}<tr><td colspan="5">TOTAL A PAGAR</td><td>RD$ ${t_neto.toFixed(2)}</td></tr></tbody>
             </table>
-            <button onclick="window.print()">🖨️ Imprimir</button>
+            <button onclick="window.print()" style="margin-top: 20px; padding: 10px 20px; font-size: 16px;">🖨️ Imprimir</button>
         </body></html>`);
-    } catch (e) { res.status(500).send("Error: " + e.message); } finally { if (client) client.release(); }
+    } catch (e) { 
+        res.status(500).send("Error: " + e.message); 
+    } finally { 
+        if (client) client.release(); 
+    }
 });
 
 app.get('/ver-detalle-nomina/:payroll_id', requireLogin, requireAdminOrCoord, async (req, res) => {
