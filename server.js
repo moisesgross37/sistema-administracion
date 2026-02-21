@@ -5711,7 +5711,9 @@ app.get('/imprimir-abono-suplidor/:id', requireLogin, requireAdminOrCoord, async
                 </style>
             </head><body>
                 <div class="no-print" style="text-align: right; margin-bottom: 20px;">
-                    <button onclick="window.print()" style="padding: 10px 20px; background: #4e73df; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold;">🖨️ Imprimir Comprobante</button>
+                    <a href="/cuentas-por-pagar" style="padding: 10px 20px; background: #858796; color: white; border-radius: 5px; text-decoration: none; font-weight: bold; margin-right: 10px;">🔙 Volver a Cuentas por Pagar</a>
+                    
+                    <button onclick="window.print()" style="padding: 10px 20px; background: #4e73df; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold;">🖨️ Imprimir o Guardar PDF</button>
                 </div>
 
                 <div class="header">
@@ -5740,9 +5742,6 @@ app.get('/imprimir-abono-suplidor/:id', requireLogin, requireAdminOrCoord, async
                     <p>Este documento es un comprobante de control interno generado por el sistema Be Gestion.</p>
                 </div>
 
-                <script>
-                    window.onload = function() { window.print(); }
-                </script>
             </body></html>
         `);
     } catch (e) {
