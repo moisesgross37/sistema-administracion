@@ -1198,10 +1198,12 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
 
                 const misAbonos = historyRes.rows.filter(h => h.expense_id === i.id);
                 const abonosHtml = misAbonos.map(a => `
-                    <div style="font-size:10px; color:#2c7a7b; background:#f0fff4; padding:2px 5px; margin-top:2px;">
-                        ✅ Abono: $${safeNum(a.amount_paid).toLocaleString()} (${a.fund_source})
+                    <div style="font-size:11px; color:#2c7a7b; background:#f0fff4; padding:4px 8px; margin-top:4px; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; border: 1px solid #c6f6d5;">
+                        <span>✅ <b>$${safeNum(a.amount_paid).toLocaleString('en-US', {minimumFractionDigits: 2})}</b> (${a.fund_source})</span>
+                        <a href="/imprimir-abono-suplidor/${a.id}" target="_blank" class="btn" style="background:#1cc88a; color:white; padding:2px 6px; font-size:10px; border-radius:3px; text-decoration:none;">
+                            🖨️ Recibo
+                        </a>
                     </div>`).join('');
-
                 return `
                 <tr style="background-color: ${bgFila}; border-bottom: 1px solid #eee;">
                     <td style="border-left: 4px solid ${colorAlerta}; padding: 10px; width: 20%;">
@@ -5721,6 +5723,103 @@ app.post('/cuentas-por-pagar/abonar', requireLogin, requireAdminOrCoord, async (
         if (client) client.release();
     }
 });
+
+// =============================================================
+// 🖨️ IMPRIMIR COMPROBANTE DE EGRESO (ABONO A SUPLIDOR)
+// =============================================================
+app.get('/imprimir-abono-suplidor/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
+    let client;
+    try {
+        client = await pool.connect();
+        const pagoId = req.params.id;
+
+        // Buscamos todos los detalles del pago, de la factura y del suplidor
+        const query = `
+            SELECT 
+                ph.id as pago_id, 
+                ph.amount_paid, 
+                ph.payment_date, 
+                ph.payment_method, 
+                ph.fund_source,
+                e.description as concepto_gasto, 
+                e.numero_factura,
+                s.name as suplidor_nombre
+            FROM payment_history ph
+            JOIN expenses e ON ph.expense_id = e.id
+            JOIN suppliers s ON e.supplier_id = s.id
+            WHERE ph.id = $1
+        `;
+        const result = await client.query(query, [pagoId]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).send('<h1>Comprobante no encontrado</h1>');
+        }
+
+        const pago = result.rows[0];
+
+        // Renderizamos la hoja tamaño carta con líneas de firma
+        res.send(`
+            <!DOCTYPE html><html lang="es"><head>
+                <meta charset="UTF-8">
+                <title>Comprobante de Egreso - ${pago.suplidor_nombre}</title>
+                <style>
+                    body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #333; padding: 40px; margin: 0; background: #fff; }
+                    .header { text-align: center; border-bottom: 2px solid #2c3e50; padding-bottom: 20px; margin-bottom: 30px; }
+                    .header h1 { margin: 0; color: #2c3e50; font-size: 24px; text-transform: uppercase; }
+                    .details-box { border: 1px solid #ddd; padding: 20px; border-radius: 8px; margin-bottom: 30px; background: #fdfdfd; }
+                    .details-box p { margin: 10px 0; font-size: 15px; }
+                    .monto-gigante { font-size: 32px; font-weight: bold; color: #27ae60; text-align: center; margin: 30px 0; padding: 20px; border: 2px dashed #27ae60; border-radius: 10px; background: #f0fff4; }
+                    .firmas { display: flex; justify-content: space-between; margin-top: 100px; text-align: center; font-size: 13px; font-weight: bold; }
+                    .firma-linea { border-top: 1px solid #333; width: 40%; padding-top: 8px; }
+                    @media print {
+                        .no-print { display: none !important; }
+                        body { padding: 0; }
+                    }
+                </style>
+            </head><body>
+                <div class="no-print" style="text-align: right; margin-bottom: 20px;">
+                    <button onclick="window.print()" style="padding: 10px 20px; background: #4e73df; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold;">🖨️ Imprimir Comprobante</button>
+                </div>
+
+                <div class="header">
+                    <h1>Be Eventos</h1>
+                    <h2 style="margin: 10px 0 5px 0; color: #34495e;">COMPROBANTE DE EGRESO A SUPLIDOR</h2>
+                    <p style="color: #7f8c8d;"><strong>Comprobante de Sistema #</strong> ${pago.pago_id}</p>
+                </div>
+
+                <div class="details-box">
+                    <p><strong>📅 Fecha y Hora:</strong> ${new Date(pago.payment_date).toLocaleString('es-DO')}</p>
+                    <p><strong>🏢 Pagado a (Suplidor):</strong> ${pago.suplidor_nombre}</p>
+                    <p><strong>📝 Aplicado a:</strong> ${pago.numero_factura ? `Factura #${pago.numero_factura} - ` : ''}${pago.concepto_gasto}</p>
+                    <p><strong>🏦 Fondo Utilizado:</strong> ${pago.fund_source || pago.payment_method || 'N/A'}</p>
+                </div>
+
+                <div class="monto-gigante">
+                    TOTAL ABONADO: RD$ ${parseFloat(pago.amount_paid).toLocaleString('en-US', {minimumFractionDigits: 2})}
+                </div>
+
+                <div class="firmas">
+                    <div class="firma-linea">Entregado por (Administración Be Eventos)</div>
+                    <div class="firma-linea">Recibido Conforme (Firma / Sello Suplidor)</div>
+                </div>
+
+                <div style="margin-top: 40px; text-align: center; color: #95a5a6; font-size: 11px;">
+                    <p>Este documento es un comprobante de control interno generado por el sistema Be Gestion.</p>
+                </div>
+
+                <script>
+                    window.onload = function() { window.print(); }
+                </script>
+            </body></html>
+        `);
+    } catch (e) {
+        console.error(e);
+        res.status(500).send("Error al generar el comprobante");
+    } finally {
+        if (client) client.release();
+    }
+});
+
 app.get('/reporte-gastos/excel', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { startDate, endDate, cycleId, missingDesc } = req.query;
     let client;
