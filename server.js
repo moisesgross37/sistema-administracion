@@ -2702,7 +2702,8 @@ app.post('/update-settings', requireLogin, requireAdminOrCoord, async (req, res)
 app.get('/empleados', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
-        const result = await client.query('SELECT * FROM employees ORDER BY first_name, last_name ASC');
+        // Filtramos para que solo traiga los activos o los que aún tienen el campo vacío (null) por ser registros viejos
+const result = await client.query("SELECT * FROM employees WHERE estado = 'activo' OR estado IS NULL ORDER BY first_name, last_name ASC");
         const employees = result.rows;
         client.release();
 
@@ -2713,9 +2714,9 @@ app.get('/empleados', requireLogin, requireAdminOrCoord, async (req, res) => {
                 <td>$${parseFloat(e.base_salary || 0).toFixed(2)}</td>
                 <td>
                     <a href="/empleado/editar/${e.id}" class="btn" style="background-color: #ffc107; color: #212529; padding: 5px 10px; font-size: 14px;">Editar</a>
-                    <form action="/empleado/eliminar/${e.id}" method="POST" style="display: inline; margin-left: 10px;" onsubmit="return confirm('¿Estás seguro de que deseas eliminar a este empleado?');">
-                        <button type="submit" class="btn" style="background-color: #dc3545; padding: 5px 10px; font-size: 14px;">Eliminar</button>
-                    </form>
+                    <form action="/empleado/desactivar/${e.id}" method="POST" style="display: inline; margin-left: 10px;" onsubmit="return confirm('¿Estás seguro de que deseas desactivar a este empleado? Su historial se mantendrá intacto.');">
+    <button type="submit" class="btn" style="background-color: #fd7e14; color: white; padding: 5px 10px; font-size: 14px;">Desactivar</button>
+</form>
                 </td>
             </tr>
         `).join('');
@@ -2742,25 +2743,61 @@ app.get('/empleados', requireLogin, requireAdminOrCoord, async (req, res) => {
                             ${employeesHtml}
                         </tbody>
                     </table>
-                    <div class="form-container">
-                        <h2>Añadir Nuevo Empleado</h2>
-                        <form action="/empleados" method="POST">
-                            <div class="form-group"><label for="first_name">Nombres:</label><input type="text" id="first_name" name="first_name" required></div>
-                            <div class="form-group"><label for="last_name">Apellidos:</label><input type="text" id="last_name" name="last_name" required></div>
-                            <div class="form-group"><label for="cedula">Cédula:</label><input type="text" id="cedula" name="cedula"></div>
-                            <div class="form-group"><label for="hire_date">Fecha de Ingreso:</label><input type="date" id="hire_date" name="hire_date"></div>
-                            <div class="form-group"><label for="base_salary">Salario Base (Mensual):</label><input type="number" id="base_salary" name="base_salary" step="0.01"></div>
-                            <div class="form-group"><label for="payment_frequency">Frecuencia de Pago:</label>
-                                <select id="payment_frequency" name="payment_frequency">
-                                    <option value="quincenal">Quincenal</option>
-                                    <option value="mensual">Mensual</option>
-                                </select>
-                            </div>
-                            <div class="form-group"><label for="birth_date">Fecha de Cumpleaños:</label><input type="date" id="birth_date" name="birth_date"></div>
-                            <div class="form-group"><label for="address">Dirección:</label><textarea id="address" name="address" rows="3"></textarea></div>
-                            <button type="submit" class="btn">Guardar Empleado</button>
-                        </form>
-                    </div>
+                    <div class="form-container" style="background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); margin-top: 40px;">
+    <h2 style="margin-top: 0; color: #2c3e50; border-bottom: 2px solid #f0f0f0; padding-bottom: 15px; margin-bottom: 25px; font-size: 22px;">Añadir Nuevo Empleado</h2>
+    
+    <form action="/empleados" method="POST" style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+        <div style="display: flex; flex-direction: column;">
+            <label style="font-weight: 600; font-size: 13px; color: #555; margin-bottom: 8px;">Nombres:</label>
+            <input type="text" id="first_name" name="first_name" required style="padding: 12px; border: 1px solid #dce1e6; border-radius: 6px; font-size: 14px; outline: none; transition: border-color 0.3s;">
+        </div>
+        
+        <div style="display: flex; flex-direction: column;">
+            <label style="font-weight: 600; font-size: 13px; color: #555; margin-bottom: 8px;">Apellidos:</label>
+            <input type="text" id="last_name" name="last_name" required style="padding: 12px; border: 1px solid #dce1e6; border-radius: 6px; font-size: 14px; outline: none;">
+        </div>
+        
+        <div style="display: flex; flex-direction: column;">
+            <label style="font-weight: 600; font-size: 13px; color: #555; margin-bottom: 8px;">Cédula:</label>
+            <input type="text" id="cedula" name="cedula" style="padding: 12px; border: 1px solid #dce1e6; border-radius: 6px; font-size: 14px; outline: none;">
+        </div>
+        
+        <div style="display: flex; flex-direction: column;">
+            <label style="font-weight: 600; font-size: 13px; color: #555; margin-bottom: 8px;">Fecha de Ingreso:</label>
+            <input type="date" id="hire_date" name="hire_date" style="padding: 12px; border: 1px solid #dce1e6; border-radius: 6px; font-size: 14px; outline: none; color: #495057;">
+        </div>
+        
+        <div style="display: flex; flex-direction: column;">
+            <label style="font-weight: 600; font-size: 13px; color: #555; margin-bottom: 8px;">Salario Base (Mensual):</label>
+            <div style="position: relative;">
+                <span style="position: absolute; left: 12px; top: 12px; color: #6c757d; font-weight: bold;">RD$</span>
+                <input type="number" id="base_salary" name="base_salary" step="0.01" style="padding: 12px 12px 12px 45px; border: 1px solid #dce1e6; border-radius: 6px; font-size: 14px; width: 100%; box-sizing: border-box; outline: none;">
+            </div>
+        </div>
+        
+        <div style="display: flex; flex-direction: column;">
+            <label style="font-weight: 600; font-size: 13px; color: #555; margin-bottom: 8px;">Frecuencia de Pago:</label>
+            <select id="payment_frequency" name="payment_frequency" style="padding: 12px; border: 1px solid #dce1e6; border-radius: 6px; font-size: 14px; outline: none; background-color: white; color: #495057;">
+                <option value="quincenal">Quincenal</option>
+                <option value="mensual">Mensual</option>
+            </select>
+        </div>
+        
+        <div style="display: flex; flex-direction: column;">
+            <label style="font-weight: 600; font-size: 13px; color: #555; margin-bottom: 8px;">Fecha de Cumpleaños:</label>
+            <input type="date" id="birth_date" name="birth_date" style="padding: 12px; border: 1px solid #dce1e6; border-radius: 6px; font-size: 14px; outline: none; color: #495057;">
+        </div>
+        
+        <div style="grid-column: span 2; display: flex; flex-direction: column;">
+            <label style="font-weight: 600; font-size: 13px; color: #555; margin-bottom: 8px;">Dirección:</label>
+            <textarea id="address" name="address" rows="2" style="padding: 12px; border: 1px solid #dce1e6; border-radius: 6px; font-size: 14px; outline: none; resize: vertical;"></textarea>
+        </div>
+        
+        <div style="grid-column: span 2; text-align: right; margin-top: 10px;">
+            <button type="submit" class="btn" style="background-color: #007bff; color: white; padding: 14px 35px; border-radius: 8px; font-weight: bold; font-size: 15px; border: none; cursor: pointer; box-shadow: 0 4px 6px rgba(0,123,255,0.2); transition: background-color 0.2s;">💾 Guardar Empleado</button>
+        </div>
+    </form>
+</div>
                 </div>
             </body></html>
         `);
@@ -3066,17 +3103,22 @@ app.post('/empleado/editar/:id', requireLogin, requireAdminOrCoord, async (req, 
     }
 });
 
-app.post('/empleado/eliminar/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
+app.post('/empleado/desactivar/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const { id } = req.params;
         const client = await pool.connect();
-        await client.query('DELETE FROM payroll_records WHERE employee_id = $1', [id]);
-        await client.query('DELETE FROM employees WHERE id = $1', [id]);
+        
+        // Cambiamos el estado en lugar de borrar
+        await client.query("UPDATE employees SET estado = 'desactivado' WHERE id = $1", [id]);
+        
         client.release();
+        
+        // Redirigimos a la tabla de empleados para refrescar la vista
         res.redirect('/empleados');
+
     } catch (error) {
-        console.error("Error al eliminar el empleado:", error);
-        res.status(500).send('<h1>Error al eliminar el empleado ❌</h1>');
+        console.error("Error al desactivar el empleado:", error);
+        res.status(500).send('<h1>Error interno al intentar desactivar al empleado ❌</h1>');
     }
 });
 
@@ -3154,15 +3196,16 @@ app.get('/gestionar-prestamos', requireLogin, requireAdminOrCoord, async (req, r
     try {
         client = await pool.connect();
         
-        // 1. Obtenemos empleados y préstamos, calculando el balance directamente en SQL
+        // MEJORA 1 Y 2: Filtramos el dropdown para empleados activos y usamos LEFT JOIN con COALESCE en los préstamos
         const [employeesResult, loansResult] = await Promise.all([
-            client.query('SELECT id, first_name, last_name FROM employees ORDER BY first_name ASC'),
+            client.query("SELECT id, first_name, last_name FROM employees WHERE estado = 'activo' OR estado IS NULL ORDER BY first_name ASC"),
             client.query(`
-                SELECT l.*, e.first_name, e.last_name, 
+                SELECT l.*, 
+                       COALESCE(e.first_name || ' ' || e.last_name, 'Empleado Eliminado') as colaborador, 
                        COALESCE(lp.total_pagado, 0) as total_pagado,
                        (l.loan_amount - COALESCE(lp.total_pagado, 0)) as balance_pendiente
                 FROM loans l
-                JOIN employees e ON l.employee_id = e.id
+                LEFT JOIN employees e ON l.employee_id = e.id
                 LEFT JOIN (
                     SELECT loan_id, SUM(amount_paid) as total_pagado 
                     FROM loan_payments 
@@ -3185,7 +3228,7 @@ app.get('/gestionar-prestamos', requireLogin, requireAdminOrCoord, async (req, r
         let activosHtml = prestamosActivos.map(l => `
             <tr style="cursor: pointer; transition: background 0.2s;" onmouseover="this.style.background='#f8f9fa'" onmouseout="this.style.background='white'" onclick="window.location.href='/prestamo/${l.id}';">
                 <td>${new Date(l.loan_date).toLocaleDateString('es-DO')}</td>
-                <td style="font-weight: bold;">${l.first_name} ${l.last_name}</td>
+                <td style="font-weight: bold;">${l.colaborador}</td>
                 <td>RD$ ${parseFloat(l.loan_amount).toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
                 <td style="font-weight: bold; color: #dc3545; font-size: 1.1em;">RD$ ${parseFloat(l.balance_pendiente).toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
                 <td style="color: #6c757d; font-style: italic;">${l.reason || 'Sin motivo especificado'}</td>
@@ -3196,7 +3239,7 @@ app.get('/gestionar-prestamos', requireLogin, requireAdminOrCoord, async (req, r
         let pagadosHtml = prestamosPagados.map(l => `
             <tr style="cursor: pointer; background: #fdfdfd;" onclick="window.location.href='/prestamo/${l.id}';">
                 <td style="color: #6c757d;">${new Date(l.loan_date).toLocaleDateString('es-DO')}</td>
-                <td style="color: #6c757d;">${l.first_name} ${l.last_name}</td>
+                <td style="color: #6c757d;">${l.colaborador}</td>
                 <td style="color: #6c757d;">RD$ ${parseFloat(l.loan_amount).toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
                 <td style="font-weight: bold; color: #28a745;">¡Saldado!</td>
                 <td style="color: #adb5bd; font-style: italic;">${l.reason || '-'}</td>
@@ -3406,19 +3449,33 @@ app.post('/gestionar-prestamos', requireLogin, requireAdminOrCoord, async (req, 
     let client;
     try {
         client = await pool.connect();
-        // Guardamos y pedimos que nos devuelva el ID del nuevo préstamo
+
+        // ESCUDO 1: Validar que el empleado esté activo antes de prestarle dinero
+        const empCheck = await client.query("SELECT estado FROM employees WHERE id = $1", [employee_id]);
+        if (empCheck.rows.length === 0 || empCheck.rows[0].estado === 'desactivado') {
+            return res.status(400).send('<h1>Error: No se puede registrar un préstamo a un empleado desactivado o inexistente. ❌</h1>');
+        }
+
+        // ESCUDO 2: Sanitización numérica estricta
+        const montoLimpio = parseFloat(String(loan_amount).replace(/[^0-9.-]+/g, "")) || 0;
+        if (montoLimpio <= 0) {
+            return res.status(400).send('<h1>Error: El monto del préstamo debe ser mayor a 0. ❌</h1>');
+        }
+
         const result = await client.query(
             `INSERT INTO loans (employee_id, loan_date, loan_amount, reason, status) 
              VALUES ($1, $2, $3, $4, 'activo') RETURNING id`,
-            [employee_id, loan_date, loan_amount, reason || null]
+            [employee_id, loan_date, montoLimpio, reason || null]
         );
         const newLoanId = result.rows[0].id;
-        client.release();
         
         // Redirigimos al detalle del préstamo recién creado para imprimir el comprobante
         res.redirect(`/prestamo/${newLoanId}?nuevo=true`);
     } catch (error) {
-        res.status(500).send('Error al guardar el préstamo');
+        console.error("Error al guardar el préstamo:", error);
+        res.status(500).send('<h1>Error al guardar el préstamo ❌</h1>');
+    } finally {
+        if (client) client.release(); // CORRECCIÓN CRÍTICA: Asegura la liberación de la conexión siempre
     }
 });
 
@@ -3428,102 +3485,155 @@ app.post('/gestionar-avances', requireLogin, requireAdminOrCoord, async (req, re
     if (!employee_id || !advance_date || !amount) {
         return res.status(400).send("El empleado, la fecha y el monto son obligatorios.");
     }
+    let client;
     try {
-        const client = await pool.connect();
+        client = await pool.connect();
+
+        // ESCUDO 1: Validar que el empleado esté activo antes de registrar un avance
+        const empCheck = await client.query("SELECT estado FROM employees WHERE id = $1", [employee_id]);
+        if (empCheck.rows.length === 0 || empCheck.rows[0].estado === 'desactivado') {
+            return res.status(400).send('<h1>Error: No se puede registrar un avance a un empleado desactivado o inexistente. ❌</h1>');
+        }
+
+        // ESCUDO 2: Sanitización numérica
+        const montoLimpio = parseFloat(String(amount).replace(/[^0-9.-]+/g, "")) || 0;
+        if (montoLimpio <= 0) {
+            return res.status(400).send('<h1>Error: El monto del avance debe ser mayor a 0. ❌</h1>');
+        }
+
         await client.query(
             `INSERT INTO avances_empleado (employee_id, advance_date, amount, reason) VALUES ($1, $2, $3, $4)`,
-            [employee_id, advance_date, amount, reason || null]
+            [employee_id, advance_date, montoLimpio, reason || null]
         );
-        client.release();
+        
         res.redirect('/gestionar-avances');
     } catch (error) {
         console.error("Error al guardar el avance:", error);
         res.status(500).send('<h1>Error al guardar el avance ❌</h1>');
+    } finally {
+        if (client) client.release(); // CORRECCIÓN CRÍTICA: Asegura la liberación de la conexión siempre
     }
 });
-// =======================================================
-//   NUEVAS RUTAS PARA DETALLES Y PAGOS DE PRÉSTAMOS
-// =======================================================
 
 // --- PÁGINA DE DETALLE DE UN PRÉSTAMO ESPECÍFICO ---
 app.get('/prestamo/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { id } = req.params;
+    let client;
     try {
-        const client = await pool.connect();
-        const loanResult = await client.query(
-            `SELECT l.*, e.first_name, e.last_name 
-             FROM loans l
-             JOIN employees e ON l.employee_id = e.id 
-             WHERE l.id = $1`, [id]);
+        client = await pool.connect();
         
-        const paymentsResult = await client.query(
-            `SELECT * FROM loan_payments WHERE loan_id = $1 ORDER BY payment_date DESC`, [id]);
-        client.release();
+        // CORRECCIÓN: LEFT JOIN y COALESCE para que la pantalla no explote si el empleado fue borrado en el pasado
+        const loanResult = await client.query(`
+            SELECT l.*, COALESCE(e.first_name || ' ' || e.last_name, 'Empleado Eliminado') as colaborador 
+            FROM loans l
+            LEFT JOIN employees e ON l.employee_id = e.id 
+            WHERE l.id = $1
+        `, [id]);
+        
+        const paymentsResult = await client.query(`
+            SELECT * FROM loan_payments 
+            WHERE loan_id = $1 
+            ORDER BY payment_date DESC
+        `, [id]);
 
         if (loanResult.rows.length === 0) {
-            return res.status(404).send('Préstamo no encontrado.');
+            return res.status(404).send('<h1>Error: Préstamo no encontrado. ❌</h1>');
         }
 
         const loan = loanResult.rows[0];
         const payments = paymentsResult.rows;
 
-        const totalPagado = payments.reduce((sum, p) => sum + parseFloat(p.amount_paid), 0);
-        const balancePendiente = parseFloat(loan.loan_amount) - totalPagado;
+        // CORRECCIÓN: Aseguramos que si viene un null o vacío en la DB lo maneje como 0
+        const totalPagado = payments.reduce((sum, p) => sum + parseFloat(p.amount_paid || 0), 0);
+        const balancePendiente = parseFloat(loan.loan_amount || 0) - totalPagado;
 
         let paymentsHtml = payments.map(p => `
             <tr>
-                <td>${new Date(p.payment_date).toLocaleDateString()}</td>
-                <td>$${parseFloat(p.amount_paid).toFixed(2)}</td>
-                <td>${p.payment_method || 'N/A'}</td>
+                <td>${new Date(p.payment_date).toLocaleDateString('es-DO')}</td>
+                <td>RD$ ${parseFloat(p.amount_paid || 0).toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+                <td><span class="badge" style="background: #e3f2fd; color: #0d47a1; padding: 3px 8px; border-radius: 4px; font-size: 12px;">${p.payment_method || 'N/A'}</span></td>
                 <td>
-                    <a href="/recibo-pago-prestamo/${p.id}/pdf" target="_blank" class="btn" style="padding: 5px 10px; font-size: 14px;">Imprimir</a>
+                    <a href="/recibo-pago-prestamo/${p.id}/pdf" target="_blank" class="btn" style="padding: 5px 10px; font-size: 14px; text-decoration: none;">Imprimir</a>
                 </td>
             </tr>
-        `).join('') || '<tr><td colspan="4">No se han registrado pagos para este préstamo.</td></tr>';
+        `).join('') || '<tr><td colspan="4" style="text-align:center; padding: 15px; color: gray;">No se han registrado pagos para este préstamo.</td></tr>';
 
         res.send(`
             <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
-                <div class="container">
-                    <a href="/gestionar-prestamos" class="back-link">↩️ Volver a Préstamos</a>
-                    <h2>Préstamo a: ${loan.first_name} ${loan.last_name}</h2>
+                <div class="container" style="max-width: 900px; padding-top: 40px; padding-bottom: 50px;">
+                    <a href="/gestionar-prestamos" class="back-link" style="text-decoration:none; font-weight:bold; color:#4e73df;">↩️ Volver a Préstamos</a>
+                    
+                    <h2 style="color: #2c3e50; margin-top: 20px;">Préstamo a: ${loan.colaborador}</h2>
+                    
                     <div style="margin-bottom: 20px;">
-    <a href="/prestamo/${loan.id}/print" target="_blank" class="btn" style="background-color: #4e73df; color: white; padding: 10px 15px; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 14px;">
-        🖨️ Imprimir Vale para Firma
-    </a>
-</div>
-                    <p><strong>Fecha del Préstamo:</strong> ${new Date(loan.loan_date).toLocaleDateString()}</p>
+                        <a href="/prestamo/${loan.id}/print" target="_blank" class="btn" style="background-color: #4e73df; color: white; padding: 10px 15px; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 14px; display: inline-block;">
+                            🖨️ Imprimir Vale para Firma
+                        </a>
+                    </div>
+                    
+                    <p><strong>Fecha del Préstamo:</strong> ${new Date(loan.loan_date).toLocaleDateString('es-DO')}</p>
                     <p><strong>Motivo:</strong> ${loan.reason || 'No especificado'}</p>
                     
-                    <div class="summary">
-                        <div class="summary-box"><h3>Monto Original</h3><p class="amount">$${parseFloat(loan.loan_amount).toFixed(2)}</p></div>
-                        <div class="summary-box"><h3>Total Pagado</h3><p class="amount green">$${totalPagado.toFixed(2)}</p></div>
-                        <div class="summary-box"><h3>Balance Pendiente</h3><p class="amount red">$${balancePendiente.toFixed(2)}</p></div>
+                    <div class="summary" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin: 30px 0;">
+                        <div class="summary-box" style="background: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 4px solid #6c757d;">
+                            <h3 style="margin: 0; font-size: 12px; color: #6c757d;">Monto Original</h3>
+                            <p class="amount" style="margin: 5px 0 0 0; font-size: 18px; font-weight: bold;">RD$ ${parseFloat(loan.loan_amount).toLocaleString('en-US', {minimumFractionDigits: 2})}</p>
+                        </div>
+                        <div class="summary-box" style="background: #f4fbf7; padding: 15px; border-radius: 8px; border-left: 4px solid #28a745;">
+                            <h3 style="margin: 0; font-size: 12px; color: #28a745;">Total Pagado</h3>
+                            <p class="amount green" style="margin: 5px 0 0 0; font-size: 18px; font-weight: bold; color: #28a745;">RD$ ${totalPagado.toLocaleString('en-US', {minimumFractionDigits: 2})}</p>
+                        </div>
+                        <div class="summary-box" style="background: #fff5f5; padding: 15px; border-radius: 8px; border-left: 4px solid #dc3545;">
+                            <h3 style="margin: 0; font-size: 12px; color: #dc3545;">Balance Pendiente</h3>
+                            <p class="amount red" style="margin: 5px 0 0 0; font-size: 18px; font-weight: bold; color: #dc3545;">RD$ ${balancePendiente.toLocaleString('en-US', {minimumFractionDigits: 2})}</p>
+                        </div>
                     </div>
 
-                    ${balancePendiente > 0 ? `
-                    <div class="form-container">
-                        <h3>Registrar Nuevo Abono / Pago</h3>
-                        <form action="/prestamo/${id}/registrar-pago" method="POST">
-                            <div class="form-group"><label>Fecha del Pago:</label><input type="date" name="payment_date" required></div>
-                            <div class="form-group"><label>Monto Pagado:</label><input type="number" name="amount_paid" step="0.01" max="${balancePendiente.toFixed(2)}" required></div>
-                            <div class="form-group">
-                                <label>Método de Pago:</label>
-                                <select name="payment_method">
+                    ${balancePendiente > 0 && loan.colaborador !== 'Empleado Eliminado' ? `
+                    <div class="form-container" style="background: white; padding: 25px; border-radius: 10px; border: 1px solid #eaeaea; box-shadow: 0 4px 6px rgba(0,0,0,0.02);">
+                        <h3 style="margin-top: 0; color: #4e73df;">Registrar Nuevo Abono / Pago</h3>
+                        <form action="/prestamo/${id}/registrar-pago" method="POST" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                            <div class="form-group" style="display: flex; flex-direction: column;">
+                                <label style="font-weight: 600; font-size: 13px; margin-bottom: 5px;">Fecha del Pago:</label>
+                                <input type="date" name="payment_date" required style="padding: 8px; border: 1px solid #ccc; border-radius: 4px;">
+                            </div>
+                            <div class="form-group" style="display: flex; flex-direction: column;">
+                                <label style="font-weight: 600; font-size: 13px; margin-bottom: 5px;">Monto Pagado:</label>
+                                <input type="number" name="amount_paid" step="0.01" max="${balancePendiente.toFixed(2)}" required style="padding: 8px; border: 1px solid #ccc; border-radius: 4px;">
+                            </div>
+                            <div class="form-group" style="display: flex; flex-direction: column; grid-column: span 2;">
+                                <label style="font-weight: 600; font-size: 13px; margin-bottom: 5px;">Método de Pago:</label>
+                                <select name="payment_method" style="padding: 8px; border: 1px solid #ccc; border-radius: 4px; background: white;">
                                     <option value="Efectivo">Efectivo</option>
                                     <option value="Transferencia">Transferencia</option>
                                     <option value="Descuento Nómina">Descuento Nómina</option>
                                     <option value="Otro">Otro</option>
                                 </select>
                             </div>
-                            <div class="form-group"><label>Notas (Opcional):</label><textarea name="notes" rows="2"></textarea></div>
-                            <button type="submit" class="btn">Guardar Pago</button>
+                            <div class="form-group" style="display: flex; flex-direction: column; grid-column: span 2;">
+                                <label style="font-weight: 600; font-size: 13px; margin-bottom: 5px;">Notas (Opcional):</label>
+                                <textarea name="notes" rows="2" style="padding: 8px; border: 1px solid #ccc; border-radius: 4px; resize: vertical;"></textarea>
+                            </div>
+                            <div style="grid-column: span 2; text-align: right;">
+                                <button type="submit" class="btn" style="background: #4e73df; color: white; padding: 10px 25px; border: none; border-radius: 5px; font-weight: bold; cursor: pointer;">Guardar Pago</button>
+                            </div>
                         </form>
-                    </div>` : '<h3 style="text-align:center; color: #28a745;">Este préstamo ha sido saldado.</h3>'}
+                    </div>` : balancePendiente <= 0 ? 
+                        '<h3 style="text-align:center; color: #28a745; background: #f4fbf7; padding: 15px; border-radius: 6px;">✅ Este préstamo ha sido saldado.</h3>' : 
+                        '<h3 style="text-align:center; color: #dc3545; background: #fff5f5; padding: 15px; border-radius: 6px;">⚠️ No se pueden registrar abonos a un empleado eliminado.</h3>'
+                    }
 
-                    <hr style="margin: 40px 0;">
-                    <h3>Historial de Pagos Realizados</h3>
-                    <table>
-                        <thead><tr><th>Fecha de Pago</th><th>Monto</th><th>Método</th><th>Acciones</th></tr></thead>
+                    <hr style="margin: 40px 0; border: 0; border-top: 1px solid #eee;">
+                    <h3 style="color: #2c3e50;">Historial de Pagos Realizados</h3>
+                    <table style="width: 100%; border-collapse: collapse; margin-top: 15px;">
+                        <thead>
+                            <tr style="background: #f8f9fa; border-bottom: 2px solid #dee2e6;">
+                                <th style="padding: 12px; text-align: left;">Fecha de Pago</th>
+                                <th style="padding: 12px; text-align: left;">Monto</th>
+                                <th style="padding: 12px; text-align: left;">Método</th>
+                                <th style="padding: 12px; text-align: left;">Acciones</th>
+                            </tr>
+                        </thead>
                         <tbody>${paymentsHtml}</tbody>
                     </table>
                 </div>
@@ -3532,6 +3642,8 @@ app.get('/prestamo/:id', requireLogin, requireAdminOrCoord, async (req, res) => 
     } catch (error) {
         console.error("Error al cargar detalle de préstamo:", error);
         res.status(500).send('<h1>Error al cargar la página ❌</h1>');
+    } finally {
+        if (client) client.release(); // CORRECCIÓN CRÍTICA: La liberación ahora está garantizada siempre
     }
 });
 
@@ -3544,33 +3656,54 @@ app.post('/prestamo/:loanId/registrar-pago', requireLogin, requireAdminOrCoord, 
         return res.status(400).send("La fecha y el monto son obligatorios.");
     }
 
-    const client = await pool.connect();
+    let client; // Declaración segura fuera del try
     try {
+        client = await pool.connect();
         await client.query('BEGIN');
 
-        // 1. Insertar el nuevo pago
+        // ESCUDO 1: Sanitización numérica del abono
+        const montoAbono = parseFloat(String(amount_paid).replace(/[^0-9.-]+/g, "")) || 0;
+        if (montoAbono <= 0) {
+            await client.query('ROLLBACK');
+            return res.status(400).send('<h1>Error: El monto del abono debe ser mayor a 0. ❌</h1>');
+        }
+
+        // ESCUDO 2: Verificar existencia del préstamo y saldo real ANTES de insertar
+        const checkResult = await client.query(`
+            SELECT l.loan_amount, COALESCE(SUM(p.amount_paid), 0) as total_pagado
+            FROM loans l
+            LEFT JOIN loan_payments p ON l.id = p.loan_id
+            WHERE l.id = $1
+            GROUP BY l.loan_amount
+        `, [loanId]);
+
+        if (checkResult.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).send('<h1>Error: Préstamo no encontrado o eliminado. ❌</h1>');
+        }
+
+        const montoOriginal = parseFloat(checkResult.rows[0].loan_amount);
+        const totalPagadoAntes = parseFloat(checkResult.rows[0].total_pagado);
+        const balancePendiente = montoOriginal - totalPagadoAntes;
+
+        // ESCUDO 3: Evitar sobrepagos maliciosos o accidentales
+        if (montoAbono > balancePendiente) {
+            await client.query('ROLLBACK');
+            return res.status(400).send(`<h1>Error: El pago (RD$ ${montoAbono.toFixed(2)}) supera el balance pendiente real (RD$ ${balancePendiente.toFixed(2)}). ❌</h1>`);
+        }
+
+        // 1. Insertar el nuevo pago de forma segura
         await client.query(
             `INSERT INTO loan_payments (loan_id, payment_date, amount_paid, payment_method, notes) 
              VALUES ($1, $2, $3, $4, $5)`,
-            [loanId, payment_date, amount_paid, payment_method || null, notes || null]
+            [loanId, payment_date, montoAbono, payment_method || null, notes || null]
         );
 
-        // 2. Recalcular el total pagado y el balance
-        const totalsResult = await client.query(
-            `SELECT 
-                l.loan_amount,
-                COALESCE(SUM(p.amount_paid), 0) as total_pagado
-             FROM loans l
-             LEFT JOIN loan_payments p ON l.id = p.loan_id
-             WHERE l.id = $1
-             GROUP BY l.loan_amount`, [loanId]
-        );
+        // 2. Calcular el nuevo estado matemáticamente sin re-consultar la base de datos
+        const nuevoTotalPagado = totalPagadoAntes + montoAbono;
+        const nuevoEstado = nuevoTotalPagado >= montoOriginal ? 'pagado' : 'activo';
 
-        const montoTotal = parseFloat(totalsResult.rows[0].loan_amount);
-        const totalPagado = parseFloat(totalsResult.rows[0].total_pagado);
-        const nuevoEstado = totalPagado >= montoTotal ? 'pagado' : 'activo';
-
-        // 3. Actualizar el estado del préstamo si ya se saldó
+        // 3. Actualizar el estado del préstamo
         await client.query(
             `UPDATE loans SET status = $1 WHERE id = $2`,
             [nuevoEstado, loanId]
@@ -3580,14 +3713,13 @@ app.post('/prestamo/:loanId/registrar-pago', requireLogin, requireAdminOrCoord, 
         res.redirect(`/prestamo/${loanId}`);
 
     } catch (error) {
-        await client.query('ROLLBACK');
+        if (client) await client.query('ROLLBACK');
         console.error("Error al registrar el pago del préstamo:", error);
         res.status(500).send('<h1>Error al registrar el pago ❌</h1>');
     } finally {
-        client.release();
+        if (client) client.release(); // CORRECCIÓN CRÍTICA: Solo se ejecuta si client fue exitosamente asignado
     }
 });
-
 // --- RUTA PARA GENERAR EL PDF DEL RECIBO DE PAGO DE PRÉSTAMO ---
 app.get('/recibo-pago-prestamo/:pagoId/pdf', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
@@ -3994,19 +4126,22 @@ app.get('/nomina/requisicion', requireLogin, requireAdminOrCoord, async (req, re
     try {
         client = await pool.connect();
 
-        // CERO-PROOF SQL APLICADO: Forzamos a que todo sea número (NUMERIC)
+        // Agrupamos por empleado y sumamos todos sus conceptos para erradicar filas duplicadas.
+        // Además, corregimos e.nombre por first_name y last_name para matar los "null".
         const query = `
         SELECT 
-            e.nombre as colaborador,
-            CAST(COALESCE(NULLIF(pr.base_salary_paid::text, ''), '0') AS NUMERIC) as sueldo_bruto,
-            CAST(COALESCE(NULLIF(pr.bonuses::text, ''), '0') AS NUMERIC) as incentivos,
-            CAST(COALESCE(NULLIF(pr.loan_deduction::text, ''), '0') AS NUMERIC) as prestamos, 
-            CAST(COALESCE(NULLIF(pr.deductions::text, ''), '0') AS NUMERIC) as otros_descuentos,
-            CAST(COALESCE(NULLIF(pr.net_pay::text, ''), '0') AS NUMERIC) as neto_a_pagar
+            pr.employee_id,
+            COALESCE(e.first_name || ' ' || e.last_name, 'Empleado Eliminado') as colaborador,
+            SUM(CAST(COALESCE(NULLIF(pr.base_salary_paid::text, ''), '0') AS NUMERIC)) as sueldo_bruto,
+            SUM(CAST(COALESCE(NULLIF(pr.bonuses::text, ''), '0') AS NUMERIC)) as incentivos,
+            SUM(CAST(COALESCE(NULLIF(pr.loan_deduction::text, ''), '0') AS NUMERIC)) as prestamos, 
+            SUM(CAST(COALESCE(NULLIF(pr.deductions::text, ''), '0') AS NUMERIC)) as otros_descuentos,
+            SUM(CAST(COALESCE(NULLIF(pr.net_pay::text, ''), '0') AS NUMERIC)) as neto_a_pagar
         FROM payroll_records pr
-        JOIN employees e ON pr.employee_id = e.id
+        LEFT JOIN employees e ON pr.employee_id = e.id
         WHERE CAST(pr.payroll_id AS TEXT) = $1
-        ORDER BY e.nombre ASC
+        GROUP BY pr.employee_id, e.first_name, e.last_name
+        ORDER BY colaborador ASC
         `;
         
         const result = await client.query(query, [id]);
@@ -4016,11 +4151,10 @@ app.get('/nomina/requisicion', requireLogin, requireAdminOrCoord, async (req, re
 
         let t_neto = 0;
         const filasHtml = nomina.map(row => {
-            // Ahora sí sumará correctamente los valores numéricos
             t_neto += parseFloat(row.neto_a_pagar || 0);
             return `
             <tr>
-                <td style="text-align:left;"><b>${row.colaborador}</b></td>
+                <td style="text-align:left;"><b>${row.colaborador.trim()}</b></td>
                 <td>${parseFloat(row.sueldo_bruto || 0).toFixed(2)}</td>
                 <td>${parseFloat(row.incentivos || 0).toFixed(2)}</td>
                 <td style="color:red;">${parseFloat(row.prestamos || 0).toFixed(2)}</td>
@@ -4053,14 +4187,16 @@ app.get('/ver-detalle-nomina/:payroll_id', requireLogin, requireAdminOrCoord, as
     try {
         client = await pool.connect();
         
+        // CERO-PROOF APLICADO: Usamos LEFT JOIN y COALESCE para atrapar a los borrados del pasado
         const query = `
             SELECT DISTINCT 
-                e.id, 
-                e.nombre as nombre_completo,
+                pr.employee_id as id, 
+                COALESCE(e.first_name || ' ' || e.last_name, 'Empleado Eliminado') as nombre_completo,
                 pr.pay_date
-            FROM employees e
-            JOIN payroll_records pr ON e.id = pr.employee_id
+            FROM payroll_records pr
+            LEFT JOIN employees e ON pr.employee_id = e.id
             WHERE CAST(pr.payroll_id AS TEXT) = $1
+            ORDER BY nombre_completo ASC
         `;
         
         const resDetalle = await client.query(query, [payroll_id.toString().trim()]);
@@ -4070,9 +4206,12 @@ app.get('/ver-detalle-nomina/:payroll_id', requireLogin, requireAdminOrCoord, as
         let filas = resDetalle.rows.map(emp => {
             return `
             <tr>
-                <td style="font-weight:bold; padding:15px;">${emp.nombre_completo}</td>
+                <td style="font-weight:bold; padding:15px;">${emp.nombre_completo.trim()}</td>
                 <td style="text-align:center;">
-                    <a href="/ver-recibo/${payroll_id}/${emp.id}" target="_blank" class="btn" style="background:#007bff; color:white; text-decoration:none; padding:5px 15px; font-size:12px; border-radius:4px;">🖨️ Recibo</a>
+                    ${emp.nombre_completo !== 'Empleado Eliminado' ? 
+                        `<a href="/ver-recibo/${payroll_id}/${emp.id}" target="_blank" class="btn" style="background:#007bff; color:white; text-decoration:none; padding:5px 15px; font-size:12px; border-radius:4px;">🖨️ Recibo</a>` 
+                        : '<span style="color:red; font-size:12px;">Historial no disponible</span>'
+                    }
                 </td>
             </tr>`;
         }).join('');
@@ -4088,9 +4227,14 @@ app.get('/ver-detalle-nomina/:payroll_id', requireLogin, requireAdminOrCoord, as
                         <a href="/historial-nomina" style="text-decoration:none; color:#007bff; font-weight:bold;">← Volver al Archivo</a>
                         
                         ${payroll_id ? 
-                            `<a href="/nomina/requisicion?id=${payroll_id}" target="_blank" class="btn" style="background:#28a745; color:white; padding:10px 20px; font-weight:bold; text-decoration:none; border-radius:6px;">
-                                🖨️ IMPRIMIR REQUISICIÓN DE PAGO (PDF)
-                             </a>` 
+                            `<div style="display: flex; gap: 10px;">
+                                <a href="/imprimir-todos-recibos/${payroll_id}" target="_blank" class="btn" style="background:#17a2b8; color:white; padding:10px 20px; font-weight:bold; text-decoration:none; border-radius:6px;">
+                                    📄 IMPRIMIR TODOS LOS RECIBOS
+                                </a>
+                                <a href="/nomina/requisicion?id=${payroll_id}" target="_blank" class="btn" style="background:#28a745; color:white; padding:10px 20px; font-weight:bold; text-decoration:none; border-radius:6px;">
+                                    🖨️ IMPRIMIR REQUISICIÓN (PDF)
+                                </a>
+                             </div>` 
                             : ''}
                     </div>
 
@@ -4103,6 +4247,8 @@ app.get('/ver-detalle-nomina/:payroll_id', requireLogin, requireAdminOrCoord, as
             </body></html>`);
     } catch (e) { res.status(500).send("Error: " + e.message); } finally { if (client) client.release(); }
 });
+
+
 // =======================================================
 // NUEVA RUTA PARA GENERAR PDF DE RECIBO DE NÓMINA
 // =======================================================
@@ -5070,11 +5216,12 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
     try {
         client = await pool.connect();
         
-        // 1. Buscamos TODOS los empleados que participan en nómina, sin importar su sueldo
+        // CORRECCIÓN 1 Y 2: GROUP BY para consolidar múltiples préstamos y evitar filas duplicadas.
+        // Además, añadimos el filtro de estado para excluir a empleados desactivados.
         const employeesRes = await client.query(`
-            SELECT e.*, 
-                   COALESCE(l.balance, 0) as balance_prestamo,
-                   l.loan_id
+            SELECT e.id, e.first_name, e.last_name, e.base_salary,
+                   COALESCE(SUM(l.balance), 0) as balance_prestamo,
+                   MAX(l.loan_id) as loan_id
             FROM employees e
             LEFT JOIN (
                 SELECT employee_id, id as loan_id,
@@ -5082,22 +5229,24 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
                 FROM loans
                 WHERE status = 'activo'
             ) l ON e.id = l.employee_id
-            WHERE e.participa_en_nomina = true OR e.participa_nomina = true
-            ORDER BY e.id ASC
+            WHERE (e.participa_en_nomina = true OR e.participa_nomina = true)
+              AND (e.estado = 'activo' OR e.estado IS NULL)
+            GROUP BY e.id, e.first_name, e.last_name, e.base_salary
+            ORDER BY e.first_name, e.last_name ASC
         `);
 
         const employees = employeesRes.rows;
         const quotesRes = await client.query("SELECT id, clientname FROM quotes WHERE status = 'activa' ORDER BY clientname ASC");
         const activeProjects = quotesRes.rows;
-        const projectOptions = activeProjects.map(p => `<option value="${p.id}">${p.clientname}</option>`).join('');
+        
+        // CORRECCIÓN 4 (Parte Frontend): Estructuramos las opciones mapeadas para el buscador <datalist>
+        const projectOptions = activeProjects.map(p => `<option data-id="${p.id}" value="${p.clientname}"></option>`).join('');
 
         let employeesRows = employees.map(emp => {
-            const nameKey = Object.keys(emp).find(k => k.toLowerCase().includes('nom') || k.toLowerCase().includes('name'));
-            const salaryKey = Object.keys(emp).find(k => k.toLowerCase().includes('sal') || k.toLowerCase().includes('suel'));
-            const nombreEmpleado = emp[nameKey] || "No identificado";
+            // CORRECCIÓN 3: Eliminamos el mapeo dinámico impreciso de llaves. Forzamos first_name y last_name.
+            const nombreEmpleado = `${emp.first_name || ''} ${emp.last_name || ''}`.trim() || "No identificado";
             
-            // Si el sueldo es 0 o nulo, mostramos 0.00 de forma amigable
-            const sueldoOriginal = parseFloat(emp[salaryKey] || 0);
+            const sueldoOriginal = parseFloat(emp.base_salary || 0);
             const sueldoQuincenal = (sueldoOriginal / 2).toFixed(2);
             const balancePrestamo = parseFloat(emp.balance_prestamo || 0);
 
@@ -5130,12 +5279,16 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
                 ${commonHtmlHead.replace('<title>Panel de Administración</title>', '<title>Super Nómina</title>')}
                 <style>
                     .extra-row { display: grid; grid-template-columns: 140px 1.5fr 1.5fr 100px 30px; gap: 8px; margin-bottom: 8px; background: #fdfdfd; padding: 8px; border-radius: 8px; border: 1px solid #eaeaea; align-items: center; }
-                    .extra-row input, .extra-row select { padding: 6px; font-size: 12px; border: 1px solid #ddd; border-radius: 5px; }
+                    .extra-row input, .extra-row select, .extra-row input.project-search { padding: 6px; font-size: 12px; border: 1px solid #ddd; border-radius: 5px; width: 100%; box-sizing: border-box; }
                     .btn-delete { color: #ff4d4d; cursor: pointer; font-size: 20px; text-align: center; }
                     th { text-align: left; padding: 10px; background: #f8f9fa; }
                 </style>
             </head>
             <body>
+                <datalist id="projects-list">
+                    ${projectOptions}
+                </datalist>
+
                 <div class="container" style="max-width: 1300px; margin-top: 40px;">
                     <div style="margin-bottom: 20px;">${backToDashboardLink}</div>
                     <h1>Super Nómina Quincenal</h1>
@@ -5157,20 +5310,37 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
                         </button>
                     </div>
                 </div>
-<script>
-                    const projectOptionsHtml = '${projectOptions}';
+                <script>
                     function addExtraRow(empId) {
                         const container = document.getElementById('extras-container-' + empId);
                         const noExtrasMsg = container.querySelector('.no-extras-msg');
                         if (noExtrasMsg) noExtrasMsg.remove();
                         const div = document.createElement('div');
                         div.className = 'extra-row';
+                        
+                        // CORRECCIÓN 4: Reemplazamos <select> por un input con enlace a 'projects-list' (autocompletado nativo)
                         div.innerHTML = '<input type="date" class="extra-date">' +
-                            '<select class="extra-project"><option value="">-- Oficina --</option>' + projectOptionsHtml + '</select>' +
+                            '<input type="text" class="project-search" list="projects-list" placeholder="-- Buscar Centro/Colegio --" onchange="syncProjectId(this)">' +
+                            '<input type="hidden" class="extra-project" value="">' + // Mantiene el id real para no romper tu backend
                             '<input type="text" class="extra-desc" placeholder="¿Qué hizo?">' +
                             '<input type="number" class="extra-amount" value="0" step="0.01">' +
                             '<div class="btn-delete" onclick="this.parentElement.remove()">×</div>';
                         container.appendChild(div);
+                    }
+
+                    // Función intermedia para interceptar el texto del buscador y mapear su ID real
+                    function syncProjectId(inputElement) {
+                        const value = inputElement.value;
+                        const options = document.getElementById('projects-list').options;
+                        let idMatch = "";
+                        for (let i = 0; i < options.length; i++) {
+                            if (options[i].value === value) {
+                                idMatch = options[i].getAttribute('data-id');
+                                break;
+                            }
+                        }
+                        // Guardamos el ID en el input oculto que ya procesa tu lógica existente
+                        inputElement.parentElement.querySelector('.extra-project').value = idMatch;
                     }
 
                     async function procesarNomina() {
@@ -5193,7 +5363,7 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
                                 if(monto > 0) {
                                     extras.push({
                                         date: ex.querySelector('.extra-date').value,
-                                        quote_id: ex.querySelector('.extra-project').value,
+                                        quote_id: ex.querySelector('.extra-project').value, // Lee el ID mapeado correctamente
                                         desc: ex.querySelector('.extra-desc').value,
                                         amount: monto
                                     });
@@ -5201,7 +5371,6 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
                                 }
                             });
 
-                            // NUESTRO PARCHE DE ETIQUETAS CORRECTAS
                             if(sueldo > 0 || totalExtras > 0 || deduccion > 0) {
                                 payload.push({ 
                                     employee_id: empId, 
@@ -5214,7 +5383,7 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
                                 });
                                 resumen += "- " + nombre + ": RD$ " + (sueldo + totalExtras - deduccion).toFixed(2) + "\\n";
                             }
-                        }); // <-- ESTA ES LA LLAVE QUE SE HABÍA PERDIDO
+                        });
 
                         if(payload.length === 0) return alert("No hay datos para procesar.");
 
@@ -5234,74 +5403,89 @@ app.get('/super-nomina', requireLogin, requireAdminOrCoord, async (req, res) => 
                         }
                     }
                 </script>
-                </body></html>`);
+            </body></html>
+        `);
     } catch (e) { res.status(500).send(e.message); } finally { if (client) client.release(); }
 });
+
+
 app.get('/ver-recibo/:payroll_id/:employee_id', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { payroll_id, employee_id } = req.params;
     let client;
     try {
         client = await pool.connect();
         
-        // 1. Obtener datos del empleado
-        const empRes = await client.query("SELECT * FROM employees WHERE id = $1", [employee_id]);
-        const emp = empRes.rows[0];
-        const nombreEmp = emp.nombre || emp.name || "Empleado";
-        const sueldoBase = (parseFloat(emp.salary || emp.sueldo || 0) / 2).toFixed(2);
+        // 1. Obtener datos EXACTOS del registro de nómina
+        const recordRes = await client.query(`
+            SELECT pr.*, 
+                   COALESCE(e.first_name || ' ' || e.last_name, 'Empleado Eliminado') as nombre_completo
+            FROM payroll_records pr
+            LEFT JOIN employees e ON pr.employee_id = e.id
+            WHERE CAST(pr.payroll_id AS TEXT) = $1 AND pr.employee_id = $2
+        `, [payroll_id.toString().trim(), employee_id]);
+        
+        if (recordRes.rows.length === 0) return res.send("<h1>Recibo no encontrado.</h1>");
+        const pago = recordRes.rows[0];
+        const fechaPago = new Date(pago.pay_date).toLocaleDateString('es-DO');
 
-        // 2. Obtener todos los extras de ese batch de nómina
+        // 2. Obtener los extras
         const extrasRes = await client.query(`
             SELECT pe.*, q.clientname 
             FROM payroll_extras pe
             LEFT JOIN quotes q ON pe.quote_id = q.id
-            WHERE pe.payroll_id = $1 AND pe.employee_id = $2
+            WHERE CAST(pe.payroll_id AS TEXT) = $1 AND pe.employee_id = $2
             ORDER BY pe.payment_date ASC
-        `, [payroll_id, employee_id]);
+        `, [payroll_id.toString().trim(), employee_id]);
         
-        const extras = extrasRes.rows;
-        let totalExtras = 0;
+        let filasExtras = extrasRes.rows.map(ex => `
+            <tr>
+                <td>${new Date(ex.payment_date || pago.pay_date).toLocaleDateString('es-DO')}</td>
+                <td>${ex.description || 'Actividad Extra'}</td>
+                <td>${ex.clientname || 'Administración'}</td>
+                <td style="text-align:right;">RD$ ${parseFloat(ex.amount).toFixed(2)}</td>
+            </tr>
+        `).join('');
 
-        // 3. Generar las filas de la tabla Excel
-        let filasTabla = extras.map(ex => {
-            totalExtras += parseFloat(ex.amount);
-            return `
-                <tr>
-                    <td>${new Date(ex.payment_date).toLocaleDateString('es-ES')}</td>
-                    <td>${ex.description}</td>
-                    <td>${ex.clientname || 'Administración'}</td>
-                    <td style="text-align:right;">$${parseFloat(ex.amount).toFixed(2)}</td>
-                </tr>`;
-        }).join('');
-
-        const totalPagar = (parseFloat(sueldoBase) + totalExtras).toFixed(2);
+        let filaDeduccion = '';
+        const totalDeducido = parseFloat(pago.base_salary_paid || 0) + parseFloat(pago.bonuses || 0) - parseFloat(pago.net_pay || 0);
+        if (totalDeducido > 0) {
+            filaDeduccion = `
+            <tr>
+                <td>${fechaPago}</td>
+                <td style="color:red; font-weight:bold;">Descuentos / Abono a Préstamo</td>
+                <td>---</td>
+                <td style="text-align:right; color:red; font-weight:bold;">- RD$ ${totalDeducido.toFixed(2)}</td>
+            </tr>`;
+        }
 
         res.send(`
             <!DOCTYPE html><html lang="es">
             <head>
                 <meta charset="UTF-8">
-                <title>Recibo de Pago - ${nombreEmp}</title>
+                <title>Recibo - ${pago.nombre_completo}</title>
                 <style>
-                    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 40px; color: #333; }
+                    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 40px; color: #333; max-width: 800px; margin: 0 auto; }
                     .recibo-header { text-align: center; border-bottom: 2px solid #000; padding-bottom: 20px; margin-bottom: 20px; }
                     .info-grid { display: grid; grid-template-columns: 1fr 1fr; margin-bottom: 30px; }
                     table { width: 100%; border-collapse: collapse; margin-top: 20px; }
                     th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
                     th { background-color: #f2f2f2; font-weight: bold; }
                     .total-section { margin-top: 30px; text-align: right; font-size: 1.2em; }
-                    .btn-print { background: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; }
-                    @media print { .btn-print { display: none; } }
+                    .btn-print { background: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; margin-bottom: 20px; font-size: 16px; }
+                    .firmas-container { margin-top: 80px; display: grid; grid-template-columns: 1fr 1fr; gap: 50px; }
+                    @media print { .btn-print { display: none; } body { padding: 0; } }
                 </style>
             </head>
             <body>
-                <button class="btn-print" onclick="window.print()">🖨️ Imprimir Recibo</button>
+                <button class="btn-print" onclick="window.print()">🖨️ Imprimir Recibo Individual</button>
                 <div class="recibo-header">
                     <h2>RECIBO DE PAGO DE PERSONAL</h2>
-                    <p>Quincena correspondiente al ${new Date().toLocaleDateString()}</p>
+                    <p>Be Eventos - Quincena correspondiente al ${fechaPago}</p>
                 </div>
                 
                 <div class="info-grid">
-                    <div><strong>Colaborador:</strong> ${nombreEmp}</div>
-                    <div style="text-align:right;"><strong>ID Pago:</strong> #${payroll_id}</div>
+                    <div><strong>Colaborador:</strong> ${pago.nombre_completo}</div>
+                    <div style="text-align:right;"><strong>Lote de Pago:</strong> #${payroll_id}</div>
                 </div>
 
                 <table>
@@ -5315,28 +5499,182 @@ app.get('/ver-recibo/:payroll_id/:employee_id', requireLogin, requireAdminOrCoor
                     </thead>
                     <tbody>
                         <tr>
-                            <td>${new Date().toLocaleDateString()}</td>
+                            <td>${fechaPago}</td>
                             <td>Sueldo Fijo Quincenal</td>
                             <td>---</td>
-                            <td style="text-align:right;">$${sueldoBase}</td>
+                            <td style="text-align:right;">RD$ ${parseFloat(pago.base_salary_paid || 0).toFixed(2)}</td>
                         </tr>
-                        ${filasTabla}
+                        ${filasExtras}
+                        ${filaDeduccion}
                     </tbody>
                 </table>
 
                 <div class="total-section">
-                    <strong>TOTAL NETO A PAGAR:</strong>
-                    <span style="color: #28a745; font-weight: bold; margin-left: 20px; font-size: 1.5em;">$${totalPagar}</span>
+                    <strong>TOTAL NETO PAGADO:</strong>
+                    <span style="color: #28a745; font-weight: bold; margin-left: 20px; font-size: 1.5em;">RD$ ${parseFloat(pago.net_pay || 0).toFixed(2)}</span>
                 </div>
 
-                <div style="margin-top: 100px; display: grid; grid-template-columns: 1fr 1fr; gap: 50px;">
-                    <div style="border-top: 1px solid #000; text-align: center; padding-top: 10px;">Firma del Empleador</div>
+                <div class="firmas-container">
+                    <div style="border-top: 1px solid #000; text-align: center; padding-top: 10px;">Firma de Be Eventos</div>
                     <div style="border-top: 1px solid #000; text-align: center; padding-top: 10px;">Firma del Colaborador</div>
                 </div>
             </body></html>`);
 
-    } catch (e) { res.status(500).send(e.message); } finally { if (client) client.release(); }
+    } catch (e) { res.status(500).send("Error: " + e.message); } finally { if (client) client.release(); }
 });
+
+app.get('/imprimir-todos-recibos/:payroll_id', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { payroll_id } = req.params;
+    let client;
+    try {
+        client = await pool.connect();
+        
+        // 1. Traer todos los pagos de este lote, leyendo de payroll_records para tener los descuentos y totales EXACTOS.
+        const recordsRes = await client.query(`
+            SELECT pr.*, 
+                   COALESCE(e.first_name || ' ' || e.last_name, 'Empleado Eliminado') as nombre_completo
+            FROM payroll_records pr
+            LEFT JOIN employees e ON pr.employee_id = e.id
+            WHERE CAST(pr.payroll_id AS TEXT) = $1
+            ORDER BY nombre_completo ASC
+        `, [payroll_id.toString().trim()]);
+        
+        const pagos = recordsRes.rows;
+        if (pagos.length === 0) return res.send("<h1>No hay recibos para esta nómina.</h1>");
+
+        // 2. Traer todos los extras de esta nómina de golpe
+        const extrasRes = await client.query(`
+            SELECT pe.*, q.clientname 
+            FROM payroll_extras pe
+            LEFT JOIN quotes q ON pe.quote_id = q.id
+            WHERE CAST(pe.payroll_id AS TEXT) = $1
+        `, [payroll_id.toString().trim()]);
+        const todosExtras = extrasRes.rows;
+
+        // 3. Generar el bloque HTML de cada recibo
+        let htmlRecibos = '';
+
+        pagos.forEach((pago) => {
+            const extrasEmpleado = todosExtras.filter(ex => ex.employee_id === pago.employee_id);
+            const fechaPago = new Date(pago.pay_date).toLocaleDateString('es-DO');
+            
+            let filasExtras = extrasEmpleado.map(ex => `
+                <tr>
+                    <td>${new Date(ex.payment_date || pago.pay_date).toLocaleDateString('es-DO')}</td>
+                    <td>${ex.description || 'Actividad Extra'}</td>
+                    <td>${ex.clientname || 'Administración'}</td>
+                    <td style="text-align:right;">RD$ ${parseFloat(ex.amount).toFixed(2)}</td>
+                </tr>
+            `).join('');
+
+            let filaDeduccion = '';
+            const totalDeducido = parseFloat(pago.base_salary_paid || 0) + parseFloat(pago.bonuses || 0) - parseFloat(pago.net_pay || 0);
+            if (totalDeducido > 0) {
+                filaDeduccion = `
+                <tr>
+                    <td>${fechaPago}</td>
+                    <td style="color:red; font-weight:bold;">Descuentos / Abono a Préstamo</td>
+                    <td>---</td>
+                    <td style="text-align:right; color:red; font-weight:bold;">- RD$ ${totalDeducido.toFixed(2)}</td>
+                </tr>`;
+            }
+
+            htmlRecibos += `
+                <div class="recibo-container">
+                    <div class="recibo-header">
+                        <h2>RECIBO DE PAGO DE PERSONAL</h2>
+                        <p>Be Eventos - Quincena correspondiente al ${fechaPago}</p>
+                    </div>
+                    
+                    <div class="info-grid">
+                        <div><strong>Colaborador:</strong> ${pago.nombre_completo}</div>
+                        <div style="text-align:right;"><strong>Lote de Pago:</strong> #${payroll_id}</div>
+                    </div>
+
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Fecha</th>
+                                <th>Descripción / Concepto</th>
+                                <th>Centro Educativo</th>
+                                <th style="text-align:right;">Monto (RD$)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>${fechaPago}</td>
+                                <td>Sueldo Fijo Quincenal</td>
+                                <td>---</td>
+                                <td style="text-align:right;">RD$ ${parseFloat(pago.base_salary_paid || 0).toFixed(2)}</td>
+                            </tr>
+                            ${filasExtras}
+                            ${filaDeduccion}
+                        </tbody>
+                    </table>
+
+                    <div class="total-section">
+                        <strong>TOTAL NETO PAGADO:</strong>
+                        <span style="color: #28a745; font-weight: bold; margin-left: 20px; font-size: 1.5em;">RD$ ${parseFloat(pago.net_pay || 0).toFixed(2)}</span>
+                    </div>
+
+                    <div class="firmas-container">
+                        <div style="border-top: 1px solid #000; text-align: center; padding-top: 10px;">Firma de Be Eventos</div>
+                        <div style="border-top: 1px solid #000; text-align: center; padding-top: 10px;">Firma del Colaborador</div>
+                    </div>
+                </div>
+            `;
+        });
+
+        res.send(`
+            <!DOCTYPE html><html lang="es">
+            <head>
+                <meta charset="UTF-8">
+                <title>Recibos Masivos Lote #${payroll_id}</title>
+                <style>
+                    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 0; color: #333; background: #525659; margin: 0;}
+                    .toolbar { background: #fff; padding: 15px; text-align: center; box-shadow: 0 2px 10px rgba(0,0,0,0.2); position: sticky; top: 0; z-index: 100; }
+                    .btn-print { background: #28a745; color: white; padding: 12px 30px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; font-weight: bold; box-shadow: 0 4px 6px rgba(40,167,69,0.3); transition: background 0.3s;}
+                    .btn-print:hover { background: #218838; }
+                    
+                    /* Contenedor individual con salto de página obligatorio */
+                    .recibo-container { 
+                        background: white; 
+                        width: 210mm; /* Ancho A4/Carta */
+                        min-height: 140mm; /* Mitad de página para ahorrar papel */
+                        margin: 30px auto; 
+                        padding: 40px; 
+                        box-sizing: border-box;
+                        box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+                        page-break-after: always; /* MAGIA: Obliga a la impresora a saltar de hoja */
+                    }
+                    
+                    .recibo-header { text-align: center; border-bottom: 2px solid #000; padding-bottom: 15px; margin-bottom: 20px; }
+                    .info-grid { display: grid; grid-template-columns: 1fr 1fr; margin-bottom: 20px; }
+                    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+                    th, td { border: 1px solid #ddd; padding: 10px; text-align: left; font-size: 14px;}
+                    th { background-color: #f2f2f2; font-weight: bold; }
+                    .total-section { margin-top: 25px; text-align: right; font-size: 1.2em; }
+                    .firmas-container { margin-top: 60px; display: grid; grid-template-columns: 1fr 1fr; gap: 60px; }
+                    
+                    /* Esconder lo que no debe salir en papel */
+                    @media print { 
+                        body { background: white; margin: 0; padding: 0;}
+                        .toolbar { display: none !important; }
+                        .recibo-container { box-shadow: none; margin: 0; padding: 20mm; }
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="toolbar">
+                    <button class="btn-print" onclick="window.print()">🖨️ Imprimir ${pagos.length} Recibos Ahora</button>
+                    <p style="margin-top: 10px; color: #666; font-size: 14px; margin-bottom: 0;">Presiona el botón. Cada recibo saldrá perfectamente separado en su propia hoja.</p>
+                </div>
+                ${htmlRecibos}
+            </body></html>`);
+
+    } catch (e) { res.status(500).send("Error: " + e.message); } finally { if (client) client.release(); }
+});
+
 // =============================================================
 // 🚀 PROCESAR NÓMINA (VERSIÓN 2.0: Con Préstamos y Gastos)
 // =============================================================
@@ -5349,6 +5687,9 @@ app.post('/procesar-super-nomina', requireLogin, requireAdminOrCoord, async (req
 
         const batchPayrollId = Date.now(); 
         let totalLote = 0;
+        
+        // ESCUDO 1: Si el frontend no envía fecha, tomamos la de hoy automáticamente de forma segura
+        const fechaNominaSegura = pay_date ? new Date(pay_date) : new Date();
 
         for (const entry of nomina) {
             // FUNCIÓN SALVAVIDAS: Limpia cualquier texto (RD$, comas, espacios) y lo vuelve un número real
@@ -5376,12 +5717,12 @@ app.post('/procesar-super-nomina', requireLogin, requireAdminOrCoord, async (req
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
                 [
                     entry.employee_id, 
-                    pay_date || new Date(), 
+                    fechaNominaSegura, 
                     sueldoBase, 
                     bonos, 
-                    deduccionTotal,   // Ahora sí incluye el préstamo de Yubelis
+                    deduccionTotal,
                     prestamoDeduccion, 
-                    netPayCalculado,  // Usamos nuestro cálculo blindado
+                    netPayCalculado,
                     batchPayrollId
                 ]
             );
@@ -5400,14 +5741,17 @@ app.post('/procesar-super-nomina', requireLogin, requireAdminOrCoord, async (req
             // 3. Registrar Extras y Vincular a Centros
             if (entry.extras && Array.isArray(entry.extras)) {
                 for (const extra of entry.extras) {
-                    const montoExtra = parseFloat(extra.amount || 0);
-                    const centroId = extra.quote_id || extra.centro_id || extra.proyecto_id;
+                    const montoExtra = limpiarNumero(extra.amount);
+                    
+                    // ESCUDO 2: Forzar null absoluto si el quote_id viene vacío para evitar el colapso de Postgres
+                    let centroId = extra.quote_id || extra.centro_id || extra.proyecto_id;
+                    if (String(centroId).trim() === "") centroId = null;
 
                     if (montoExtra > 0) {
                         await client.query(
                             `INSERT INTO payroll_extras (employee_id, quote_id, amount, description, payroll_id) 
                              VALUES ($1, $2, $3, $4, $5)`,
-                            [entry.employee_id, centroId || null, montoExtra, extra.desc, batchPayrollId]
+                            [entry.employee_id, centroId, montoExtra, extra.desc || 'Actividad Extra', batchPayrollId]
                         );
                         
                         // Si es de un centro, creamos el gasto específico del centro
@@ -5415,7 +5759,7 @@ app.post('/procesar-super-nomina', requireLogin, requireAdminOrCoord, async (req
                             await client.query(
                                 `INSERT INTO expenses (quote_id, amount, description, expense_date, supplier_id, type) 
                                  VALUES ($1, $2, $3, CURRENT_DATE, (SELECT id FROM suppliers LIMIT 1), 'Nómina Extra')`,
-                                [centroId, montoExtra, `Pago Nómina Extra: ${extra.desc}`]
+                                [centroId, montoExtra, `Pago Nómina Extra: ${extra.desc || 'Actividad'}`]
                             );
                         }
                     }
@@ -5425,10 +5769,11 @@ app.post('/procesar-super-nomina', requireLogin, requireAdminOrCoord, async (req
 
         // 4. CREAR EL GASTO GLOBAL DE NÓMINA (Para que afecte tus finanzas generales)
         if (totalLote > 0) {
+            const fechaFormateada = fechaNominaSegura.toLocaleDateString('es-DO');
             await client.query(
                 `INSERT INTO expenses (amount, description, expense_date, supplier_id, type, fund_source) 
                  VALUES ($1, $2, $3, (SELECT id FROM suppliers LIMIT 1), 'Nómina', 'Banco')`,
-                [totalLote, `Pago Nómina General (${new Date(pay_date).toLocaleDateString()})`, pay_date || new Date()]
+                [totalLote, `Pago Nómina General (${fechaFormateada})`, fechaNominaSegura]
             );
         }
 
@@ -5450,6 +5795,7 @@ app.post('/procesar-super-nomina', requireLogin, requireAdminOrCoord, async (req
         if (client) client.release();
     }
 });
+
 
 app.get('/imprimir-desembolso/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { id } = req.params;
