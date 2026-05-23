@@ -417,9 +417,11 @@ app.get('/todos-los-centros', requireLogin, requireAdminOrCoord, async (req, res
 });
 
 app.get('/clientes', requireLogin, requireAdminOrCoord, async (req, res) => {
+    let client;
     try {
-        const client = await pool.connect();
-        // Buscamos directamente las cotizaciones que YA activaste ('activa')
+        client = await pool.connect();
+        
+        // 🛑 PUENTE INTOCABLE: Buscamos directamente las cotizaciones que YA activaste ('activa')
         const result = await client.query(`
             SELECT id, clientname, advisorname, quotenumber 
             FROM quotes 
@@ -427,111 +429,111 @@ app.get('/clientes', requireLogin, requireAdminOrCoord, async (req, res) => {
             ORDER BY clientname ASC
         `);
         const projects = result.rows;
-        client.release();
 
-        // Le agregamos la clase "project-row" a cada fila para que el buscador sepa qué ocultar
+        // Extraer los asesores únicos para llenar el menú desplegable automáticamente
+        const asesoresUnicos = [...new Set(projects.map(p => p.advisorname).filter(Boolean))].sort();
+        const opcionesAsesores = asesoresUnicos.map(a => `<option value="${a}">${a}</option>`).join('');
+
+        // Le agregamos la clase "project-row" y el "data-asesor" a cada fila para el buscador combinado
         let projectsHtml = projects.map(proj => `
-            <tr class="project-row">
-                <td style="font-weight: bold; color: var(--primary);"># ${proj.quotenumber}</td>
-                <td>
-                    <a href="/proyecto-detalle/${proj.id}" style="text-decoration: none; font-weight: 600; color: var(--primary);">
+            <tr class="project-row" data-asesor="${proj.advisorname || 'no asignado'}" style="transition: background 0.2s;" onmouseover="this.style.background='#f8f9fa'" onmouseout="this.style.background='white'">
+                <td style="font-weight: bold; color: #4e73df; padding: 15px; border-bottom: 1px solid #eaeaea;"># ${proj.quotenumber}</td>
+                <td style="padding: 15px; border-bottom: 1px solid #eaeaea;">
+                    <a href="/proyecto-detalle/${proj.id}" style="text-decoration: none; font-weight: 600; color: #2c3e50;">
                         ${proj.clientname}
                     </a>
                 </td>
-                <td><span class="advisor-badge">${proj.advisorname || 'No asignado'}</span></td>
-                <td style="text-align: center;">
-                    <a href="/proyecto-detalle/${proj.id}" class="btn" style="padding: 5px 12px; font-size: 13px;">
+                <td style="padding: 15px; border-bottom: 1px solid #eaeaea;">
+                    <span style="background: #e3f2fd; color: #0d47a1; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: bold;">${proj.advisorname || 'No asignado'}</span>
+                </td>
+                <td style="text-align: center; padding: 15px; border-bottom: 1px solid #eaeaea;">
+                    <a href="/proyecto-detalle/${proj.id}" style="text-decoration: none; background: #f8f9fa; color: #495057; border: 1px solid #ced4da; border-radius: 4px; padding: 6px 12px; font-size: 13px; font-weight: bold; transition: 0.2s; display: inline-block;">
                         Ver Proyecto 📂
                     </a>
                 </td>
             </tr>
-        `).join('') || '<tr id="no-results"><td colspan="4" style="text-align: center; padding: 40px; color: #6c757d;">No hay proyectos activos.</td></tr>';
+        `).join('') || '<tr id="no-results"><td colspan="4" style="text-align: center; padding: 40px; color: #6c757d; font-size: 16px;">No hay proyectos activos.</td></tr>';
 
-        // Renderizamos la vista completa con el buscador y su estilo
+        // Renderizamos la vista unificada con el diseño de la Fase 1
         res.send(`
             <!DOCTYPE html>
             <html lang="es">
             <head>
                 ${commonHtmlHead}
-                <style>
-                    /* Estilos para que el buscador se vea moderno */
-                    .search-wrapper {
-                        margin-bottom: 25px;
-                        position: relative;
-                        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
-                        border-radius: 8px;
-                    }
-                    .search-icon {
-                        position: absolute;
-                        left: 15px;
-                        top: 50%;
-                        transform: translateY(-50%);
-                        font-size: 18px;
-                        color: #aeb5be;
-                    }
-                    .search-input {
-                        width: 100%;
-                        padding: 15px 15px 15px 45px;
-                        font-size: 16px;
-                        border: 1px solid #ced4da;
-                        border-radius: 8px;
-                        box-sizing: border-box;
-                        transition: all 0.3s;
-                    }
-                    .search-input:focus {
-                        border-color: #4e73df;
-                        outline: none;
-                        box-shadow: 0 0 0 3px rgba(78, 115, 223, 0.25);
-                    }
-                </style>
             </head>
-            <body>
-                <div class="container" style="max-width: 1100px; padding-bottom: 40px;">
+            <body style="background-color: #f4f6f9;">
+                <div class="container" style="max-width: 1200px; margin: 0 auto; padding-top: 20px; padding-bottom: 40px;">
                     <div style="margin-bottom: 20px;">${backToDashboardLink}</div>
-                    <h2>Proyectos y Centros Activos</h2>
                     
-                    <div class="search-wrapper">
-                        <span class="search-icon">🔍</span>
-                        <input type="text" id="buscadorCentros" class="search-input" onkeyup="filtrarTabla()" placeholder="Buscar por nombre de centro, asesor o ID de cotización...">
+                    <h2 style="margin-bottom: 20px; color: #2c3e50; font-size: 24px;">Proyectos y Centros Activos</h2>
+                    
+                    <div style="background: white; padding: 15px; border-radius: 8px; border: 1px solid #eaeaea; margin-bottom: 20px; display: flex; gap: 15px; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
+                        <div style="flex: 1; position: relative;">
+                            <span style="position: absolute; left: 12px; top: 12px; color: #adb5bd;">🔍</span>
+                            <input type="text" id="buscadorTexto" placeholder="Buscar por nombre de centro o ID..." style="width: 100%; padding: 10px 10px 10px 35px; border: 1px solid #ced4da; border-radius: 6px; font-size: 14px; outline: none; box-sizing: border-box; transition: border-color 0.2s;">
+                        </div>
+                        <div style="width: 250px; position: relative;">
+                            <span style="position: absolute; left: 12px; top: 12px; color: #adb5bd;">👤</span>
+                            <select id="filtroAsesor" style="width: 100%; padding: 10px 10px 10px 35px; border: 1px solid #ced4da; border-radius: 6px; font-size: 14px; outline: none; background: white; color: #495057; cursor: pointer;">
+                                <option value="todos">Todos los asesores</option>
+                                ${opcionesAsesores}
+                            </select>
+                        </div>
                     </div>
 
-                    <table id="tablaCentros" style="width: 100%; border-collapse: collapse; background: white; box-shadow: 0 2px 5px rgba(0,0,0,0.05); border-radius: 8px; overflow: hidden;">
-                        <thead style="background: #f8f9fa;">
-                            <tr>
-                                <th style="padding: 15px; text-align: left; border-bottom: 2px solid #dee2e6;">ID Cotización</th>
-                                <th style="padding: 15px; text-align: left; border-bottom: 2px solid #dee2e6;">Nombre del Cliente / Proyecto</th>
-                                <th style="padding: 15px; text-align: left; border-bottom: 2px solid #dee2e6;">Asesor</th>
-                                <th style="padding: 15px; text-align: center; border-bottom: 2px solid #dee2e6;">Acciones</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${projectsHtml}
-                        </tbody>
-                    </table>
+                    <div style="background: white; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); overflow: hidden; border: 1px solid #eaeaea;">
+                        
+                        <div style="background: #3b82f6; color: white; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center;">
+                            <h3 style="margin: 0; font-size: 18px;">Listado de Centros</h3>
+                            <span style="background: white; color: #3b82f6; padding: 5px 15px; border-radius: 20px; font-size: 13px; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">${projects.length} En Curso</span>
+                        </div>
+
+                        <table id="tablaCentros" style="width: 100%; border-collapse: collapse; text-align: left;">
+                            <thead style="background: #f8f9fa;">
+                                <tr style="border-bottom: 2px solid #dee2e6;">
+                                    <th style="padding: 15px; font-size: 13px; color: #495057;">ID Cotización</th>
+                                    <th style="padding: 15px; font-size: 13px; color: #495057;">Nombre del Cliente / Proyecto</th>
+                                    <th style="padding: 15px; font-size: 13px; color: #495057;">Asesor</th>
+                                    <th style="padding: 15px; font-size: 13px; color: #495057; text-align: center;">Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${projectsHtml}
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
 
                 <script>
-                    function filtrarTabla() {
-                        // Capturamos lo que el usuario está escribiendo y lo pasamos a minúsculas
-                        const input = document.getElementById("buscadorCentros");
-                        const filtro = input.value.toLowerCase();
-                        
-                        // Seleccionamos todas las filas de proyectos
-                        const filas = document.getElementsByClassName("project-row");
+                    const buscadorTexto = document.getElementById('buscadorTexto');
+                    const filtroAsesor = document.getElementById('filtroAsesor');
 
-                        // Recorremos cada fila una por una
-                        for (let i = 0; i < filas.length; i++) {
-                            // Capturamos TODO el texto de esa fila (ID, Nombre y Asesor)
-                            const textoFila = filas[i].textContent || filas[i].innerText;
+                    function aplicarFiltros() {
+                        let texto = buscadorTexto.value.toLowerCase();
+                        let asesorSeleccionado = filtroAsesor.value.toLowerCase();
+                        let filas = document.querySelectorAll('.project-row');
+                        
+                        filas.forEach(function(fila) {
+                            let textoFila = fila.textContent.toLowerCase();
+                            let asesorFila = fila.getAttribute('data-asesor').toLowerCase();
                             
-                            // Si el texto de la fila incluye lo que escribimos, la mostramos. Si no, la ocultamos.
-                            if (textoFila.toLowerCase().indexOf(filtro) > -1) {
-                                filas[i].style.display = "";
+                            // Verifica si cumple con la búsqueda de texto
+                            let cumpleTexto = texto === '' || textoFila.includes(texto);
+                            // Verifica si cumple con el selector de asesor
+                            let cumpleAsesor = asesorSeleccionado === 'todos' || asesorFila === asesorSeleccionado;
+                            
+                            // Solo se muestra si cumple ambas condiciones
+                            if (cumpleTexto && cumpleAsesor) {
+                                fila.style.display = '';
                             } else {
-                                filas[i].style.display = "none";
+                                fila.style.display = 'none';
                             }
-                        }
+                        });
                     }
+
+                    // Escuchar ambos eventos
+                    buscadorTexto.addEventListener('keyup', aplicarFiltros);
+                    filtroAsesor.addEventListener('change', aplicarFiltros);
                 </script>
             </body>
             </html>
@@ -539,13 +541,18 @@ app.get('/clientes', requireLogin, requireAdminOrCoord, async (req, res) => {
     } catch (error) {
         console.error("Error en /clientes:", error);
         res.status(500).send('<h1>Error al obtener la lista ❌</h1>');
+    } finally {
+        if (client) client.release(); // Escudo de seguridad para evitar caídas del servidor
     }
 });
 
+
 app.get('/proyectos-por-activar', requireLogin, requireAdminOrCoord, async (req, res) => {
+    let client;
     try {
-        const client = await pool.connect();
-        // SELECT SIMPLE: Trae todo lo formalizado que no esté oculto/descartado
+        client = await pool.connect();
+        
+        // SELECT SIMPLE: Intocable.
         const result = await client.query(
             `SELECT * FROM quotes 
              WHERE status = 'formalizada' 
@@ -553,65 +560,126 @@ app.get('/proyectos-por-activar', requireLogin, requireAdminOrCoord, async (req,
              ORDER BY createdat ASC`
         );
         const quotes = result.rows;
-        client.release();
 
+        // Extraer los asesores únicos para llenar el menú desplegable automáticamente
+        const asesoresUnicos = [...new Set(quotes.map(q => q.advisorname).filter(Boolean))].sort();
+        const opcionesAsesores = asesoresUnicos.map(a => `<option value="${a}">${a}</option>`).join('');
+
+        // Agregamos data-asesor en el <tr> para que el filtro de JavaScript lo lea fácilmente
         let quotesHtml = quotes.map(quote => `
-            <tr>
-                <td style="font-weight: bold; color: var(--primary);"># ${quote.quotenumber}</td>
+            <tr class="proyecto-row" data-asesor="${quote.advisorname || ''}" style="transition: background 0.2s;" onmouseover="this.style.background='#f8f9fa'" onmouseout="this.style.background='white'">
+                <td style="font-weight: bold; color: #4e73df;"># ${quote.quotenumber}</td>
                 <td style="text-align: center;">
-                    <a href="/ver-cotizacion-pdf/${quote.id}" target="_blank" class="btn" style="padding: 5px 10px; font-size: 13px; background-color: var(--gray); color: white;">
-                        Ver PDF 📄
+                    <a href="/ver-cotizacion-pdf/${quote.id}" target="_blank" style="text-decoration: none; padding: 6px 12px; font-size: 12px; background-color: #f8f9fa; color: #495057; border: 1px solid #ced4da; border-radius: 4px; font-weight: bold; transition: 0.2s;">
+                        📄 Ver PDF
                     </a>
                 </td>
-                <td style="font-weight: 600;">${quote.clientname}</td>
-                <td><span class="advisor-badge">${quote.advisorname}</span></td>
+                <td style="font-weight: 600; color: #2c3e50;">${quote.clientname}</td>
+                <td><span style="background: #e3f2fd; color: #0d47a1; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: bold;">${quote.advisorname}</span></td>
                 <td>
-                    <textarea name="notas_administrativas" rows="2" placeholder="Notas internas..." form="form-activar-${quote.id}"></textarea>
+                    <textarea name="notas_administrativas" rows="2" placeholder="Escribe notas internas aquí..." form="form-activar-${quote.id}" style="width: 100%; padding: 8px; border: 1px solid #ced4da; border-radius: 4px; font-size: 12px; outline: none; resize: vertical; box-sizing: border-box;"></textarea>
                 </td>
                 <td style="text-align: center;">
-                    <div style="display: flex; gap: 8px; justify-content: center;">
-                        <form id="form-activar-${quote.id}" action="/activar-proyecto/${quote.id}" method="POST">
-                            <button type="submit" class="btn btn-activar">Activar</button>
+                    <div style="display: flex; gap: 8px; justify-content: center; align-items: center;">
+                        <form id="form-activar-${quote.id}" action="/activar-proyecto/${quote.id}" method="POST" style="margin: 0;">
+                            <button type="submit" style="background: #28a745; color: white; border: none; padding: 8px 15px; border-radius: 4px; font-weight: bold; cursor: pointer; font-size: 13px; box-shadow: 0 2px 4px rgba(40,167,69,0.2);">✅ Activar</button>
                         </form>
                         
-                        <form action="/descartar-cotizacion/${quote.id}" method="POST" onsubmit="return confirm('¿Seguro que deseas ocultar esta cotización?');">
-                            <button type="submit" class="btn btn-discard" title="Ocultar">✖</button>
+                        <form action="/descartar-cotizacion/${quote.id}" method="POST" onsubmit="return confirm('¿Seguro que deseas archivar esta cotización?');" style="margin: 0;">
+                            <button type="submit" title="Archivar Proyecto" style="background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; padding: 8px 12px; border-radius: 4px; font-weight: bold; cursor: pointer; font-size: 13px;">📦 Archivar</button>
                         </form>
                     </div>
                 </td>
             </tr>
-        `).join('') || '<tr><td colspan="6" style="text-align: center; padding: 40px; color: var(--gray);">No hay proyectos pendientes.</td></tr>';
+        `).join('') || '<tr><td colspan="6" style="text-align: center; padding: 40px; color: #6c757d; font-size: 16px;">No hay proyectos pendientes de activación.</td></tr>';
 
         res.send(`
-            <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
-                <div class="container">
-                    ${backToDashboardLink}
-                   <div class="header-with-button" style="display: flex; justify-content: space-between; align-items: center;">
-    <h2>Proyectos Formalizados por Activar</h2>
-    <a href="/proyectos-descartados" class="btn" style="background-color: var(--gray); color: white; font-size: 13px;">
-        Ver Descartados 🗑️
-    </a>
-</div>
-                    <table>
-                        <thead>
-                            <tr>
-                                <th># ID</th>
-                                <th>Cotización</th>
-                                <th>Cliente / Institución</th>
-                                <th>Asesor</th>
-                                <th>Notas Administrativas</th>
-                                <th>Acciones</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${quotesHtml}
-                        </tbody>
-                    </table>
+            <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head>
+            <body style="background-color: #f4f6f9;">
+                <div class="container" style="max-width: 1200px; margin: 0 auto; padding-top: 20px;">
+                    <div style="margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center;">
+                        ${backToDashboardLink}
+                        <a href="/proyectos-descartados" style="text-decoration: none; background-color: #6c757d; color: white; padding: 8px 16px; border-radius: 6px; font-size: 13px; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                            📦 Ver Archivo (Descartados)
+                        </a>
+                    </div>
+                    
+                    <div style="background: white; padding: 15px; border-radius: 8px; border: 1px solid #eaeaea; margin-bottom: 20px; display: flex; gap: 15px; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
+                        <div style="flex: 1; position: relative;">
+                            <span style="position: absolute; left: 12px; top: 12px; color: #adb5bd;">🔍</span>
+                            <input type="text" id="buscadorTexto" placeholder="Buscar centro o ID de cotización..." style="width: 100%; padding: 10px 10px 10px 35px; border: 1px solid #ced4da; border-radius: 6px; font-size: 14px; outline: none; box-sizing: border-box; transition: border-color 0.2s;">
+                        </div>
+                        <div style="width: 250px; position: relative;">
+                            <span style="position: absolute; left: 12px; top: 12px; color: #adb5bd;">👤</span>
+                            <select id="filtroAsesor" style="width: 100%; padding: 10px 10px 10px 35px; border: 1px solid #ced4da; border-radius: 6px; font-size: 14px; outline: none; background: white; color: #495057; cursor: pointer;">
+                                <option value="todos">Todos los asesores</option>
+                                ${opcionesAsesores}
+                            </select>
+                        </div>
+                    </div>
+
+                    <div style="background: white; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); overflow: hidden; border: 1px solid #eaeaea;">
+                        
+                        <div style="background: #3b82f6; color: white; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center;">
+                            <h3 style="margin: 0; font-size: 18px;">Proyectos Formalizados por Activar</h3>
+                            <span style="background: white; color: #3b82f6; padding: 5px 15px; border-radius: 20px; font-size: 13px; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">${quotes.length} Pendientes</span>
+                        </div>
+
+                        <table style="width: 100%; border-collapse: collapse; text-align: left;">
+                            <thead>
+                                <tr style="background-color: #f8f9fa; border-bottom: 2px solid #dee2e6;">
+                                    <th style="padding: 15px; font-size: 13px; color: #495057;"># ID</th>
+                                    <th style="padding: 15px; font-size: 13px; color: #495057; text-align: center;">Cotización</th>
+                                    <th style="padding: 15px; font-size: 13px; color: #495057;">Cliente / Institución</th>
+                                    <th style="padding: 15px; font-size: 13px; color: #495057;">Asesor</th>
+                                    <th style="padding: 15px; font-size: 13px; color: #495057;">Notas Administrativas</th>
+                                    <th style="padding: 15px; font-size: 13px; color: #495057; text-align: center;">Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tablaProyectos">
+                                ${quotesHtml}
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
+
+                <script>
+                    const buscadorTexto = document.getElementById('buscadorTexto');
+                    const filtroAsesor = document.getElementById('filtroAsesor');
+
+                    function aplicarFiltros() {
+                        let texto = buscadorTexto.value.toLowerCase();
+                        let asesorSeleccionado = filtroAsesor.value.toLowerCase();
+                        let filas = document.querySelectorAll('.proyecto-row');
+                        
+                        filas.forEach(function(fila) {
+                            let textoFila = fila.textContent.toLowerCase();
+                            let asesorFila = fila.getAttribute('data-asesor').toLowerCase();
+                            
+                            // Verifica si cumple con la búsqueda de texto
+                            let cumpleTexto = texto === '' || textoFila.includes(texto);
+                            // Verifica si cumple con el selector de asesor
+                            let cumpleAsesor = asesorSeleccionado === 'todos' || asesorFila === asesorSeleccionado;
+                            
+                            // Solo se muestra si cumple ambas condiciones
+                            if (cumpleTexto && cumpleAsesor) {
+                                fila.style.display = '';
+                            } else {
+                                fila.style.display = 'none';
+                            }
+                        });
+                    }
+
+                    // Escuchar ambos eventos
+                    buscadorTexto.addEventListener('keyup', aplicarFiltros);
+                    filtroAsesor.addEventListener('change', aplicarFiltros);
+                </script>
             </body></html>`);
     } catch (error) {
         console.error("Error en /proyectos-por-activar:", error);
         res.status(500).send('<h1>Error al cargar la página ❌</h1>');
+    } finally {
+        if (client) client.release();
     }
 });
 app.post('/activar-proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
@@ -4588,33 +4656,34 @@ app.get('/proyecto-detalle/:id', requireLogin, requireAdminOrCoord, async (req, 
         ]);
 
         const payments = paymentsResult.rows;
-const expenses = expensesResult.rows;
-const suppliers = suppliersResult.rows;
+        const expenses = expensesResult.rows;
+        const suppliers = suppliersResult.rows;
 
-const montoOriginal = parseFloat(quote.preciofinalporestudiante || 0) * parseFloat(quote.estudiantesparafacturar || 0);
+        const montoOriginal = parseFloat(quote.preciofinalporestudiante || 0) * parseFloat(quote.estudiantesparafacturar || 0);
 
-// Escudo para Ajustes
-const totalAjustes = adjustmentsResult.rows.reduce((sum, adj) => {
-    const val = parseFloat(adj.monto_ajuste);
-    return sum + (isNaN(val) ? 0 : val);
-}, 0);
+        const totalAjustes = adjustmentsResult.rows.reduce((sum, adj) => {
+            const val = parseFloat(adj.monto_ajuste);
+            return sum + (isNaN(val) ? 0 : val);
+        }, 0);
 
-const totalVenta = montoOriginal + totalAjustes;
+        const totalVenta = montoOriginal + totalAjustes;
 
-// Escudo para Abonos
-const totalAbonado = payments.reduce((sum, p) => {
-    const val = parseFloat(p.amount);
-    return sum + (isNaN(val) ? 0 : val);
-}, 0);
+        const totalAbonado = payments.reduce((sum, p) => {
+            const val = parseFloat(p.amount);
+            return sum + (isNaN(val) ? 0 : val);
+        }, 0);
 
-// EL ESCUDO CRÍTICO: Aquí es donde limpiamos el total gastado de la Imagen 2
-const totalGastado = expenses.reduce((sum, e) => {
-    const val = parseFloat(e.amount);
-    return sum + (isNaN(val) ? 0 : val);
-}, 0);
+        const totalGastado = expenses.reduce((sum, e) => {
+            const val = parseFloat(e.amount);
+            return sum + (isNaN(val) ? 0 : val);
+        }, 0);
 
-const rentabilidad = totalAbonado - totalGastado;
+        const rentabilidad = totalAbonado - totalGastado;
         
+        // --- VERIFICACIÓN DE TRANSACCIONES PARA EL BOTÓN DE REVERTIR ---
+        const tieneTransacciones = payments.length > 0 || expenses.length > 0;
+        const disabledAttr = tieneTransacciones ? 'disabled title="Debes borrar todos los abonos y gastos antes de revertir"' : '';
+        const revertirStyle = tieneTransacciones ? 'background-color: #e0e0e0; color: #9e9e9e; cursor: not-allowed;' : 'background-color: #dc3545; color: white;';
 
         let adjustmentsHtml = adjustmentsResult.rows.map(adj => `
             <tr>
@@ -4627,37 +4696,46 @@ const rentabilidad = totalAbonado - totalGastado;
             </tr>
         `).join('') || '<tr><td colspan="4">No hay ajustes registrados.</td></tr>';
 
+        // --- ABONOS CON BOTONES DE EDICIÓN Y ELIMINACIÓN ---
         let paymentsHtml = payments.map(p => `
             <tr>
                 <td>${new Date(p.payment_date).toLocaleDateString()}</td>
                 <td style="font-weight:600; color:var(--success);">$${parseFloat(p.amount).toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
                 <td>${p.students_covered || 'N/A'}</td>
                 <td>${p.comment || ''}</td>
-                <td style="text-align: center;">
-                    <a href="/recibo-pago/${p.id}/pdf" target="_blank" class="btn" 
-                       style="background-color: #4e73df; color:white; padding: 6px 12px; font-size: 11px; font-weight: bold; text-decoration: none; border-radius: 4px; display: inline-block;">
-                       🖨️ Recibo
-                    </a>
+                <td style="text-align: center; display: flex; gap: 5px; justify-content: center;">
+                    <a href="/recibo-pago/${p.id}/pdf" target="_blank" class="btn" style="background-color: #4e73df; color:white; padding: 4px 8px; font-size: 11px; font-weight: bold; text-decoration: none; border-radius: 4px;" title="Imprimir Recibo">🖨️</a>
+                    
+                    <button onclick="editarPago(${p.id}, '${p.amount}', '${p.comment}')" class="btn" style="background-color: #f6c23e; color:white; padding: 4px 8px; font-size: 11px; font-weight: bold; border: none; border-radius: 4px; cursor: pointer;" title="Editar Abono">✏️</button>
+                    
+                    <form action="/proyecto/${quote.id}/eliminar-pago/${p.id}" method="POST" style="margin:0;" onsubmit="return confirm('ADMINISTRADOR: ¿Seguro que deseas eliminar este abono? La rentabilidad bajará automáticamente.');">
+                        <button type="submit" class="btn" style="background-color: #e74a3b; color:white; padding: 4px 8px; font-size: 11px; font-weight: bold; border: none; border-radius: 4px; cursor: pointer;" title="Eliminar Abono">🗑️</button>
+                    </form>
                 </td>
             </tr>
-        `).join('') || '<tr><td colspan="5">No hay pagos registrados.</td></tr>';
+        `).join('') || '<tr><td colspan="5" style="text-align:center;">No hay pagos registrados.</td></tr>';
 
+        // --- GASTOS CON BOTONES DE EDICIÓN Y ELIMINACIÓN ---
         let expensesHtml = expenses.map(e => {
-    const montoLimpio = isNaN(parseFloat(e.amount)) ? 0 : parseFloat(e.amount);
-    return `
-        <tr>
-            <td>${new Date(e.expense_date).toLocaleDateString()}</td>
-            <td><b>${e.supplier_name}</b></td>
-            <td>${e.description}</td>
-            <td style="font-weight: 700; color: var(--danger);">$${montoLimpio.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
-            <td><span style="font-size: 10px; background: #f8f9fc; padding: 2px 5px; border-radius: 4px;">${e.type || 'N/A'}</span></td>
-            <td style="text-align: center;">
-                <a href="/desembolso/${e.id}/pdf" target="_blank" class="btn" style="background-color: #5a5c69; color:white; padding: 6px 12px; font-size: 11px; font-weight: bold; text-decoration: none; border-radius: 4px; display: inline-block;">
-                    📄 Imprimir
-                </a>
-            </td>
-        </tr>`;
-}).join('') || '<tr><td colspan="6">No hay gastos registrados.</td></tr>';
+            const montoLimpio = isNaN(parseFloat(e.amount)) ? 0 : parseFloat(e.amount);
+            return `
+                <tr>
+                    <td>${new Date(e.expense_date).toLocaleDateString()}</td>
+                    <td><b>${e.supplier_name}</b></td>
+                    <td>${e.description}</td>
+                    <td style="font-weight: 700; color: var(--danger);">$${montoLimpio.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+                    <td><span style="font-size: 10px; background: #f8f9fc; padding: 2px 5px; border-radius: 4px;">${e.type || 'N/A'}</span></td>
+                    <td style="text-align: center; display: flex; gap: 5px; justify-content: center;">
+                        <a href="/desembolso/${e.id}/pdf" target="_blank" class="btn" style="background-color: #5a5c69; color:white; padding: 4px 8px; font-size: 11px; font-weight: bold; text-decoration: none; border-radius: 4px;" title="Imprimir Comprobante">📄</a>
+                        
+                        <button onclick="editarGasto(${e.id}, '${e.amount}', '${e.description}')" class="btn" style="background-color: #f6c23e; color:white; padding: 4px 8px; font-size: 11px; font-weight: bold; border: none; border-radius: 4px; cursor: pointer;" title="Editar Gasto">✏️</button>
+                        
+                        <form action="/proyecto/${quote.id}/eliminar-gasto/${e.id}" method="POST" style="margin:0;" onsubmit="return confirm('ADMINISTRADOR: ¿Seguro que deseas eliminar este gasto? La rentabilidad subirá automáticamente.');">
+                            <button type="submit" class="btn" style="background-color: #e74a3b; color:white; padding: 4px 8px; font-size: 11px; font-weight: bold; border: none; border-radius: 4px; cursor: pointer;" title="Eliminar Gasto">🗑️</button>
+                        </form>
+                    </td>
+                </tr>`;
+        }).join('') || '<tr><td colspan="6" style="text-align:center;">No hay gastos registrados.</td></tr>';
         
         let suppliersOptionsHtml = suppliers.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
 
@@ -4666,11 +4744,23 @@ const rentabilidad = totalAbonado - totalGastado;
             <head>
                 ${commonHtmlHead.replace('<title>Panel de Administración</title>', `<title>Proyecto ${quote.clientname}</title>`)}
                 <style>
-                    .summary-box { position: relative; padding-top: 35px; }
-                    .btn-ajustar-top { position: absolute; top: 15px; right: 15px; font-size: 12px; padding: 5px 12px; background-color: var(--primary); color: white; border-radius: 6px; }
-                    .section-header { display: flex; justify-content: space-between; align-items: center; margin: 40px 0 20px 0; border-bottom: 2px solid #eee; padding-bottom: 10px; }
-                    .btn-main-action { padding: 12px 25px; font-size: 15px; margin-top: 15px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
-                </style>
+    .summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin-bottom: 35px; }
+    .summary-box { background: white; padding: 25px 20px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.04); border: 1px solid #eaeaea; position: relative; display: flex; flex-direction: column; justify-content: center; }
+    .summary-box h3 { margin: 0 0 10px 0; font-size: 13px; color: #6c757d; text-transform: uppercase; font-weight: 700; letter-spacing: 0.5px; }
+    .summary-box .amount { font-size: 26px; font-weight: 800; margin: 0; color: #2c3e50; }
+    .amount.green { color: #28a745 !important; }
+    .amount.orange { color: #fd7e14 !important; }
+    .amount.blue { color: #4e73df !important; }
+    .btn-ajustar-top { position: absolute; top: 15px; right: 15px; font-size: 11px; padding: 4px 8px; background-color: #f8f9fa; color: #495057; border: 1px solid #ced4da; border-radius: 4px; cursor: pointer; font-weight: bold; transition: 0.2s; }
+    .btn-ajustar-top:hover { background-color: #e2e6ea; }
+    .section-header { display: flex; justify-content: space-between; align-items: center; margin: 40px 0 20px 0; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+    .btn-main-action { padding: 12px 25px; font-size: 14px; margin-top: 15px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); border: none; cursor: pointer; border-radius: 6px; font-weight: bold; }
+    .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); }
+    .modal-content { background-color: #fefefe; margin: 15% auto; padding: 20px; border: 1px solid #888; width: 400px; border-radius: 10px; }
+    
+    /* Para que en pantallas pequeñas se pongan de 2 en 2 */
+    @media (max-width: 900px) { .summary { grid-template-columns: repeat(2, 1fr); } }
+</style>
             </head>
             <body>
                 <div class="container">
@@ -4679,58 +4769,69 @@ const rentabilidad = totalAbonado - totalGastado;
                         <h1 style="margin:0; color: #2c3e50;">${quote.clientname}</h1>
                         <p style="color: #6c757d; margin-bottom: 15px; font-size: 15px;">Cotización #${quote.quotenumber} &bull; Asesor: ${quote.advisorname}</p>
                         
-                        <a href="/ver-cotizacion-pdf/${quote.id}" target="_blank" class="btn" 
-                           style="background-color: #5a5c69; color: white; padding: 8px 16px; font-size: 13px; font-weight: bold; text-decoration: none; border-radius: 6px; display: inline-flex; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); transition: background 0.2s;">
-                           📄 Ver Cotización Original (PDF)
-                        </a>
-                        <a href="/proyecto-informe/${quote.id}" target="_blank" class="btn" 
-                           style="background-color: #17a2b8; color: white; padding: 8px 16px; font-size: 13px; font-weight: bold; text-decoration: none; border-radius: 6px; display: inline-flex; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); transition: background 0.2s; margin-left: 10px;">
-                           📊 Imprimir Informe del Proyecto
-                        </a>
+                        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                            <a href="/ver-cotizacion-pdf/${quote.id}" target="_blank" class="btn" style="background-color: #5a5c69; color: white; padding: 8px 16px; font-size: 13px; font-weight: bold; text-decoration: none; border-radius: 6px; display: inline-flex; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">📄 Ver Cotización Original (PDF)</a>
+                            <a href="/proyecto-informe/${quote.id}" target="_blank" class="btn" style="background-color: #17a2b8; color: white; padding: 8px 16px; font-size: 13px; font-weight: bold; text-decoration: none; border-radius: 6px; display: inline-flex; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">📊 Imprimir Informe del Proyecto</a>
+                            
+                            <form action="/revertir-proyecto/${quote.id}" method="POST" style="margin: 0;" onsubmit="return confirm('ADMINISTRADOR: ¿Seguro que deseas desactivar este centro y regresarlo a la bandeja de pendientes?');">
+                                <button type="submit" class="btn" ${disabledAttr} style="${revertirStyle} border: none; padding: 8px 16px; font-size: 13px; font-weight: bold; border-radius: 6px; display: inline-flex; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); cursor: ${tieneTransacciones ? 'not-allowed' : 'pointer'};">
+                                    ↩️ Revertir a Pendiente
+                                </button>
+                            </form>
+                        </div>
                     </div>
 
                     <div class="summary">
-                        <div class="summary-box">
-                            <button onclick="abrirModalAjuste()" class="btn btn-ajustar-top">⚙️ Ajustar Venta</button>
-                            <h3>Monto Total Venta</h3>
-                            <p class="amount">$${totalVenta.toFixed(2)}</p>
-                        </div>
-                        <div class="summary-box"><h3>Total Abonado</h3><p class="amount green">$${totalAbonado.toFixed(2)}</p></div>
-                        <div class="summary-box"><h3>Total Gastado</h3><p class="amount orange">$${totalGastado.toFixed(2)}</p></div>
-                        <div class="summary-box"><h3>Rentabilidad Actual</h3><p class="amount blue">$${rentabilidad.toFixed(2)}</p></div>
+    <div class="summary-box" style="border-bottom: 4px solid #858796;">
+        <button onclick="abrirModalAjuste()" class="btn-ajustar-top" title="Ajustar Venta">⚙️ Ajustar</button>
+        <h3>Monto Total Venta</h3>
+        <p class="amount">$${totalVenta.toLocaleString('en-US', {minimumFractionDigits: 2})}</p>
+    </div>
+    <div class="summary-box" style="border-bottom: 4px solid #28a745;">
+        <h3>Total Abonado</h3>
+        <p class="amount green">$${totalAbonado.toLocaleString('en-US', {minimumFractionDigits: 2})}</p>
+    </div>
+    <div class="summary-box" style="border-bottom: 4px solid #fd7e14;">
+        <h3>Total Gastado</h3>
+        <p class="amount orange">$${totalGastado.toLocaleString('en-US', {minimumFractionDigits: 2})}</p>
+    </div>
+    <div class="summary-box" style="border-bottom: 4px solid #4e73df; background-color: #f8f9fc;">
+        <h3>Rentabilidad Actual</h3>
+        <p class="amount blue">$${rentabilidad.toLocaleString('en-US', {minimumFractionDigits: 2})}</p>
+    </div>
+</div>
+                    <div class="section-header"><h2>Ingresos (Abonos Realizados)</h2></div>
+                    <table><thead><tr><th>Fecha</th><th>Monto</th><th>Estudiantes</th><th>Comentario</th><th style="text-align: center;">Acciones</th></tr></thead><tbody>${paymentsHtml}</tbody></table>
+                    <button class="btn btn-activar btn-main-action" style="background-color: #28a745; color: white;" onclick="toggleForm('payment-form-container')">+ Registrar Nuevo Abono</button>
+                    
+                    <div id="payment-form-container" class="form-container" style="display: none; margin-top:20px; padding: 20px; background: white; border-radius: 8px; border: 1px solid #eaeaea;">
+                        <h3 style="margin-top:0; color:#4e73df;">Registrar Nuevo Pago Recibido</h3>
+                        <form action="/proyecto/${quote.id}/nuevo-pago" method="POST">
+                            <input type="hidden" name="centerId" value="${quote.id}"> 
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                                <div class="form-group" style="display:flex; flex-direction:column;"><label style="font-weight:bold; font-size:13px; margin-bottom:5px;">Fecha de Pago:</label><input type="date" name="payment_date" required style="padding:8px; border:1px solid #ccc; border-radius:4px;"></div>
+                                <div class="form-group" style="display:flex; flex-direction:column;"><label style="font-weight:bold; font-size:13px; margin-bottom:5px;">Monto Recibido ($):</label><input type="number" name="amount" step="0.01" required style="padding:8px; border:1px solid #ccc; border-radius:4px;"></div>
+                                <div class="form-group" style="grid-column: span 2; display:flex; flex-direction:column;"><label style="font-weight:bold; font-size:13px; margin-bottom:5px;">Comentario / Referencia:</label><textarea name="comment" rows="2" style="padding:8px; border:1px solid #ccc; border-radius:4px;"></textarea></div>
+                            </div>
+                            <button type="submit" class="btn btn-activar" style="background-color: #28a745; color: white; padding: 10px 20px; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; margin-top: 15px;">Confirmar y Guardar Abono</button>
+                        </form>
                     </div>
 
-                    <div class="section-header"><h2>Ingresos (Abonos Realizados)</h2></div>
-                    <table><thead><tr><th>Fecha</th><th>Monto</th><th>Estudiantes</th><th>Comentario</th><th>Acciones</th></tr></thead><tbody>${paymentsHtml}</tbody></table>
-                    <button class="btn btn-activar btn-main-action" onclick="toggleForm('payment-form-container')">+ Registrar Nuevo Abono</button>
-                    
-                    
-<div id="payment-form-container" class="form-container" style="display: none; margin-top:20px;">
-    <h3>Registrar Nuevo Pago Recibido</h3>
-    <form action="/proyecto/${quote.id}/nuevo-pago" method="POST">
-        <input type="hidden" name="centerId" value="${quote.id}"> 
-        
-        <div class="form-group"><label>Fecha de Pago:</label><input type="date" name="payment_date" required></div>
-        <div class="form-group"><label>Monto Recibido ($):</label><input type="number" name="amount" step="0.01" required></div>
-        
-        <div class="form-group"><label>Comentario / Referencia:</label><textarea name="comment" rows="2"></textarea></div>
-        <button type="submit" class="btn btn-activar">Confirmar y Guardar Abono</button>
-    </form>
-</div>
-
                     <div class="section-header"><h2>Egresos (Gastos del Proyecto)</h2></div>
-                    <table><thead><tr><th>Fecha</th><th>Suplidor</th><th>Descripción</th><th>Monto</th><th>Tipo</th><th>Acciones</th></tr></thead><tbody>${expensesHtml}</tbody></table>
+                    <table><thead><tr><th>Fecha</th><th>Suplidor</th><th>Descripción</th><th>Monto</th><th>Tipo</th><th style="text-align: center;">Acciones</th></tr></thead><tbody>${expensesHtml}</tbody></table>
                     <button class="btn btn-main-action" style="background-color: #fd7e14; color: white;" onclick="toggleForm('expense-form-container')">+ Registrar Nuevo Gasto</button>
                     
-                    <div id="expense-form-container" class="form-container" style="display: none; margin-top:20px;">
-                        <h3>Registrar Nuevo Egreso / Gasto</h3>
+                    <div id="expense-form-container" class="form-container" style="display: none; margin-top:20px; padding: 20px; background: white; border-radius: 8px; border: 1px solid #eaeaea;">
+                        <h3 style="margin-top:0; color:#fd7e14;">Registrar Nuevo Egreso / Gasto</h3>
                         <form action="/proyecto/${quote.id}/nuevo-gasto" method="POST">
-                            <div class="form-group"><label>Fecha del Gasto:</label><input type="date" name="expense_date" required></div>
-                            <div class="form-group"><label>Suplidor:</label><select name="supplier_id" required><option value="">Seleccione un suplidor...</option>${suppliersOptionsHtml}</select></div>
-                            <div class="form-group"><label>Monto del Gasto ($):</label><input type="number" name="amount" step="0.01" required></div>
-                            <div class="form-group"><label>Descripción / Detalle:</label><textarea name="description" rows="2" required></textarea></div>
-                            <div class="form-group"><label>Tipo de Comprobante:</label><select name="type"><option value="Sin Valor Fiscal">Sin Valor Fiscal</option><option value="Con Valor Fiscal">Con Valor Fiscal</option></select></div>
-                            <button type="submit" class="btn" style="background-color: #fd7e14; color: white;">Confirmar y Guardar Gasto</button>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                                <div class="form-group" style="display:flex; flex-direction:column;"><label style="font-weight:bold; font-size:13px; margin-bottom:5px;">Fecha del Gasto:</label><input type="date" name="expense_date" required style="padding:8px; border:1px solid #ccc; border-radius:4px;"></div>
+                                <div class="form-group" style="display:flex; flex-direction:column;"><label style="font-weight:bold; font-size:13px; margin-bottom:5px;">Suplidor:</label><select name="supplier_id" required style="padding:8px; border:1px solid #ccc; border-radius:4px;"><option value="">Seleccione un suplidor...</option>${suppliersOptionsHtml}</select></div>
+                                <div class="form-group" style="display:flex; flex-direction:column;"><label style="font-weight:bold; font-size:13px; margin-bottom:5px;">Monto del Gasto ($):</label><input type="number" name="amount" step="0.01" required style="padding:8px; border:1px solid #ccc; border-radius:4px;"></div>
+                                <div class="form-group" style="display:flex; flex-direction:column;"><label style="font-weight:bold; font-size:13px; margin-bottom:5px;">Tipo de Comprobante:</label><select name="type" style="padding:8px; border:1px solid #ccc; border-radius:4px;"><option value="Sin Valor Fiscal">Sin Valor Fiscal</option><option value="Con Valor Fiscal">Con Valor Fiscal</option></select></div>
+                                <div class="form-group" style="grid-column: span 2; display:flex; flex-direction:column;"><label style="font-weight:bold; font-size:13px; margin-bottom:5px;">Descripción / Detalle:</label><textarea name="description" rows="2" required style="padding:8px; border:1px solid #ccc; border-radius:4px;"></textarea></div>
+                            </div>
+                            <button type="submit" class="btn" style="background-color: #fd7e14; color: white; padding: 10px 20px; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; margin-top: 15px;">Confirmar y Guardar Gasto</button>
                         </form>
                     </div>
 
@@ -4738,11 +4839,57 @@ const rentabilidad = totalAbonado - totalGastado;
                     <table><thead><tr><th>Fecha y Hora</th><th>Monto del Ajuste</th><th>Motivo</th><th>Usuario</th></tr></thead><tbody>${adjustmentsHtml}</tbody></table>
                 </div>
 
+                <div id="modalEditarPago" class="modal">
+                    <div class="modal-content">
+                        <h3 style="margin-top:0; color:#f6c23e;">✏️ Editar Abono</h3>
+                        <form id="formEditarPago" method="POST">
+                            <input type="hidden" id="edit_pago_id" name="pago_id">
+                            <div class="form-group" style="margin-bottom:15px;"><label style="font-weight:bold; font-size:13px; display:block; margin-bottom:5px;">Monto Correcto ($):</label><input type="number" id="edit_pago_monto" name="amount" step="0.01" required style="width:100%; padding:8px; box-sizing:border-box;"></div>
+                            <div class="form-group" style="margin-bottom:15px;"><label style="font-weight:bold; font-size:13px; display:block; margin-bottom:5px;">Comentario:</label><input type="text" id="edit_pago_comentario" name="comment" style="width:100%; padding:8px; box-sizing:border-box;"></div>
+                            <div style="display:flex; justify-content:flex-end; gap:10px;">
+                                <button type="button" onclick="document.getElementById('modalEditarPago').style.display='none'" style="padding:8px 15px; cursor:pointer;">Cancelar</button>
+                                <button type="submit" style="background-color:#f6c23e; color:white; border:none; padding:8px 15px; font-weight:bold; cursor:pointer;">Guardar Cambios</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <div id="modalEditarGasto" class="modal">
+                    <div class="modal-content">
+                        <h3 style="margin-top:0; color:#f6c23e;">✏️ Editar Gasto</h3>
+                        <form id="formEditarGasto" method="POST">
+                            <input type="hidden" id="edit_gasto_id" name="gasto_id">
+                            <div class="form-group" style="margin-bottom:15px;"><label style="font-weight:bold; font-size:13px; display:block; margin-bottom:5px;">Monto Correcto ($):</label><input type="number" id="edit_gasto_monto" name="amount" step="0.01" required style="width:100%; padding:8px; box-sizing:border-box;"></div>
+                            <div class="form-group" style="margin-bottom:15px;"><label style="font-weight:bold; font-size:13px; display:block; margin-bottom:5px;">Descripción:</label><input type="text" id="edit_gasto_desc" name="description" required style="width:100%; padding:8px; box-sizing:border-box;"></div>
+                            <div style="display:flex; justify-content:flex-end; gap:10px;">
+                                <button type="button" onclick="document.getElementById('modalEditarGasto').style.display='none'" style="padding:8px 15px; cursor:pointer;">Cancelar</button>
+                                <button type="submit" style="background-color:#f6c23e; color:white; border:none; padding:8px 15px; font-weight:bold; cursor:pointer;">Guardar Cambios</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
                 <script>
                     function toggleForm(id) { 
                         const el = document.getElementById(id); 
                         el.style.display = (el.style.display === 'none' || el.style.display === '') ? 'block' : 'none'; 
                         if(el.style.display === 'block') el.scrollIntoView({ behavior: 'smooth' });
+                    }
+                    
+                    function editarPago(id, monto, comentario) {
+                        document.getElementById('edit_pago_id').value = id;
+                        document.getElementById('edit_pago_monto').value = monto;
+                        document.getElementById('edit_pago_comentario').value = comentario === 'null' ? '' : comentario;
+                        document.getElementById('formEditarPago').action = '/proyecto/${quote.id}/editar-pago/' + id;
+                        document.getElementById('modalEditarPago').style.display = 'block';
+                    }
+
+                    function editarGasto(id, monto, descripcion) {
+                        document.getElementById('edit_gasto_id').value = id;
+                        document.getElementById('edit_gasto_monto').value = monto;
+                        document.getElementById('edit_gasto_desc').value = descripcion;
+                        document.getElementById('formEditarGasto').action = '/proyecto/${quote.id}/editar-gasto/' + id;
+                        document.getElementById('modalEditarGasto').style.display = 'block';
                     }
                     
                     async function abrirModalAjuste() {
@@ -4773,7 +4920,126 @@ const rentabilidad = totalAbonado - totalGastado;
         if (client) client.release();
     }
 });
+// ============================================================================
+// RUTAS DE AUDITORÍA Y CONTROL ESTRICTO (SOLO ADMINISTRADOR)
+// ============================================================================
 
+// --- ESCUDO DE SEGURIDAD FINAL ---
+const verificarSoloAdmin = (req, res, next) => {
+    // Leemos exactamente la ruta que vimos en tu terminal
+    const rol = (req.session?.user?.rol || '').toLowerCase();
+    
+    if (rol === 'administrador' || rol === 'admin') {
+        return next(); // Pasa directo, eres tú.
+    }
+    
+    return res.status(403).send(`
+        <div style="text-align: center; margin-top: 50px; font-family: Arial;">
+            <h1 style="color: #e74a3b;">Acceso Denegado ❌</h1>
+            <p>Solo el Administrador principal puede modificar la auditoría financiera.</p>
+            <a href="javascript:history.back()" style="padding: 10px 20px; background: #4e73df; color: white; text-decoration: none; border-radius: 5px;">Volver Atrás</a>
+        </div>
+    `);
+};
+
+// --- 1. REVERTIR PROYECTO A PENDIENTE ---
+app.post('/revertir-proyecto/:id', requireLogin, verificarSoloAdmin, async (req, res) => {
+    const quoteId = req.params.id;
+    let client;
+    try {
+        client = await pool.connect();
+        
+        // Doble verificación en backend: Asegurar que realmente está en cero
+        const check = await client.query(`
+            SELECT 
+                (SELECT COUNT(*) FROM payments WHERE quote_id = $1) as abonos,
+                (SELECT COUNT(*) FROM expenses WHERE quote_id = $1) as gastos
+        `, [quoteId]);
+        
+        if (parseInt(check.rows[0].abonos) > 0 || parseInt(check.rows[0].gastos) > 0) {
+            return res.status(400).send('<h1>Alerta de Seguridad: El proyecto aún tiene transacciones. Bórralas primero. ❌</h1>');
+        }
+
+        // Reversión segura
+        await client.query("UPDATE quotes SET status = 'formalizada' WHERE id = $1", [quoteId]);
+        res.redirect('/clientes');
+    } catch (error) {
+        console.error("Error al revertir:", error);
+        res.status(500).send('<h1>Error al revertir el proyecto ❌</h1>');
+    } finally {
+        if (client) client.release();
+    }
+});
+
+// --- 2. ELIMINAR ABONO ---
+app.post('/proyecto/:quoteId/eliminar-pago/:pagoId', requireLogin, verificarSoloAdmin, async (req, res) => {
+    let client;
+    try {
+        client = await pool.connect();
+        await client.query('DELETE FROM payments WHERE id = $1 AND quote_id = $2', [req.params.pagoId, req.params.quoteId]);
+        res.redirect(`/proyecto-detalle/${req.params.quoteId}`);
+    } catch (error) {
+        console.error("Error al eliminar pago:", error);
+        res.status(500).send('<h1>Error al eliminar ❌</h1>');
+    } finally {
+        if (client) client.release();
+    }
+});
+
+// --- 3. EDITAR ABONO ---
+app.post('/proyecto/:quoteId/editar-pago/:pagoId', requireLogin, verificarSoloAdmin, async (req, res) => {
+    const { amount, comment } = req.body;
+    const montoLimpio = parseFloat(String(amount).replace(/[^0-9.-]+/g, "")) || 0;
+    let client;
+    try {
+        client = await pool.connect();
+        await client.query(
+            'UPDATE payments SET amount = $1, comment = $2 WHERE id = $3 AND quote_id = $4', 
+            [montoLimpio, comment || null, req.params.pagoId, req.params.quoteId]
+        );
+        res.redirect(`/proyecto-detalle/${req.params.quoteId}`);
+    } catch (error) {
+        console.error("Error al editar pago:", error);
+        res.status(500).send('<h1>Error al editar ❌</h1>');
+    } finally {
+        if (client) client.release();
+    }
+});
+
+// --- 4. ELIMINAR GASTO ---
+app.post('/proyecto/:quoteId/eliminar-gasto/:gastoId', requireLogin, verificarSoloAdmin, async (req, res) => {
+    let client;
+    try {
+        client = await pool.connect();
+        await client.query('DELETE FROM expenses WHERE id = $1 AND quote_id = $2', [req.params.gastoId, req.params.quoteId]);
+        res.redirect(`/proyecto-detalle/${req.params.quoteId}`);
+    } catch (error) {
+        console.error("Error al eliminar gasto:", error);
+        res.status(500).send('<h1>Error al eliminar ❌</h1>');
+    } finally {
+        if (client) client.release();
+    }
+});
+
+// --- 5. EDITAR GASTO ---
+app.post('/proyecto/:quoteId/editar-gasto/:gastoId', requireLogin, verificarSoloAdmin, async (req, res) => {
+    const { amount, description } = req.body;
+    const montoLimpio = parseFloat(String(amount).replace(/[^0-9.-]+/g, "")) || 0;
+    let client;
+    try {
+        client = await pool.connect();
+        await client.query(
+            'UPDATE expenses SET amount = $1, description = $2 WHERE id = $3 AND quote_id = $4', 
+            [montoLimpio, description, req.params.gastoId, req.params.quoteId]
+        );
+        res.redirect(`/proyecto-detalle/${req.params.quoteId}`);
+    } catch (error) {
+        console.error("Error al editar gasto:", error);
+        res.status(500).send('<h1>Error al editar ❌</h1>');
+    } finally {
+        if (client) client.release();
+    }
+});
 // =============================================================
 // 📊 GENERAR INFORME IMPRIMIBLE DEL PROYECTO
 // =============================================================
