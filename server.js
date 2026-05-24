@@ -263,84 +263,101 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
         if (isAdmin) {
             const CYCLE_START = '2025-08-01'; // Inicio de Temporada
 
-            // 1. CONSULTA DE TOTALES GLOBALES (Mejorada para coincidir con el reporte mensual)
-            const globalStats = await client.query(`
+            // Función ULTRA SEGURA (Mejorada para limpiar comas por si SQL envía texto)
+            const safeFloat = (val) => {
+                if (!val) return 0;
+                const strVal = val.toString().replace(/,/g, ''); // Quitamos comas si existen
+                const n = parseFloat(strVal);
+                return isNaN(n) ? 0 : n;
+            };
+
+            // 1. CONSULTA DE VENTAS Y COBROS (Entradas)
+            const ingresosRes = await client.query(`
                 SELECT 
-                    -- VENTA NETA
                     (SELECT COALESCE(SUM((preciofinalporestudiante - COALESCE(aporte_institucion, 0)) * estudiantesparafacturar), 0) 
                      FROM quotes WHERE status = 'activa' AND createdat >= $1) as venta_contratada,
-
-                    -- COBROS REALES
-                    (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE payment_date >= $1) as total_cobrado,
-
-                    -- GASTOS TOTALES (SUMA DIRECTA DE LAS 3 FUENTES DE SALIDA)
-                    (
-                        (SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE expense_date >= $1) +
-                        (SELECT COALESCE(SUM(commission_amount), 0) FROM commissions WHERE status = 'pagada' AND created_at >= $1) +
-                        (SELECT COALESCE(SUM(net_pay), 0) FROM payroll_records WHERE pay_date >= $1)
-                    ) as total_gastado_real
+                    (SELECT COALESCE(SUM(amount), 0) 
+                     FROM payments WHERE payment_date >= $1) as total_cobrado
             `, [CYCLE_START]);
 
-            const stats = globalStats.rows[0];
-            const safe = (val) => parseFloat(val) || 0;
-            
-            const ventaTotal = safe(stats.venta_contratada);
-            const cobradoTotal = safe(stats.total_cobrado);
-            const gastoTotalCiclo = safe(stats.total_gastado_real); // Ahora viene sumado directo de BD
-            
-            // Disponibilidad (Caja)
-            const disponibilidad = cobradoTotal - gastoTotalCiclo;
+            // 2. CONSULTAS DE GASTOS (Usamos la misma táctica ganadora del reporte: GROUP BY)
+            const expensesRes = await client.query(`SELECT TO_CHAR(expense_date, 'YYYY-MM') as mes, SUM(amount) as total FROM expenses WHERE expense_date >= $1 GROUP BY 1`, [CYCLE_START]);
+            const payrollRes = await client.query(`SELECT TO_CHAR(pay_date, 'YYYY-MM') as mes, SUM(net_pay) as total FROM payroll_records WHERE pay_date >= $1 GROUP BY 1`, [CYCLE_START]);
+            const commRes = await client.query(`SELECT TO_CHAR(created_at, 'YYYY-MM') as mes, SUM(commission_amount) as total FROM commissions WHERE status = 'pagada' AND created_at >= $1 GROUP BY 1`, [CYCLE_START]);
 
-            // 2. CÁLCULO DE PROMEDIO MENSUAL Y COBERTURA
+            const ventaTotal = safeFloat(ingresosRes.rows[0].venta_contratada);
+            const cobradoTotal = safeFloat(ingresosRes.rows[0].total_cobrado);
+            
+            // Sumamos los pedazos mensuales aquí mismo, replicando el reporte
+            const operativo = expensesRes.rows.reduce((sum, row) => sum + safeFloat(row.total), 0);
+            const nomina = payrollRes.rows.reduce((sum, row) => sum + safeFloat(row.total), 0);
+            const comisiones = commRes.rows.reduce((sum, row) => sum + safeFloat(row.total), 0);
+            
+            const gastoTotalCiclo = operativo + nomina + comisiones; 
+            
+            // NUEVOS CÁLCULOS
+            const pendienteCobrar = ventaTotal - cobradoTotal; // Lo que deben los colegios
+            const disponibilidad = cobradoTotal - gastoTotalCiclo; // La caja real
+
             const hoy = new Date();
             const inicioCiclo = new Date(CYCLE_START);
-            // Calculamos cuántos meses han pasado (ej: Agosto a Febrero = ~6.2 meses)
             const diferenciaTiempo = hoy - inicioCiclo;
             const mesesPasados = Math.max(1, diferenciaTiempo / (1000 * 60 * 60 * 24 * 30.44)); 
             
-            // Promedio Real: Total Gastado / Meses Transcurridos
             const promedioGastoMensual = gastoTotalCiclo / mesesPasados;
-
-            // Cobertura: ¿Para cuántos meses alcanza lo que tengo en caja?
-            // Si gasto 1.3M y tengo 4.8M -> 4.8 / 1.3 = 3.6 meses
             const mesesVida = promedioGastoMensual > 0 ? (disponibilidad / promedioGastoMensual) : 0;
+            
 
-            // Semáforo
             let colorInv = mesesVida >= 6 ? '#1cc88a' : (mesesVida >= 3 ? '#f6c23e' : '#e74a3b');
-            let mensajeAlerta = mesesVida >= 6 ? "✅ Finanzas Saludables" : (mesesVida >= 3 ? "⚠️ Precaución" : "🛑 ALERTA: Liquidez Baja");
+            let mensajeAlerta = mesesVida >= 6 ? "✅ Finanzas Saludables" : (mesesVida >= 3 ? "⚠️ Precaución de Liquidez" : "🛑 ALERTA: Liquidez Baja");
 
             financialCardHtml = `
-                <div class="card" style="margin-top:20px; border-left: 5px solid ${colorInv}; padding: 25px; background: #fff; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
-                    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #eee; padding-bottom:10px; margin-bottom:15px;">
-                        <h3 style="margin:0; color: #5a5c69;">📊 Diagnóstico Financiero (Ciclo 25-26)</h3>
-                        <span style="font-size:12px; font-weight:bold; color:${colorInv}; background:${colorInv}20; padding:4px 10px; border-radius:15px;">
-                            ${mensajeAlerta}
-                        </span>
+                <div class="card" style="margin-top:20px; border-top: 4px solid #4e73df; padding: 25px; background: #fff; box-shadow: 0 4px 15px rgba(0,0,0,0.05); border-radius: 8px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:2px solid #f8f9fc; padding-bottom:15px; margin-bottom:20px;">
+                        <h3 style="margin:0; color: #2c3e50; font-size: 1.3rem;">📊 Diagnóstico Financiero (Ciclo 25-26)</h3>
+                        <div style="text-align: right;">
+                            <div style="font-size:12px; font-weight:bold; color:${colorInv}; background:${colorInv}15; padding:6px 12px; border-radius:20px; display:inline-block; border: 1px solid ${colorInv}40;">
+                                ${mensajeAlerta} (Cobertura: ${mesesVida.toFixed(1)} Meses)
+                            </div>
+                            <a href="/analisis-gastos-mensual" style="display:block; margin-top:5px; font-size:11px; color:#4e73df; text-decoration:none;">🔍 Análisis de Gastos</a>
+                        </div>
                     </div>
                     
-                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 20px;">
-                        <div style="text-align: center; padding: 15px; background: #f8f9fc; border-radius: 10px;">
-                            <small style="color:#4e73df; font-weight:bold; text-transform:uppercase;">Venta Neta Contratada</small>
-                            <div style="font-size: 1.4rem; font-weight:bold; color:#5a5c69; margin-top:5px;">RD$ ${ventaTotal.toLocaleString('en-US', {maximumFractionDigits:0})}</div>
+                    <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 15px;">
+                        
+                        <div style="text-align: center; padding: 15px 10px; background: #f8f9fc; border-radius: 8px; border: 1px solid #eaecf4;">
+                            <div style="color:#858796; font-size: 10px; font-weight:bold; text-transform:uppercase; letter-spacing: 0.5px;">1. Venta Contratada</div>
+                            <div style="font-size: 1.2rem; font-weight:bold; color:#5a5c69; margin-top:8px;">RD$ ${(ventaTotal/1000000).toFixed(2)}M</div>
+                            <div style="font-size: 11px; color: #a1a3b5; margin-top:4px;">${ventaTotal.toLocaleString('en-US', {maximumFractionDigits:0})}</div>
                         </div>
 
-                        <div style="text-align: center; padding: 15px; background: ${disponibilidad >= 0 ? '#e6fffa' : '#fff5f5'}; border-radius: 10px; border:1px solid ${disponibilidad >= 0 ? '#b2f5ea' : '#feb2b2'};">
-                            <small style="color:${disponibilidad >= 0 ? '#2c7a7b' : '#c53030'}; font-weight:bold; text-transform:uppercase;">Disponibilidad Real (Caja)</small>
-                            <div style="font-size: 1.6rem; font-weight:bold; color:${disponibilidad >= 0 ? '#2c7a7b' : '#c53030'}; margin-top:5px;">
-                                RD$ ${disponibilidad.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}
-                            </div>
+                        <div style="text-align: center; padding: 15px 10px; background: #eaffea; border-radius: 8px; border: 1px solid #b7eeb7; position: relative;">
+                            <div style="position: absolute; left: -12px; top: 35%; font-size: 18px; color: #ccc;">➡️</div>
+                            <div style="color:#28a745; font-size: 10px; font-weight:bold; text-transform:uppercase; letter-spacing: 0.5px;">2. Total Cobrado</div>
+                            <div style="font-size: 1.2rem; font-weight:bold; color:#28a745; margin-top:8px;">RD$ ${(cobradoTotal/1000000).toFixed(2)}M</div>
+                            <div style="font-size: 11px; color: #5cb85c; margin-top:4px;">${cobradoTotal.toLocaleString('en-US', {maximumFractionDigits:0})}</div>
                         </div>
 
-                        <div style="text-align: center; padding: 15px; background: #fffbe6; border-radius: 10px; border:1px solid #fceeb5;">
-                            <small style="color:#856404; font-weight:bold; text-transform:uppercase;">Cobertura de Gastos</small>
-                            <div style="font-size: 1.6rem; font-weight:bold; color:#856404; margin-top:5px;">${mesesVida.toFixed(1)} Meses</div>
-                            <div style="font-size:11px; color:#856404; margin-top:5px;">
-                                (Basado en gasto prom: RD$ ${promedioGastoMensual.toLocaleString('en-US', {maximumFractionDigits:0})}/mes)
-                            </div>
-                            <a href="/analisis-gastos-mensual" style="display:block; margin-top:8px; font-size:11px; color:#d69e2e; text-decoration:underline; font-weight:bold;">
-                                🔍 Ver por qué gasto tanto
-                            </a>
+                        <div style="text-align: center; padding: 15px 10px; background: #fffbe6; border-radius: 8px; border: 1px solid #fceeb5;">
+                            <div style="color:#d69e2e; font-size: 10px; font-weight:bold; text-transform:uppercase; letter-spacing: 0.5px;">Pendiente por Cobrar</div>
+                            <div style="font-size: 1.2rem; font-weight:bold; color:#b7791f; margin-top:8px;">RD$ ${(pendienteCobrar/1000000).toFixed(2)}M</div>
+                            <div style="font-size: 11px; color: #d69e2e; margin-top:4px;">${pendienteCobrar.toLocaleString('en-US', {maximumFractionDigits:0})}</div>
                         </div>
+
+                        <div style="text-align: center; padding: 15px 10px; background: #fff5f5; border-radius: 8px; border: 1px solid #fed7d7; position: relative;">
+                            <div style="position: absolute; left: -12px; top: 35%; font-size: 18px; color: #ccc;">➖</div>
+                            <div style="color:#e74a3b; font-size: 10px; font-weight:bold; text-transform:uppercase; letter-spacing: 0.5px;">3. Total Gastado</div>
+                            <div style="font-size: 1.2rem; font-weight:bold; color:#e74a3b; margin-top:8px;">RD$ ${(gastoTotalCiclo/1000000).toFixed(2)}M</div>
+                            <div style="font-size: 11px; color: #f56565; margin-top:4px;">${gastoTotalCiclo.toLocaleString('en-US', {maximumFractionDigits:0})}</div>
+                        </div>
+
+                        <div style="text-align: center; padding: 15px 10px; background: ${disponibilidad >= 0 ? '#e3f2fd' : '#fff5f5'}; border-radius: 8px; border: 2px solid ${disponibilidad >= 0 ? '#4e73df' : '#e74a3b'}; position: relative; box-shadow: 0 2px 4px rgba(78,115,223,0.1);">
+                            <div style="position: absolute; left: -12px; top: 35%; font-size: 18px; color: #ccc;">🟰</div>
+                            <div style="color:${disponibilidad >= 0 ? '#0d47a1' : '#c53030'}; font-size: 11px; font-weight:900; text-transform:uppercase; letter-spacing: 0.5px;">Caja Real Actual</div>
+                            <div style="font-size: 1.3rem; font-weight:900; color:${disponibilidad >= 0 ? '#4e73df' : '#e74a3b'}; margin-top:8px;">RD$ ${(disponibilidad/1000000).toFixed(2)}M</div>
+                            <div style="font-size: 12px; color: ${disponibilidad >= 0 ? '#4e73df' : '#e74a3b'}; margin-top:4px; font-weight:bold;">${disponibilidad.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits:2})}</div>
+                        </div>
+
                     </div>
                 </div>
             `;
@@ -394,7 +411,6 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
         </body></html>`);
     } catch (e) { res.status(500).send("Error Dashboard: " + e.message); } finally { if (client) client.release(); }
 });
-
 
 app.get('/todos-los-centros', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
