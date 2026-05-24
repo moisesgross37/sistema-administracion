@@ -1177,13 +1177,11 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
     try {
         client = await pool.connect();
 
-        // FUNCIÓN SEGURA PARA EVITAR NaN (Not a Number)
         const safeNum = (val) => {
             const num = parseFloat(val);
             return isNaN(num) ? 0.00 : num;
         };
 
-        // 1. DEUDA DE COMISIONES (SOLO PENDIENTES)
         const commRes = await client.query(`
             SELECT COALESCE(SUM(commission_amount), 0) as total 
             FROM commissions 
@@ -1191,7 +1189,6 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
         `);
         const deudaComisiones = safeNum(commRes.rows[0].total);
 
-        // 2. RESUMEN POR SUPLIDOR (EL PORTERO EN ACCIÓN)
         const summaryRes = await client.query(`
             SELECT s.id, s.name, SUM(e.amount - COALESCE(e.paid_amount, 0)) as total_deuda
             FROM expenses e
@@ -1202,7 +1199,6 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
             ORDER BY total_deuda DESC
         `);
 
-        // 3. DETALLE DE FACTURAS
         const invoicesRes = await client.query(`
             SELECT e.*, s.name as supplier_name 
             FROM expenses e 
@@ -1214,13 +1210,15 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
         
         const historyRes = await client.query("SELECT * FROM payment_history ORDER BY payment_date DESC");
         const suppliersRes = await client.query("SELECT id, name FROM suppliers ORDER BY name ASC");
+        
+        // --- NUEVA CONSULTA: COLEGIOS ACTIVOS PARA EL SELECTOR ---
+        const projectsRes = await client.query("SELECT id, clientname, quotenumber FROM quotes WHERE status = 'activa' ORDER BY clientname ASC");
 
-        // --- GENERACIÓN DE TARJETAS DE RESUMEN (ARRIBA) ---
         let summaryCards = `
             <div class="summary-box" style="border-top: 4px solid #e74a3b; min-width: 220px; text-align:center; padding: 15px; background: white; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
                 <small style="color:#e74a3b; font-weight:bold;">Comisiones Internas (Asesores)</small>
                 <div style="font-weight:bold; font-size:1.2rem; margin:10px 0; color: #5a5c69;">RD$ ${deudaComisiones.toLocaleString('en-US', {minimumFractionDigits: 2})}</div>
-                <a href="/pagar-comisiones" class="btn" style="padding:4px 8px; font-size:10px; background:#ffebeb; color:#e74a3b;">Ver Detalle</a>
+                <a href="/pagar-comisiones" class="btn" style="padding:4px 8px; font-size:10px; background:#ffebeb; color:#e74a3b; text-decoration:none;">Ver Detalle</a>
             </div>
         `;
 
@@ -1228,15 +1226,12 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
             <div class="summary-box" style="border-top: 4px solid #4e73df; min-width: 220px; text-align:center; padding: 15px; background: white; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
                 <small style="color:gray;">${s.name}</small>
                 <div style="font-weight:bold; font-size:1.2rem; margin:10px 0; color: #5a5c69;">RD$ ${safeNum(s.total_deuda).toLocaleString('en-US', {minimumFractionDigits: 2})}</div>
-                <a href="/reporte-suplidor-pdf/${s.id}" target="_blank" class="btn" style="padding:4px 8px; font-size:10px; background:#eef2ff; color:#4e73df;">🖨️ Estado de Cuenta PDF</a>
+                <a href="/reporte-suplidor-pdf/${s.id}" target="_blank" class="btn" style="padding:4px 8px; font-size:10px; background:#eef2ff; color:#4e73df; text-decoration:none;">🖨️ Estado de Cuenta PDF</a>
             </div>`).join('');
 
-        // --- GENERACIÓN DE TABLA CONSOLIDADA (ACORDEÓN) ---
+        // --- GENERACIÓN DE TABLA CONSOLIDADA (ACORDEÓN REDISEÑADO) ---
         let acordeonHtml = summaryRes.rows.map(suplidor => {
-            // Buscamos todas las facturas que le pertenecen SOLO a este suplidor
             const susFacturas = invoicesRes.rows.filter(i => i.supplier_id === suplidor.id);
-            
-            // Construimos las filas internas (las facturas individuales)
             const facturasHtml = susFacturas.map(i => {
                 const montoOriginal = safeNum(i.amount);
                 const yaPagado = safeNum(i.paid_amount);
@@ -1265,43 +1260,47 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
                 }
 
                 const misAbonos = historyRes.rows.filter(h => h.expense_id === i.id);
+                // Abonos ahora son texto limpio, no cajas verdes gigantes
                 const abonosHtml = misAbonos.map(a => `
-                    <div style="font-size:11px; color:#2c7a7b; background:#f0fff4; padding:4px 8px; margin-top:4px; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; border: 1px solid #c6f6d5;">
-                        <span>✅ <b>$${safeNum(a.amount_paid).toLocaleString('en-US', {minimumFractionDigits: 2})}</b> (${a.fund_source})</span>
-                        <a href="/imprimir-abono-suplidor/${a.id}" target="_blank" class="btn" style="background:#1cc88a; color:white; padding:2px 6px; font-size:10px; border-radius:3px; text-decoration:none;">
-                            🖨️ Recibo
-                        </a>
+                    <div style="font-size:11px; color:#1cc88a; margin-top:3px; padding-left: 5px; border-left: 2px solid #1cc88a;">
+                        ↘ Abonado: <b>$${safeNum(a.amount_paid).toLocaleString('en-US', {minimumFractionDigits: 2})}</b> (${a.fund_source})
+                        <a href="/imprimir-abono-suplidor/${a.id}" target="_blank" style="color:#4e73df; text-decoration:none; margin-left:3px;" title="Ver Recibo">[🖨️]</a>
                     </div>`).join('');
+                
                 return `
-                <tr style="background-color: ${bgFila}; border-bottom: 1px solid #eee;">
-                    <td style="border-left: 4px solid ${colorAlerta}; padding: 10px; width: 20%;">
-                        <div style="font-weight:bold;">${new Date(i.expense_date).toLocaleDateString()}</div>
-                        <div style="font-size:10px; color:${colorAlerta}; font-weight:bold;">${mensajeAlerta}</div>
+                <tr style="background-color: ${bgFila}; border-bottom: 1px solid #eaeaea;">
+                    <td style="border-left: 4px solid ${colorAlerta}; padding: 15px; width: 15%;">
+                        <div style="font-weight:bold; color: #2c3e50; font-size: 13px;">${new Date(i.expense_date).toLocaleDateString()}</div>
+                        <div style="font-size:10px; color:${colorAlerta}; font-weight:bold; margin-top:4px;">${mensajeAlerta}</div>
                     </td>
-                    <td style="padding: 10px; width: 35%;">
-                        ${i.numero_factura ? `<strong style="color:#4e73df;">Fact: ${i.numero_factura}</strong><br>` : ''}
-                        <div style="font-size:13px; color:#555;">${i.description || '-'}</div>
+                    <td style="padding: 15px; width: 25%;">
+                        ${i.numero_factura ? `<div style="font-size:12px; color:#858796; margin-bottom:3px;">Factura: <strong style="color:#4e73df;">${i.numero_factura}</strong></div>` : ''}
+                        <div style="font-size:13px; color:#495057;">${i.description || '-'}</div>
                     </td>
-                    <td style="text-align:right; padding: 10px; width: 20%;">
-                        <div style="font-size:11px; color:#888;">Total: $${montoOriginal.toLocaleString()}</div>
-                        <div style="font-weight:bold; color:#e74a3b; font-size:1.1rem;">$${pendiente.toLocaleString()}</div>
-                        <div style="margin-top:5px;">${abonosHtml}</div>
+                    <td style="padding: 15px; width: 25%;">
+                        <div style="font-size:12px; color:#555; font-weight:600;">Original: $${montoOriginal.toLocaleString('en-US', {minimumFractionDigits: 2})}</div>
+                        ${abonosHtml}
                     </td>
-                    <td style="padding: 10px; width: 25%;">
-                        <form action="/cuentas-por-pagar/abonar" method="POST" style="display:flex; gap:5px; align-items:center;">
+                    <td style="text-align:right; padding: 15px; width: 15%; border-right: 1px dashed #dee2e6;">
+                        <div style="font-size:10px; color:#858796; text-transform:uppercase; font-weight:bold;">Pendiente</div>
+                        <div style="font-weight:bold; color:#e74a3b; font-size:1.3rem;">$${pendiente.toLocaleString('en-US', {minimumFractionDigits: 2})}</div>
+                    </td>
+                    <td style="padding: 15px; width: 20%; background: #f8f9fc;">
+                        <form action="/cuentas-por-pagar/abonar" method="POST" style="display:flex; flex-direction:column; gap:6px; margin:0;">
                             <input type="hidden" name="expenseId" value="${i.id}">
-                            <input type="number" name="paymentAmount" step="0.01" max="${pendiente.toFixed(2)}" placeholder="$ Abono" required style="width:70px; padding:5px; font-size:12px;">
-                            <select name="fundSource" style="width:80px; padding:5px; font-size:12px;">
-                                <option value="Banco">Banco</option>
-                                <option value="Caja Chica">Efectivo</option>
-                            </select>
-                            <button type="submit" style="padding:5px 8px; background:#1cc88a; color:white; border:none; border-radius:4px; cursor:pointer;">Pagar</button>
+                            <div style="display:flex; gap:5px;">
+                                <input type="number" name="paymentAmount" step="0.01" max="${pendiente.toFixed(2)}" placeholder="$ Abono" required style="width:100%; padding:8px; font-size:12px; border:1px solid #ced4da; border-radius:4px; outline:none;">
+                                <select name="fundSource" style="padding:8px; font-size:12px; border:1px solid #ced4da; border-radius:4px; outline:none;">
+                                    <option value="Banco">Banco</option>
+                                    <option value="Caja Chica">Efectivo</option>
+                                </select>
+                            </div>
+                            <button type="submit" style="padding:8px; background:#1cc88a; color:white; border:none; border-radius:4px; cursor:pointer; font-weight:bold; font-size:12px; transition: 0.2s;">Pagar a Factura</button>
                         </form>
                     </td>
                 </tr>`;
             }).join('');
 
-            // RETORNAMOS EL ENCABEZADO CONSOLIDADO Y LAS FACTURAS OCULTAS DEBAJO
             return `
             <tr style="background-color: white; border-bottom: 2px solid #e3e6f0; cursor: pointer; transition: background 0.2s;" onmouseover="this.style.background='#f8f9fc'" onmouseout="this.style.background='white'" onclick="toggleFacturas('suplidor-${suplidor.id}')">
                 <td style="padding: 15px;">
@@ -1327,64 +1326,107 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
                 </td>
             </tr>`;
         }).join('') || '<tr><td colspan="3" style="text-align:center; padding:40px; color:#888;">🙌 No hay deudas pendientes registradas.</td></tr>';
-
         res.send(`
-    <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
-        <div class="container" style="max-width: 1300px;">
+    <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head>
+    <body style="background-color: #f4f6f9;">
+        <div class="container" style="max-width: 1350px;">
             <div style="margin-bottom: 20px;">${backToDashboardLink}</div>
-            <h1>Cuentas por Pagar a Suplidores</h1>
+            <h1 style="color: #2c3e50; margin-bottom: 25px;">Cuentas por Pagar a Suplidores</h1>
 
             <div style="display: flex; gap: 15px; overflow-x: auto; padding-bottom: 15px; margin-bottom: 30px;">
                 ${summaryCards}
             </div>
 
-            <div style="display: grid; grid-template-columns: 350px 1fr; gap: 30px;">
+            <div style="display: grid; grid-template-columns: 400px 1fr; gap: 30px;">
                 
-                <div class="form-container" style="background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); height: fit-content;">
-                    <h3 style="margin-top:0;">➕ Registrar Factura</h3>
+                <div class="form-container" style="background: white; padding: 25px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); border: 1px solid #eaeaea; height: fit-content;">
+                    <h3 style="margin-top:0; color: #4e73df; font-size: 18px; border-bottom: 2px solid #f8f9fa; padding-bottom: 15px; margin-bottom: 20px;">➕ Registrar Factura a Crédito</h3>
+                    
                     <form action="/nuevo-gasto-general" method="POST">
-                        <div class="form-group">
-                            <label>Suplidor:</label>
-                            <select name="supplier_id" required style="width:100%; padding:8px;">
+                        <div class="form-group" style="margin-bottom: 15px;">
+                            <label style="font-weight: 600; font-size: 13px; color: #495057; display:block; margin-bottom: 5px;">Suplidor:</label>
+                            <select name="supplier_id" id="suplidor-cxp" required style="width:100%;">
                                 <option value="">Seleccione...</option>
                                 ${suppliersRes.rows.map(s => `<option value="${s.id}">${s.name}</option>`).join('')}
                             </select>
                         </div>
-                        <div class="form-group">
-                            <label>Número de Factura:</label>
-                            <input type="text" name="numero_factura" placeholder="Ej: B0100000123" style="width:100%; padding:8px;">
+                        
+                        <div class="form-group" style="background: #f0f8ff; padding: 15px; border-radius: 8px; border: 1px dashed #6495ed; margin-bottom: 15px;">
+                            <label style="font-weight: 700; font-size: 13px; color: #0056b3; display:block; margin-bottom: 5px;">🔗 Asignar a Proyecto (Opcional):</label>
+                            <p style="margin: 0 0 10px 0; font-size: 11px; color: #6c757d;">Asigna esta deuda a un colegio para afectar su rentabilidad de inmediato.</p>
+                            <select name="quote_id" id="proyecto-cxp" style="width:100%;">
+                                <option value="">Ninguno (Gasto Administrativo)</option>
+                                ${projectsRes.rows.map(p => `<option value="${p.id}">${p.clientname} (#${p.quotenumber})</option>`).join('')}
+                            </select>
                         </div>
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-                            <div class="form-group"><label>Fecha Factura:</label><input type="date" name="expense_date" required style="width:100%; padding:8px;"></div>
-                            <div class="form-group"><label>Vencimiento:</label><input type="date" name="fecha_vencimiento" style="width:100%; padding:8px;"></div>
-                        </div>
-                        <div class="form-group"><label>Monto Total:</label><input type="number" name="amount" step="0.01" required style="width:100%; padding:8px;"></div>
-                        <div class="form-group"><label>Concepto / Detalle:</label><textarea name="description" rows="2" style="width:100%; padding:8px;"></textarea></div>
 
-                        <button type="submit" class="btn btn-activar" style="width:100%; padding: 12px; font-weight: bold; margin-top:15px; background:#4e73df; color:white; border:none; border-radius:5px;">💾 Guardar Deuda</button>
+                        <div class="form-group" style="margin-bottom: 15px;">
+                            <label style="font-weight: 600; font-size: 13px; color: #495057; display:block; margin-bottom: 5px;">Número de Factura:</label>
+                            <input type="text" name="numero_factura" placeholder="Ej: B0100000123" style="width:100%; padding:10px; border: 1px solid #ced4da; border-radius: 6px; box-sizing:border-box;">
+                        </div>
+                        
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
+                            <div class="form-group">
+                                <label style="font-weight: 600; font-size: 13px; color: #495057; display:block; margin-bottom: 5px;">Fecha Factura:</label>
+                                <input type="date" name="expense_date" required style="width:100%; padding:10px; border: 1px solid #ced4da; border-radius: 6px; box-sizing:border-box;">
+                            </div>
+                            <div class="form-group">
+                                <label style="font-weight: 600; font-size: 13px; color: #495057; display:block; margin-bottom: 5px;">Vencimiento:</label>
+                                <input type="date" name="fecha_vencimiento" style="width:100%; padding:10px; border: 1px solid #ced4da; border-radius: 6px; box-sizing:border-box;">
+                            </div>
+                        </div>
+                        
+                        <div class="form-group" style="margin-bottom: 15px;">
+                            <label style="font-weight: 600; font-size: 13px; color: #495057; display:block; margin-bottom: 5px;">Monto Total ($):</label>
+                            <input type="number" name="amount" step="0.01" required style="width:100%; padding:10px; border: 1px solid #ced4da; border-radius: 6px; box-sizing:border-box; font-weight:bold; color:#e74a3b;">
+                        </div>
+                        
+                        <div class="form-group" style="margin-bottom: 15px;">
+                            <label style="font-weight: 600; font-size: 13px; color: #495057; display:block; margin-bottom: 5px;">Concepto / Detalle:</label>
+                            <textarea name="description" rows="2" style="width:100%; padding:10px; border: 1px solid #ced4da; border-radius: 6px; box-sizing:border-box; resize:vertical; font-family:inherit;"></textarea>
+                        </div>
+
+                        <button type="submit" class="btn btn-activar" style="width:100%; padding: 12px; font-size: 15px; font-weight: bold; margin-top:10px; background:#4e73df; color:white; border:none; border-radius:6px; cursor:pointer; box-shadow: 0 4px 6px rgba(78,115,223,0.2);">💾 Guardar Deuda</button>
                     </form>
                 </div>
 
-                <div class="card" style="padding: 20px;">
-                    <h3 style="margin:0; margin-bottom:20px;">Estado de Cuentas Consolidadas</h3>
-                    <table class="modern-table" style="width: 100%; border-collapse: collapse;">
-                        <thead>
-                            <tr style="background: #f8f9fc; text-align: left;">
-                                <th style="padding:15px; border-bottom: 2px solid #e3e6f0;">Suplidor / Empresa</th>
-                                <th style="padding:15px; text-align:right; border-bottom: 2px solid #e3e6f0;">Deuda Total Acumulada</th>
-                                <th style="padding:15px; text-align:center; border-bottom: 2px solid #e3e6f0;">Acciones</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${acordeonHtml}
-                        </tbody>
-                    </table>
+                <div class="card" style="padding: 25px; background: white; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); border: 1px solid #eaeaea;">
+                    <h3 style="margin:0; margin-bottom:20px; color: #2c3e50; font-size: 18px;">Estado de Cuentas Consolidadas</h3>
+                    <div style="overflow-x: auto;">
+                        <table class="modern-table" style="width: 100%; border-collapse: collapse;">
+                            <thead>
+                                <tr style="background: #f8f9fc; text-align: left;">
+                                    <th style="padding:15px; border-bottom: 2px solid #e3e6f0; color: #6c757d; font-size:12px; text-transform:uppercase;">Suplidor / Empresa</th>
+                                    <th style="padding:15px; text-align:right; border-bottom: 2px solid #e3e6f0; color: #6c757d; font-size:12px; text-transform:uppercase;">Deuda Total Acumulada</th>
+                                    <th style="padding:15px; text-align:center; border-bottom: 2px solid #e3e6f0; color: #6c757d; font-size:12px; text-transform:uppercase;">Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${acordeonHtml}
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
         </div>
 
+        <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
+        <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
+        <style>
+            .select2-container .select2-selection--single { height: 40px !important; border: 1px solid #ced4da !important; border-radius: 6px !important; display: flex; align-items: center; }
+            .select2-container--default .select2-selection--single .select2-selection__arrow { height: 38px !important; }
+            .select2-container--default .select2-selection--single .select2-selection__rendered { color: #495057; font-family: inherit; font-size: 13px; }
+        </style>
+
         <script>
-            // FUNCIÓN MÁGICA PARA DESPLEGAR LAS FACTURAS
+            // ACTIVAR BUSCADORES INTELIGENTES
+            $(document).ready(function() {
+                $('#suplidor-cxp').select2({ placeholder: "🔍 Buscar suplidor...", width: '100%' });
+                $('#proyecto-cxp').select2({ placeholder: "🔍 Buscar colegio...", width: '100%' });
+            });
+
+            // ACORDEÓN DE FACTURAS
             function toggleFacturas(idFilas) {
                 const elemento = document.getElementById(idFilas);
                 if (elemento.style.display === "none") {
@@ -1403,26 +1445,27 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
         if (client) client.release();
     }
 });
-// 1. RUTA PARA CREAR LA DEUDA (SIN ERROR DE COLUMNA)
+
+// 1. RUTA PARA CREAR LA DEUDA (CON SOPORTE PARA ASIGNAR PROYECTO)
 app.post('/nuevo-gasto-general', requireLogin, requireAdminOrCoord, async (req, res) => {
-    // Recibimos los datos del formulario
-    const { supplier_id, numero_factura, expense_date, fecha_vencimiento, amount, description } = req.body;
+    // Recibimos los datos del formulario, incluyendo el nuevo quote_id
+    const { supplier_id, numero_factura, expense_date, fecha_vencimiento, amount, description, quote_id } = req.body;
     
+    // Si se seleccionó un proyecto, usamos su ID; de lo contrario, se guarda como NULL (Deuda pura de la empresa)
+    const proyectoAsignado = quote_id ? quote_id : null;
+    const montoLimpio = parseFloat(amount) || 0;
+
     let client;
     try {
         client = await pool.connect();
         
         // INSERTAMOS EN LA TABLA 'EXPENSES'
-        // Correcciones aplicadas:
-        // 1. 'createdat' (sin guion bajo, según tu foto).
-        // 2. 'paid_amount' va en 0 (porque es deuda).
-        // 3. 'quote_id' va en NULL (para que sea gasto administrativo puro).
-        
+        // Cambiamos el NULL fijo al final por la variable $7 (proyectoAsignado)
         await client.query(`
             INSERT INTO expenses 
             (supplier_id, numero_factura, expense_date, fecha_vencimiento, amount, paid_amount, description, createdat, quote_id)
-            VALUES ($1, $2, $3, $4, $5, 0, $6, NOW(), NULL)
-        `, [supplier_id, numero_factura, expense_date, fecha_vencimiento, amount, description]);
+            VALUES ($1, $2, $3, $4, $5, 0, $6, NOW(), $7)
+        `, [supplier_id, numero_factura, expense_date, fecha_vencimiento, montoLimpio, description, proyectoAsignado]);
 
         // Éxito: volvemos a la lista
         res.redirect('/cuentas-por-pagar');
@@ -1440,7 +1483,6 @@ app.post('/nuevo-gasto-general', requireLogin, requireAdminOrCoord, async (req, 
         if (client) client.release();
     }
 });
-
 // --- RUTA PARA GUARDAR UNA NUEVA FACTURA DE SUPLIDOR ---
 app.post('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { supplier_id, numero_factura, fecha_factura, fecha_vencimiento, monto_total, descripcion } = req.body;
@@ -1655,14 +1697,16 @@ app.get('/recibo-pago-suplidor/:pagoId/pdf', requireLogin, requireAdminOrCoord, 
 
 
 // =======================================================
-//   NUEVAS RUTAS PARA GASTOS GENERALES / DESEMBOLSOS
+//   RUTAS PARA GASTOS GENERALES / DESEMBOLSOS
 // =======================================================
 
-// --- PÁGINA PARA VER Y AÑADIR GASTOS GENERALES ---
+// --- 1. PÁGINA PARA VER Y AÑADIR GASTOS GENERALES (CON BUSCADORES INTELIGENTES) ---
 app.get('/gastos-generales', requireLogin, requireAdminOrCoord, async (req, res) => {
+    let client;
     try {
-        const client = await pool.connect();
-        const [suppliersResult, expensesResult] = await Promise.all([
+        client = await pool.connect();
+        
+        const [suppliersResult, expensesResult, projectsResult] = await Promise.all([
             client.query('SELECT * FROM suppliers ORDER BY name ASC'),
             client.query(`
                 SELECT e.*, s.name as supplier_name 
@@ -1670,62 +1714,190 @@ app.get('/gastos-generales', requireLogin, requireAdminOrCoord, async (req, res)
                 JOIN suppliers s ON e.supplier_id = s.id 
                 WHERE e.quote_id IS NULL 
                 ORDER BY e.expense_date DESC
-            `)
+            `),
+            client.query(`SELECT id, clientname, quotenumber FROM quotes WHERE status = 'activa' ORDER BY clientname ASC`)
         ]);
-        client.release();
 
         const suppliers = suppliersResult.rows;
         const expenses = expensesResult.rows;
+        const projects = projectsResult.rows;
 
         let suppliersOptionsHtml = suppliers.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+        let projectsOptionsHtml = projects.map(p => `<option value="${p.id}">${p.clientname} (#${p.quotenumber})</option>`).join('');
       
-       let expensesHtml = expenses.map(e => {
-    const montoLimpio = isNaN(parseFloat(e.amount)) ? 0 : parseFloat(e.amount);
-    return `
-        <tr>
-            <td>${new Date(e.expense_date).toLocaleDateString()}</td>
-            <td>${e.supplier_name}</td>
-            <td>${e.description}</td>
-            <td>${e.type || ''}</td>
-            <td style="font-weight: bold;">$${montoLimpio.toFixed(2)}</td>
-            <td>
-                <a href="/desembolso/${e.id}/pdf" target="_blank" class="btn" style="padding: 5px 10px; font-size: 14px;">Imprimir</a>
-            </td>
-        </tr>`;
-}).join('') || '<tr><td colspan="6">No hay gastos generales registrados.</td></tr>';
-        
+        let expensesHtml = expenses.map(e => {
+            const montoLimpio = isNaN(parseFloat(e.amount)) ? 0 : parseFloat(e.amount);
+            const badgeColor = e.type === 'Con Valor Fiscal' ? 'background: #e3f2fd; color: #0d47a1;' : 'background: #f8f9fa; color: #6c757d; border: 1px solid #dee2e6;';
+            
+            return `
+                <tr style="transition: background 0.2s;" onmouseover="this.style.background='#f8f9fa'" onmouseout="this.style.background='white'">
+                    <td style="padding: 15px; border-bottom: 1px solid #eaeaea; color: #495057;">${new Date(e.expense_date).toLocaleDateString()}</td>
+                    <td style="padding: 15px; border-bottom: 1px solid #eaeaea; font-weight: 600; color: #2c3e50;">${e.supplier_name}</td>
+                    <td style="padding: 15px; border-bottom: 1px solid #eaeaea; color: #495057;">${e.description}</td>
+                    <td style="padding: 15px; border-bottom: 1px solid #eaeaea;"><span style="font-size: 11px; padding: 4px 8px; border-radius: 4px; font-weight: bold; ${badgeColor}">${e.type || 'N/A'}</span></td>
+                    <td style="padding: 15px; border-bottom: 1px solid #eaeaea; font-weight: bold; color: #e74a3b;">$${montoLimpio.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+                    <td style="padding: 15px; border-bottom: 1px solid #eaeaea; text-align: center;">
+                        <a href="/desembolso/${e.id}/pdf" target="_blank" style="background-color: #5a5c69; color: white; padding: 6px 12px; font-size: 12px; font-weight: bold; text-decoration: none; border-radius: 4px; display: inline-block; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">📄 Imprimir</a>
+                    </td>
+                </tr>`;
+        }).join('') || '<tr><td colspan="6" style="text-align: center; padding: 30px; color: #6c757d; font-size: 15px;">No hay gastos generales registrados.</td></tr>';
 
         res.send(`
-            <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
-                <div class="container">
-                    ${backToDashboardLink}
-                    <h2>Gastos Generales y Administrativos</h2>
-                    <div class="form-container">
-                        <h3>Registrar Nuevo Desembolso</h3>
+            <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head>
+            <body style="background-color: #f4f6f9;">
+                <div class="container" style="max-width: 1050px; padding-bottom: 50px; padding-top: 20px;">
+                    <div style="margin-bottom: 20px;">${backToDashboardLink}</div>
+                    
+                    <h2 style="color: #2c3e50; margin-bottom: 25px; font-size: 24px;">Gastos Generales y Administrativos</h2>
+                    
+                    <div style="background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); border: 1px solid #eaeaea; margin-bottom: 40px;">
+                        <h3 style="margin-top: 0; color: #4e73df; font-size: 18px; border-bottom: 2px solid #f8f9fa; padding-bottom: 15px; margin-bottom: 25px;">💵 Registrar Nuevo Desembolso</h3>
+                        
                         <form action="/gastos-generales" method="POST">
-                            <div class="form-group"><label>Fecha:</label><input type="date" name="expense_date" required></div>
-                            <div class="form-group"><label>Suplidor:</label><select name="supplier_id" required><option value="">Seleccione un suplidor...</option>${suppliersOptionsHtml}</select></div>
-                            <div class="form-group"><label>Monto:</label><input type="number" name="amount" step="0.01" required></div>
-                            <div class="form-group"><label>Tipo:</label><select name="type"><option value="">Seleccionar...</option><option value="Con Valor Fiscal">Con Valor Fiscal</option><option value="Sin Valor Fiscal">Sin Valor Fiscal</option></select></div>
-                            <div class="form-group"><label>Descripción / Concepto:</label><textarea name="description" rows="2" required></textarea></div>
-                            <button type="submit" class="btn">Guardar Gasto</button>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                                
+                                <div style="display: flex; flex-direction: column;">
+                                    <label style="font-weight: 600; font-size: 13px; margin-bottom: 8px; color: #495057;">Fecha del Gasto:</label>
+                                    <input type="date" name="expense_date" required style="padding: 12px; border: 1px solid #ced4da; border-radius: 6px; outline: none; font-family: inherit;">
+                                </div>
+                                
+                                <div style="display: flex; flex-direction: column;">
+                                    <label style="font-weight: 600; font-size: 13px; margin-bottom: 8px; color: #495057;">Suplidor:</label>
+                                    <select name="supplier_id" id="suplidor-select" required style="width: 100%;">
+                                        <option value="">Seleccione un suplidor...</option>
+                                        ${suppliersOptionsHtml}
+                                    </select>
+                                </div>
+                                
+                                <div style="grid-column: span 2; background: #f0f8ff; padding: 20px; border-radius: 8px; border: 1px dashed #6495ed;">
+                                    <label style="font-weight: 700; font-size: 14px; margin-bottom: 5px; color: #0056b3; display: block;">🔗 Asignar a Proyecto (Opcional):</label>
+                                    <p style="margin: 0 0 12px 0; font-size: 12px; color: #6c757d;">Si seleccionas un colegio, este gasto afectará directamente su rentabilidad y no aparecerá en el historial de abajo.</p>
+                                    <select name="quote_id" id="proyecto-select" style="width: 100%;">
+                                        <option value="">Ninguno (Dejar como Gasto Administrativo General)</option>
+                                        ${projectsOptionsHtml}
+                                    </select>
+                                </div>
+
+                                <div style="display: flex; flex-direction: column;">
+                                    <label style="font-weight: 600; font-size: 13px; margin-bottom: 8px; color: #495057;">Monto ($):</label>
+                                    <input type="number" name="amount" step="0.01" required style="padding: 12px; border: 1px solid #ced4da; border-radius: 6px; outline: none; font-family: inherit;" placeholder="Ej: 1500.00">
+                                </div>
+                                
+                                <div style="display: flex; flex-direction: column;">
+                                    <label style="font-weight: 600; font-size: 13px; margin-bottom: 8px; color: #495057;">Tipo de Comprobante:</label>
+                                    <select name="type" style="padding: 12px; border: 1px solid #ced4da; border-radius: 6px; outline: none; font-family: inherit; background: white;">
+                                        <option value="Sin Valor Fiscal">Sin Valor Fiscal</option>
+                                        <option value="Con Valor Fiscal">Con Valor Fiscal</option>
+                                    </select>
+                                </div>
+                                
+                                <div style="grid-column: span 2; display: flex; flex-direction: column;">
+                                    <label style="font-weight: 600; font-size: 13px; margin-bottom: 8px; color: #495057;">Descripción / Concepto:</label>
+                                    <textarea name="description" rows="2" required style="padding: 12px; border: 1px solid #ced4da; border-radius: 6px; outline: none; font-family: inherit; resize: vertical;" placeholder="Detalla el motivo del gasto..."></textarea>
+                                </div>
+                            </div>
+                            
+                            <div style="margin-top: 25px; text-align: right;">
+                                <button type="submit" style="background-color: #28a745; color: white; padding: 12px 35px; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 15px; box-shadow: 0 4px 6px rgba(40,167,69,0.2); transition: 0.2s;">✅ Guardar Gasto</button>
+                            </div>
                         </form>
                     </div>
-                    <hr style="margin: 40px 0;">
-                    <h3>Historial de Gastos Generales</h3>
-                    <table>
-                        <thead><tr><th>Fecha</th><th>Suplidor</th><th>Descripción</th><th>Tipo</th><th>Monto</th><th>Acciones</th></tr></thead>
-                        <tbody>${expensesHtml}</tbody>
-                    </table>
+                    
+                    <h3 style="color: #2c3e50; margin-bottom: 15px; font-size: 18px;">Historial de Gastos Generales</h3>
+                    <div style="background: white; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); overflow: hidden; border: 1px solid #eaeaea;">
+                        <table style="width: 100%; border-collapse: collapse; text-align: left;">
+                            <thead style="background-color: #f8f9fa;">
+                                <tr style="border-bottom: 2px solid #dee2e6;">
+                                    <th style="padding: 15px; font-size: 12px; text-transform: uppercase; color: #6c757d;">Fecha</th>
+                                    <th style="padding: 15px; font-size: 12px; text-transform: uppercase; color: #6c757d;">Suplidor</th>
+                                    <th style="padding: 15px; font-size: 12px; text-transform: uppercase; color: #6c757d;">Descripción</th>
+                                    <th style="padding: 15px; font-size: 12px; text-transform: uppercase; color: #6c757d;">Tipo</th>
+                                    <th style="padding: 15px; font-size: 12px; text-transform: uppercase; color: #6c757d;">Monto</th>
+                                    <th style="padding: 15px; font-size: 12px; text-transform: uppercase; color: #6c757d; text-align: center;">Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody>${expensesHtml}</tbody>
+                        </table>
+                    </div>
                 </div>
+
+                <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
+                <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+                <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
+                <style>
+                    /* Ajustes visuales para que el buscador coincida con tu diseño moderno */
+                    .select2-container .select2-selection--single {
+                        height: 44px !important;
+                        border: 1px solid #ced4da !important;
+                        border-radius: 6px !important;
+                        display: flex;
+                        align-items: center;
+                    }
+                    .select2-container--default .select2-selection--single .select2-selection__arrow {
+                        height: 42px !important;
+                    }
+                    .select2-container--default .select2-selection--single .select2-selection__rendered {
+                        color: #495057;
+                        font-family: inherit;
+                        font-size: 14px;
+                    }
+                </style>
+                <script>
+                    $(document).ready(function() {
+                        $('#suplidor-select').select2({
+                            placeholder: "🔍 Escribe para buscar un suplidor...",
+                            width: '100%'
+                        });
+                        $('#proyecto-select').select2({
+                            placeholder: "🔍 Escribe para buscar un colegio...",
+                            width: '100%'
+                        });
+                    });
+                </script>
             </body></html>
         `);
     } catch (error) {
         console.error("Error al cargar la página de gastos generales:", error);
         res.status(500).send('<h1>Error al cargar la página ❌</h1>');
+    } finally {
+        if (client) client.release();
     }
 });
 
+
+// --- 2. RUTA PARA GUARDAR EL GASTO ---
+app.post('/gastos-generales', requireLogin, requireAdminOrCoord, async (req, res) => {
+    // Agregamos quote_id a lo que recibimos del formulario
+    const { expense_date, supplier_id, amount, description, type, quote_id } = req.body;
+    
+    // Validaciones
+    if (!expense_date || !supplier_id || !amount || !description) {
+        return res.status(400).send("La fecha, suplidor, monto y descripción son obligatorios.");
+    }
+
+    // Transformamos el quote_id. Si está vacío, es null (Gasto general). Si tiene algo, va al colegio.
+    const proyectoAsignado = quote_id ? quote_id : null;
+
+    let client;
+    try {
+        client = await pool.connect();
+        
+        // Reemplazamos el NULL fijo por nuestra variable proyectoAsignado ($6)
+        await client.query(
+            `INSERT INTO expenses (expense_date, supplier_id, amount, description, type, quote_id, status, paid_amount) 
+             VALUES ($1, $2, $3, $4, $5, $6, 'Pagada', $3)`,
+            [expense_date, supplier_id, amount, description, type, proyectoAsignado]
+        );
+        
+        res.redirect('/gastos-generales');
+
+    } catch (error) {
+        console.error("Error al guardar el gasto general:", error);
+        res.status(500).send('<h1>Error al guardar el gasto ❌</h1>');
+    } finally {
+        if (client) client.release(); 
+    }
+});
 
 app.get('/caja-chica', requireLogin, requireAdminOrCoord, async (req, res) => {
     let client;
@@ -2062,36 +2234,6 @@ app.get('/caja-chica/reporte/:cycleId/pdf', requireLogin, requireAdminOrCoord, a
     }
 });
 
-app.post('/gastos-generales', requireLogin, requireAdminOrCoord, async (req, res) => {
-    const { expense_date, supplier_id, amount, description, type } = req.body;
-    
-    // Validaciones
-    if (!expense_date || !supplier_id || !amount || !description) {
-        return res.status(400).send("La fecha, suplidor, monto y descripción son obligatorios.");
-    }
-
-    let client;
-    try {
-        client = await pool.connect();
-        
-        // --- CAMBIO CLAVE AQUÍ ---
-        // Agregamos 'status' y 'paid_amount' al INSERT.
-        // Le pasamos 'Pagada' como texto y repetimos el monto ($3) en la columna de pagado.
-        await client.query(
-            `INSERT INTO expenses (expense_date, supplier_id, amount, description, type, quote_id, status, paid_amount) 
-             VALUES ($1, $2, $3, $4, $5, NULL, 'Pagada', $3)`,
-            [expense_date, supplier_id, amount, description, type]
-        );
-        
-        client.release();
-        res.redirect('/gastos-generales');
-
-    } catch (error) {
-        if (client) client.release(); // Asegurar liberación si falla
-        console.error("Error al guardar el gasto general:", error);
-        res.status(500).send('<h1>Error al guardar el gasto ❌</h1>');
-    }
-});
 
 // --- RUTA PARA GENERAR EL PDF DEL RECIBO DE DESEMBOLSO ---
 app.get('/desembolso/:expenseId/pdf', requireLogin, requireAdminOrCoord, async (req, res) => {
@@ -2290,13 +2432,19 @@ app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, re
                         </div>
                     </div>
 
-                    <form action="/cuentas-por-cobrar" method="GET" style="margin-bottom:20px; background:white; padding:15px; border-radius:8px; display:inline-flex; align-items:center; gap:10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
-                        <label style="font-weight:bold; color:#5a5c69;">Filtrar por Asesor:</label>
-                        <select name="advisor" onchange="this.form.submit()" style="padding:8px; border:1px solid #ddd; border-radius:4px;">
-                            <option value="">-- Ver Todos --</option>
-                            ${advisorsRes.rows.map(a => `<option value="${a.advisorname}" ${advisor === a.advisorname ? 'selected' : ''}>${a.advisorname}</option>`).join('')}
-                        </select>
-                    </form>
+                    <div style="margin-bottom:20px; background:white; padding:15px; border-radius:8px; display:inline-flex; align-items:center; gap:20px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); width: 100%; justify-content: space-between; box-sizing: border-box;">
+                        <form action="/cuentas-por-cobrar" method="GET" style="display:inline-flex; align-items:center; gap:10px; margin: 0;">
+                            <label style="font-weight:bold; color:#5a5c69;">Filtrar por Asesor:</label>
+                            <select name="advisor" onchange="this.form.submit()" style="padding:8px; border:1px solid #ddd; border-radius:4px; outline: none; cursor:pointer;">
+                                <option value="">-- Ver Todos --</option>
+                                ${advisorsRes.rows.map(a => `<option value="${a.advisorname}" ${advisor === a.advisorname ? 'selected' : ''}>${a.advisorname}</option>`).join('')}
+                            </select>
+                        </form>
+
+                        <a href="/imprimir-cuentas-cobrar${advisor ? '?advisor=' + encodeURIComponent(advisor) : ''}" target="_blank" class="btn" style="background-color: #e74a3b; color: white; padding: 10px 20px; font-weight: bold; border-radius: 6px; text-decoration: none; display: flex; align-items: center; gap: 8px; box-shadow: 0 2px 4px rgba(231,74,59,0.2); transition: 0.2s;">
+                            🖨️ Imprimir Reporte de Cobros
+                        </a>
+                    </div>
 
                     <div class="section-header">⚠️ CUENTAS CON DEUDA PENDIENTE</div>
                     <table class="modern-table">
@@ -2312,6 +2460,137 @@ app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, re
                 </div>
             </body></html>`);
     } catch (e) { res.status(500).send("Error: " + e.message); } finally { if (client) client.release(); }
+});
+
+// =============================================================
+// 🖨️ RUTA PARA IMPRIMIR REPORTE DE CUENTAS POR COBRAR (PDF)
+// =============================================================
+app.get('/imprimir-cuentas-cobrar', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { advisor } = req.query;
+    let client;
+    try {
+        client = await pool.connect();
+        
+        // Misma consulta segura que en la pantalla web
+        let query = `
+            SELECT 
+                q.clientname, q.quotenumber, q.advisorname,
+                (COALESCE(q.preciofinalporestudiante * q.estudiantesparafacturar, 0) + 
+                 COALESCE((SELECT SUM(monto_ajuste) FROM ajustes_cotizacion WHERE quote_id = q.id), 0)) as venta,
+                COALESCE((SELECT SUM(amount) FROM payments WHERE quote_id = q.id), 0) as cobrado,
+                (SELECT MAX(payment_date) FROM payments WHERE quote_id = q.id) as ultimo_pago
+            FROM quotes q
+            WHERE q.status = 'activa' AND q.createdat >= '2025-08-01'
+        `;
+        
+        const params = [];
+        if (advisor) {
+            params.push(advisor);
+            query += ` AND q.advisorname = $1`;
+        }
+        query += ` ORDER BY ultimo_pago ASC NULLS FIRST`;
+
+        const result = await client.query(query, params);
+
+        const safeNum = (val) => { const n = parseFloat(val); return isNaN(n) ? 0 : n; };
+        const formatMoney = (val) => 'RD$ ' + parseFloat(val).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits:2});
+
+        const hoy = new Date();
+        const proyectos = [];
+        let totalDeudaGeneral = 0;
+
+        result.rows.forEach(p => {
+            const v = safeNum(p.venta);
+            const c = safeNum(p.cobrado);
+            const deuda = v - c;
+            
+            if (deuda > 1.00) { // Solo imprimimos los que deben dinero
+                let diasInactivo = 0;
+                let msjActividad = 'Sin Pagos';
+                if (p.ultimo_pago) {
+                    diasInactivo = Math.floor((hoy - new Date(p.ultimo_pago)) / (1000 * 60 * 60 * 24));
+                    msjActividad = `Hace ${diasInactivo} días`;
+                }
+                
+                proyectos.push({ ...p, deuda, msjActividad, diasInactivo });
+                totalDeudaGeneral += deuda;
+            }
+        });
+
+        // Configuración del PDF
+        const doc = new PDFDocument({ size: 'A4', margin: 40 });
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename="Reporte_Cobros_${advisor ? advisor.replace(/\s+/g, '_') : 'General'}.pdf"`);
+        doc.pipe(res);
+
+        // ENCABEZADO
+        doc.rect(0, 0, 600, 110).fill('#2c3e50'); // Fondo azul corporativo
+        doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(20).text('REPORTE DE CUENTAS POR COBRAR', 40, 35);
+        doc.fontSize(12).font('Helvetica').text(`Filtro: ${advisor || 'TODOS LOS ASESORES'}`, 40, 65);
+        doc.fontSize(10).text(`Fecha de emisión: ${new Date().toLocaleString('es-DO')}`, 40, 80);
+
+        // CAJA DE TOTAL GENERAL
+        doc.rect(380, 25, 170, 60).fill('#e74a3b'); 
+        doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(10).text('DEUDA TOTAL PENDIENTE', 380, 40, { width: 170, align: 'center' });
+        doc.fontSize(14).text(formatMoney(totalDeudaGeneral), 380, 55, { width: 170, align: 'center' });
+
+        doc.moveDown(4);
+
+        // TABLA DE COLEGIOS
+        doc.rect(40, doc.y, 515, 20).fill('#f8f9fc');
+        let startY = doc.y + 6;
+        doc.fillColor('#6c757d').font('Helvetica-Bold').fontSize(9);
+        doc.text('COLEGIO / PROYECTO', 50, startY, { width: 180 });
+        if(!advisor) doc.text('ASESOR', 240, startY, { width: 90 }); // Solo mostramos columna asesor si no hay filtro
+        doc.text('ÚLTIMO PAGO', !advisor ? 330 : 260, startY, { width: 80 });
+        doc.text('DEUDA ACTUAL', 450, startY, { width: 95, align: 'right' });
+        doc.y += 15;
+
+        doc.font('Helvetica').fontSize(9).fillColor('#495057');
+
+        if (proyectos.length === 0) {
+            doc.moveDown(2);
+            doc.text('No hay cuentas pendientes bajo este criterio.', 50, doc.y);
+        } else {
+            proyectos.forEach((p, index) => {
+                if (doc.y > 750) { 
+                    doc.addPage(); 
+                    doc.y = 40; // Resetear Y en nueva página
+                }
+                
+                doc.moveDown(0.5);
+                const currentY = doc.y;
+                
+                // Alertar en rojo si tiene más de 45 días sin pagar
+                const isWarning = p.diasInactivo > 45 || p.msjActividad === 'Sin Pagos';
+                const textColor = isWarning ? '#e74a3b' : '#495057';
+                
+                doc.fillColor(textColor).font(isWarning ? 'Helvetica-Bold' : 'Helvetica');
+                
+                doc.text(`${p.clientname} (#${p.quotenumber})`, 50, currentY, { width: 180 });
+                if(!advisor) doc.text(p.advisorname.split(' ')[0], 240, currentY, { width: 90 }); // Solo el primer nombre del asesor
+                doc.text(p.msjActividad, !advisor ? 330 : 260, currentY, { width: 80 });
+                
+                doc.fillColor('#e74a3b').font('Helvetica-Bold')
+                   .text(formatMoney(p.deuda), 450, currentY, { width: 95, align: 'right' });
+                
+                doc.moveTo(40, doc.y + 6).lineTo(555, doc.y + 6).lineWidth(0.5).strokeColor('#eaeaea').stroke();
+                doc.y += 3;
+            });
+        }
+
+        // PIE DE PÁGINA
+        const totalColegios = proyectos.length;
+        doc.moveDown(1);
+        doc.fillColor('#858796').font('Helvetica-Oblique').fontSize(8);
+        doc.text(`Total de proyectos con deuda: ${totalColegios}`, 40, doc.y);
+
+        doc.end();
+    } catch (e) { 
+        res.status(500).send("Error generando PDF: " + e.message); 
+    } finally { 
+        if (client) client.release(); 
+    }
 });
 
 // =============================================================
@@ -6151,13 +6430,11 @@ app.get('/reporte-suplidor-pdf/:id', requireLogin, requireAdminOrCoord, async (r
         client = await pool.connect();
         const supplierRes = await client.query("SELECT name FROM suppliers WHERE id = $1", [supplierId]);
         
-        // Buscamos facturas pendientes
         const invoicesRes = await client.query(`
             SELECT * FROM expenses 
             WHERE supplier_id = $1 AND status != 'Pagada' 
             ORDER BY expense_date ASC`, [supplierId]);
         
-        // Buscamos TODOS los abonos hechos a este suplidor
         const historyRes = await client.query(`
             SELECT ph.*, e.description as factura_desc 
             FROM payment_history ph
@@ -6169,61 +6446,130 @@ app.get('/reporte-suplidor-pdf/:id', requireLogin, requireAdminOrCoord, async (r
         const history = historyRes.rows;
         const totalPendiente = invoices.reduce((sum, i) => sum + (parseFloat(i.amount) - parseFloat(i.paid_amount || 0)), 0);
 
-        const doc = new PDFDocument({ size: 'A4', margin: 50 });
+        const doc = new PDFDocument({ size: 'A4', margin: 40 }); 
         res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename="Estado_Cuenta_${supplierRes.rows[0].name.replace(/\s+/g, '_')}.pdf"`);
         doc.pipe(res);
 
-        // Encabezado
-        doc.font('Helvetica-Bold').fontSize(16).text('ESTADO DE CUENTA Y CONCILIACIÓN', { align: 'center' });
-        doc.fontSize(12).text(`Suplidor: ${supplierRes.rows[0].name}`, { align: 'center' });
-        doc.fontSize(10).font('Helvetica').text(`Generado: ${new Date().toLocaleString()}`, { align: 'center' });
-        doc.moveDown(2);
+        // --- FUNCIÓN DE AYUDA PARA FORMATO DE MONEDA ---
+        const formatMoney = (val) => 'RD$ ' + parseFloat(val).toLocaleString('en-US', {minimumFractionDigits: 2});
 
-        // SECCIÓN 1: FACTURAS PENDIENTES
-        doc.font('Helvetica-Bold').fontSize(12).text('1. FACTURAS PENDIENTES DE PAGO', { underline: true });
+        // -----------------------------------------------------------
+        // 1. ENCABEZADO CORPORATIVO (Franja Azul + Cuadro Rojo)
+        // -----------------------------------------------------------
+        doc.rect(0, 0, 600, 110).fill('#2c3e50'); // Fondo Azul Oscuro
+        
+        doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(22).text('ESTADO DE CUENTA', 40, 35);
+        doc.fontSize(12).font('Helvetica').text(`Suplidor: ${supplierRes.rows[0].name}`, 40, 65);
+        doc.fontSize(10).text(`Generado: ${new Date().toLocaleString('es-DO')}`, 40, 80);
+
+        // Cuadro Rojo de Total Adeudado
+        doc.rect(380, 25, 170, 60).fill('#e74a3b'); 
+        doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(11).text('TOTAL ADEUDADO', 380, 40, { width: 170, align: 'center' });
+        doc.fontSize(16).text(formatMoney(totalPendiente), 380, 55, { width: 170, align: 'center' });
+
+        doc.moveDown(4); // Bajar el cursor debajo del encabezado
+
+        // -----------------------------------------------------------
+        // 2. SECCIÓN FACTURAS PENDIENTES
+        // -----------------------------------------------------------
+        doc.fillColor('#2c3e50').font('Helvetica-Bold').fontSize(14).text('1. FACTURAS PENDIENTES DE PAGO');
         doc.moveDown(0.5);
-        doc.fontSize(10);
-        doc.text('FECHA', 50, doc.y, { width: 70 });
-        doc.text('CONCEPTO', 120, doc.y, { width: 230 });
-        doc.text('PENDIENTE', 450, doc.y, { align: 'right' });
-        doc.moveTo(50, doc.y + 12).lineTo(550, doc.y + 12).stroke();
-        doc.moveDown();
 
-        invoices.forEach(i => {
-            const bal = parseFloat(i.amount) - parseFloat(i.paid_amount || 0);
-            doc.text(new Date(i.expense_date).toLocaleDateString(), 50, doc.y);
-            doc.text(i.description || 'N/A', 120, doc.y, { width: 220 });
-            doc.text(`RD$ ${bal.toFixed(2)}`, 450, doc.y, { align: 'right' });
-            doc.moveDown();
-        });
+        // Cabecera Tabla Facturas
+        doc.rect(40, doc.y, 515, 20).fill('#f8f9fc');
+        let startY = doc.y + 5;
+        doc.fillColor('#6c757d').font('Helvetica-Bold').fontSize(10);
+        doc.text('FECHA', 50, startY, { width: 70 });
+        doc.text('FACTURA / CONCEPTO', 130, startY, { width: 260 });
+        doc.text('BALANCE PENDIENTE', 400, startY, { width: 145, align: 'right' });
+        doc.y += 15;
 
-        // SECCIÓN 2: HISTORIAL DE PAGOS REALIZADOS (La gran mejora)
-        doc.moveDown(2);
-        doc.font('Helvetica-Bold').fontSize(12).text('2. HISTORIAL DE ABONOS RECIBIDOS', { underline: true });
+        // Filas Facturas
+        doc.font('Helvetica').fontSize(10).fillColor('#495057');
+        if (invoices.length === 0) {
+            doc.moveDown(1);
+            doc.text('No hay facturas pendientes.', 50, doc.y);
+        } else {
+            invoices.forEach(i => {
+                if (doc.y > 750) doc.addPage(); // Paginación automática si la lista es larga
+                
+                const bal = parseFloat(i.amount) - parseFloat(i.paid_amount || 0);
+                const numFact = i.numero_factura ? `Fact: ${i.numero_factura} - ` : '';
+                
+                doc.moveDown(0.5);
+                const currentY = doc.y;
+                
+                doc.text(new Date(i.expense_date).toLocaleDateString(), 50, currentY, { width: 70 });
+                doc.text(`${numFact}${i.description || 'N/A'}`, 130, currentY, { width: 260 });
+                
+                doc.fillColor('#e74a3b').font('Helvetica-Bold')
+                   .text(formatMoney(bal), 400, currentY, { width: 145, align: 'right' });
+                
+                doc.fillColor('#495057').font('Helvetica'); // Resetear color
+                
+                // Línea divisoria sutil
+                doc.moveTo(40, doc.y + 5).lineTo(555, doc.y + 5).lineWidth(0.5).strokeColor('#eaeaea').stroke();
+            });
+        }
+
+        // -----------------------------------------------------------
+        // 3. SECCIÓN HISTORIAL DE ABONOS
+        // -----------------------------------------------------------
+        doc.moveDown(3);
+        if (doc.y > 700) doc.addPage(); // Evitar que el título quede huérfano al final de la página
+
+        doc.fillColor('#2c3e50').font('Helvetica-Bold').fontSize(14).text('2. HISTORIAL DE ABONOS RECIBIDOS');
         doc.moveDown(0.5);
-        doc.fontSize(10);
-        doc.text('FECHA PAGO', 50, doc.y, { width: 90 });
-        doc.text('MÉTODO', 150, doc.y, { width: 100 });
-        doc.text('MONTO ABONADO', 450, doc.y, { align: 'right' });
-        doc.moveTo(50, doc.y + 12).lineTo(550, doc.y + 12).stroke();
-        doc.moveDown();
 
-        doc.font('Helvetica');
-        history.forEach(h => {
-            doc.text(new Date(h.payment_date).toLocaleDateString(), 50, doc.y);
-            doc.text(h.payment_method || 'Efectivo', 150, doc.y);
-            doc.text(`RD$ ${parseFloat(h.amount_paid).toFixed(2)}`, 450, doc.y, { align: 'right' });
-            doc.moveDown();
-        });
+        // Cabecera Tabla Abonos
+        doc.rect(40, doc.y, 515, 20).fill('#f8f9fc');
+        startY = doc.y + 5;
+        doc.fillColor('#6c757d').font('Helvetica-Bold').fontSize(10);
+        doc.text('FECHA PAGO', 50, startY, { width: 80 });
+        doc.text('MÉTODO', 140, startY, { width: 80 });
+        doc.text('REFERENCIA FACTURA', 230, startY, { width: 180 });
+        doc.text('MONTO ABONADO', 420, startY, { width: 125, align: 'right' });
+        doc.y += 15;
 
-        // TOTAL FINAL
-        doc.moveDown(2);
-        doc.font('Helvetica-Bold').fontSize(14).fillColor('#c53030')
-           .text(`DEUDA TOTAL A LA FECHA: RD$ ${totalPendiente.toFixed(2)}`, { align: 'right' });
+        // Filas Abonos
+        doc.font('Helvetica').fontSize(10).fillColor('#495057');
+        if (history.length === 0) {
+            doc.moveDown(1);
+            doc.text('No hay abonos registrados.', 50, doc.y);
+        } else {
+            history.forEach(h => {
+                if (doc.y > 750) doc.addPage();
+                
+                doc.moveDown(0.5);
+                const currentY = doc.y;
+                
+                doc.text(new Date(h.payment_date).toLocaleDateString(), 50, currentY, { width: 80 });
+                doc.text(h.fund_source || h.payment_method || 'N/A', 140, currentY, { width: 80 });
+                doc.text(h.factura_desc || 'Gasto General', 230, currentY, { width: 180 });
+                
+                doc.fillColor('#1cc88a').font('Helvetica-Bold')
+                   .text(formatMoney(h.amount_paid), 420, currentY, { width: 125, align: 'right' });
+                
+                doc.fillColor('#495057').font('Helvetica'); // Resetear color
+                
+                doc.moveTo(40, doc.y + 5).lineTo(555, doc.y + 5).lineWidth(0.5).strokeColor('#eaeaea').stroke();
+            });
+        }
+
+        // Pie de página centrado
+        doc.font('Helvetica-Oblique').fontSize(8).fillColor('#b7b9cc');
+        doc.text('Este documento es generado automáticamente por el Sistema de Administración.', 40, 780, { align: 'center' });
 
         doc.end();
-    } catch (e) { res.status(500).send(e.message); } finally { if (client) client.release(); }
+    } catch (e) { 
+        console.error(e);
+        res.status(500).send(e.message); 
+    } finally { 
+        if (client) client.release(); 
+    }
 });
+
 // =============================================================
 // 💰 RUTA DEFINITIVA PARA ABONAR (CON RECIBO AUTOMÁTICO)
 // =============================================================
