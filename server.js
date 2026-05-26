@@ -388,6 +388,10 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
                         <a href="/gastos-generales" class="dashboard-card"><h3>💸 Registrar Gasto</h3><p>Salidas generales.</p></a>
                         <a href="/reporte-gastos" class="dashboard-card"><h3>📉 Reporte de Gastos</h3><p>Resumen salidas.</p></a>
                         <a href="/suplidores" class="dashboard-card"><h3>🚚 Suplidores</h3><p>Proveedores.</p></a>
+                        <a href="/reporte-contable" class="dashboard-card" style="border-left: 5px solid #858796; background:#f8f9fc;">
+    <h3 style="color:#2c3e50;">🗂️ Cierre Contable</h3>
+    <p>Folders para el contable.</p>
+</a>
                     </div>
                 </div>
 
@@ -1380,6 +1384,15 @@ app.get('/cuentas-por-pagar', requireLogin, requireAdminOrCoord, async (req, res
                             <label style="font-weight: 600; font-size: 13px; color: #495057; display:block; margin-bottom: 5px;">Número de Factura:</label>
                             <input type="text" name="numero_factura" placeholder="Ej: B0100000123" style="width:100%; padding:10px; border: 1px solid #ced4da; border-radius: 6px; box-sizing:border-box;">
                         </div>
+
+                        <div class="form-group" style="margin-bottom: 15px;">
+                            <label style="font-weight: 600; font-size: 13px; color: #e74a3b; display:block; margin-bottom: 5px;">📁 Ubicación de Folder / Tipo de Gasto:</label>
+                            <select name="clasificacion_fiscal" required style="width:100%; padding:10px; border: 1px solid #ced4da; border-radius: 6px; box-sizing:border-box; font-size: 13px; background: #fff;">
+                                <option value="be_eventos_no_fiscal">📁 Be Eventos (Gastos Normales - Sin Valor Fiscal)</option>
+                                <option value="be_eventos_fiscal">📄 Be Eventos (Con Valor Fiscal / NCF)</option>
+                                <option value="mediabook_fiscal">📘 Mediabook (Con Valor Fiscal para Be Eventos)</option>
+                            </select>
+                        </div>
                         
                         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
                             <div class="form-group">
@@ -1800,10 +1813,11 @@ app.get('/gastos-generales', requireLogin, requireAdminOrCoord, async (req, res)
                                 </div>
                                 
                                 <div style="display: flex; flex-direction: column;">
-                                    <label style="font-weight: 600; font-size: 13px; margin-bottom: 8px; color: #495057;">Tipo de Comprobante:</label>
-                                    <select name="type" style="padding: 12px; border: 1px solid #ced4da; border-radius: 6px; outline: none; font-family: inherit; background: white;">
-                                        <option value="Sin Valor Fiscal">Sin Valor Fiscal</option>
-                                        <option value="Con Valor Fiscal">Con Valor Fiscal</option>
+                                    <label style="font-weight: 600; font-size: 13px; margin-bottom: 8px; color: #e74a3b;">📁 Ubicación de Folder / Tipo de Gasto:</label>
+                                    <select name="clasificacion_fiscal" required style="padding: 12px; border: 1px solid #ced4da; border-radius: 6px; outline: none; font-family: inherit; background: white; font-size: 13px;">
+                                        <option value="be_eventos_no_fiscal">📁 Be Eventos (Gastos Normales - Sin Valor Fiscal)</option>
+                                        <option value="be_eventos_fiscal">📄 Be Eventos (Con Valor Fiscal / NCF)</option>
+                                        <option value="mediabook_fiscal">📘 Mediabook (Con Valor Fiscal para Be Eventos)</option>
                                     </select>
                                 </div>
                                 
@@ -1883,26 +1897,26 @@ app.get('/gastos-generales', requireLogin, requireAdminOrCoord, async (req, res)
 
 // --- 2. RUTA PARA GUARDAR EL GASTO ---
 app.post('/gastos-generales', requireLogin, requireAdminOrCoord, async (req, res) => {
-    // Agregamos quote_id a lo que recibimos del formulario
-    const { expense_date, supplier_id, amount, description, type, quote_id } = req.body;
+    // Agregamos clasificacion_fiscal a lo que recibimos del formulario
+    const { expense_date, supplier_id, amount, description, clasificacion_fiscal, quote_id } = req.body;
     
     // Validaciones
     if (!expense_date || !supplier_id || !amount || !description) {
         return res.status(400).send("La fecha, suplidor, monto y descripción son obligatorios.");
     }
 
-    // Transformamos el quote_id. Si está vacío, es null (Gasto general). Si tiene algo, va al colegio.
     const proyectoAsignado = quote_id ? quote_id : null;
+    const folderFiscal = clasificacion_fiscal || 'be_eventos_no_fiscal'; 
 
     let client;
     try {
         client = await pool.connect();
         
-        // Reemplazamos el NULL fijo por nuestra variable proyectoAsignado ($6)
+        // El 'type' lo dejamos nulo o vacío por ahora, ya que la clasificación fiscal lo sustituye.
         await client.query(
-            `INSERT INTO expenses (expense_date, supplier_id, amount, description, type, quote_id, status, paid_amount) 
-             VALUES ($1, $2, $3, $4, $5, $6, 'Pagada', $3)`,
-            [expense_date, supplier_id, amount, description, type, proyectoAsignado]
+            `INSERT INTO expenses (expense_date, supplier_id, amount, description, type, quote_id, status, paid_amount, clasificacion_fiscal) 
+             VALUES ($1, $2, $3, $4, NULL, $5, 'Pagada', $3, $6)`,
+            [expense_date, supplier_id, amount, description, proyectoAsignado, folderFiscal]
         );
         
         res.redirect('/gastos-generales');
@@ -1982,6 +1996,14 @@ app.get('/caja-chica', requireLogin, requireAdminOrCoord, async (req, res) => {
                             <div class="form-group"><label>Fecha:</label><input type="date" name="expense_date" value="${new Date().toISOString().split('T')[0]}" required></div>
                             <div class="form-group"><label>Suplidor:</label><select name="supplier_id" required><option value="">Seleccione...</option>${supps.rows.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')}</select></div>
                             <div class="form-group"><label>Monto (RD$):</label><input type="number" id="monto-gasto" name="amount" step="0.01" required></div>
+                            <div class="form-group">
+                                <label style="color:#e74a3b; font-weight:bold;">📁 Folder / Tipo Gasto:</label>
+                                <select name="clasificacion_fiscal" required>
+                                    <option value="be_eventos_no_fiscal">📁 Be Eventos (Sin Valor Fiscal)</option>
+                                    <option value="be_eventos_fiscal">📄 Be Eventos (Con Valor Fiscal)</option>
+                                    <option value="mediabook_fiscal">📘 Mediabook (Con Valor Fiscal)</option>
+                                </select>
+                            </div>
                             <div class="form-group"><label>Concepto:</label><textarea name="description" rows="2" required></textarea></div>
                             <button type="submit" class="btn btn-activar" style="width: 100%;">💾 Guardar Gasto</button>
                         </form>
@@ -2111,13 +2133,17 @@ app.post('/caja-chica/cerrar-ciclo', requireLogin, requireAdminOrCoord, async (r
 });
 
 app.post('/caja-chica/nuevo-gasto', requireLogin, requireAdminOrCoord, async (req, res) => {
-    const { cycleId, expense_date, supplier_id, amount, description } = req.body;
+    // 1. Añadimos clasificacion_fiscal a las variables recibidas
+    const { cycleId, expense_date, supplier_id, amount, description, clasificacion_fiscal } = req.body;
     let client;
     try {
         client = await pool.connect();
         await client.query('BEGIN');
 
-        // 1. Obtener fondo y gastos (Añadimos validación de existencia)
+        // 2. Definimos el folder (por defecto 'be_eventos_no_fiscal' si no viene nada)
+        const folderFiscal = clasificacion_fiscal || 'be_eventos_no_fiscal';
+
+        // 3. Obtener fondo y gastos (Añadimos validación de existencia)
         const cycleRes = await client.query("SELECT fondo_inicial FROM caja_chica_ciclos WHERE id = $1", [cycleId]);
         
         if (cycleRes.rows.length === 0) {
@@ -2132,10 +2158,9 @@ app.post('/caja-chica/nuevo-gasto', requireLogin, requireAdminOrCoord, async (re
         const montoNuevoGasto = parseFloat(amount || 0);
         const balanceDisponible = fondoInicial - totalGastado;
 
-        // 2. EL ESCUDO: ¿Hay dinero suficiente?
+        // 4. EL ESCUDO: ¿Hay dinero suficiente?
         if (montoNuevoGasto > balanceDisponible) {
             await client.query('ROLLBACK');
-            // Usamos un script de alerta para no sacar al usuario de su pantalla
             return res.send(`
                 <script>
                     alert('⚠️ FONDOS INSUFICIENTES\\n\\nDisponible: RD$ ${balanceDisponible.toLocaleString('en-US', {minimumFractionDigits:2})}\\nIntento de gasto: RD$ ${montoNuevoGasto.toLocaleString('en-US', {minimumFractionDigits:2})}\\n\\nPor favor, solicita una reposición.');
@@ -2144,7 +2169,7 @@ app.post('/caja-chica/nuevo-gasto', requireLogin, requireAdminOrCoord, async (re
             `);
         }
 
-        // 3. Registro con vinculación total al sistema de reportes
+        // 5. Registro con vinculación total al sistema de reportes Y clasificación fiscal
         await client.query(
             `INSERT INTO expenses (
                 caja_chica_ciclo_id, 
@@ -2155,9 +2180,10 @@ app.post('/caja-chica/nuevo-gasto', requireLogin, requireAdminOrCoord, async (re
                 description, 
                 type, 
                 status, 
-                fund_source
-            ) VALUES ($1, $2, $3, $4, $4, $5, 'Caja Chica', 'Pagada', 'Caja Chica')`,
-            [cycleId, expense_date, supplier_id, montoNuevoGasto, description]
+                fund_source,
+                clasificacion_fiscal
+            ) VALUES ($1, $2, $3, $4, $4, $5, 'Caja Chica', 'Pagada', 'Caja Chica', $6)`,
+            [cycleId, expense_date, supplier_id, montoNuevoGasto, description, folderFiscal]
         );
 
         await client.query('COMMIT');
@@ -2170,7 +2196,9 @@ app.post('/caja-chica/nuevo-gasto', requireLogin, requireAdminOrCoord, async (re
     } finally {
         if (client) client.release();
     }
-});// --- RUTA PARA GENERAR EL REPORTE PDF DEL CIERRE (CORREGIDA) ---
+});
+
+// --- RUTA PARA GENERAR EL REPORTE PDF DEL CIERRE (CORREGIDA) ---
 app.get('/caja-chica/reporte/:cycleId/pdf', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { cycleId } = req.params;
     try {
@@ -7131,6 +7159,132 @@ app.get('/usuarios', requireLogin, requireAdminOrCoord, async (req, res) => {
     } catch (e) { res.status(500).send("Error Usuarios: " + e.message); } finally { if (client) client.release(); }
 });
 
+// =======================================================
+// 🗂️ MÓDULO DE REPORTES PARA EL CONTABLE (CIERRE DE MES)
+// =======================================================
+
+// 1. PANTALLA PARA ELEGIR EL MES Y EL FOLDER
+app.get('/reporte-contable', requireLogin, requireAdminOrCoord, (req, res) => {
+    res.send(`
+        <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head>
+        <body style="background-color: #f4f6f9;">
+            <div class="container" style="max-width: 800px; margin-top: 40px;">
+                <div style="margin-bottom: 20px;">${backToDashboardLink}</div>
+                <h2 style="color: #2c3e50; text-align: center; margin-bottom: 10px;">🗂️ Cierre de Mes Contable</h2>
+                <p style="text-align: center; color: #6c757d; margin-bottom: 30px;">Genera las portadas con el listado de facturas para tus folders físicos.</p>
+
+                <div class="card" style="padding: 40px; text-align: center; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.05);">
+                    <div style="margin-bottom: 40px; background: #f8f9fc; padding: 20px; border-radius: 8px; display: inline-block;">
+                        <label style="font-weight: bold; font-size: 16px; color:#495057;">📅 Selecciona el Mes de Cierre:</label>
+                        <input type="month" id="mesReporte" value="${new Date().toISOString().slice(0, 7)}" style="padding: 10px; font-size: 16px; margin-left: 15px; border-radius: 5px; border: 1px solid #ced4da; outline: none; cursor:pointer;">
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: 1fr; gap: 15px; max-width: 500px; margin: 0 auto;">
+                        <button onclick="generarPDF('be_eventos_no_fiscal')" class="btn" style="background:#858796; color:white; padding:15px; font-weight:bold; font-size:15px; border-radius:8px; box-shadow:0 4px 6px rgba(0,0,0,0.1); transition:0.2s;">
+                            📁 1. Folder Be Eventos (Sin Valor Fiscal)
+                        </button>
+                        <button onclick="generarPDF('be_eventos_fiscal')" class="btn" style="background:#4e73df; color:white; padding:15px; font-weight:bold; font-size:15px; border-radius:8px; box-shadow:0 4px 6px rgba(78,115,223,0.2); transition:0.2s;">
+                            📄 2. Folder Be Eventos (CON NCF)
+                        </button>
+                        <button onclick="generarPDF('mediabook_fiscal')" class="btn" style="background:#1cc88a; color:white; padding:15px; font-weight:bold; font-size:15px; border-radius:8px; box-shadow:0 4px 6px rgba(28,200,138,0.2); transition:0.2s;">
+                            📘 3. Folder Mediabook (CON NCF)
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <script>
+                function generarPDF(tipo) {
+                    const mes = document.getElementById('mesReporte').value;
+                    if(!mes) { alert('Por favor elige un mes.'); return; }
+                    window.open('/imprimir-folder-pdf?mes=' + mes + '&tipo=' + tipo, '_blank');
+                }
+            </script>
+        </body></html>
+    `);
+});
+
+// 2. MOTOR GENERADOR DEL PDF
+app.get('/imprimir-folder-pdf', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { mes, tipo } = req.query; // mes: '2026-05', tipo: 'be_eventos_fiscal'
+    
+    let tituloReporte = "REPORTE DE GASTOS";
+    if (tipo === 'be_eventos_no_fiscal') tituloReporte = "BE EVENTOS: GASTOS NORMALES (SIN VALOR FISCAL)";
+    if (tipo === 'be_eventos_fiscal') tituloReporte = "BE EVENTOS: GASTOS CON VALOR FISCAL (NCF)";
+    if (tipo === 'mediabook_fiscal') tituloReporte = "MEDIABOOK: GASTOS CON VALOR FISCAL (NCF)";
+
+    let client;
+    try {
+        client = await pool.connect();
+        
+        // Buscamos todos los gastos de ese mes y esa clasificación exacta
+        const gastosRes = await client.query(`
+            SELECT e.*, s.name as supplier_name 
+            FROM expenses e
+            JOIN suppliers s ON e.supplier_id = s.id
+            WHERE e.clasificacion_fiscal = $1 
+            AND TO_CHAR(e.expense_date, 'YYYY-MM') = $2
+            ORDER BY e.expense_date ASC
+        `, [tipo, mes]);
+
+        const gastos = gastosRes.rows;
+        const totalMes = gastos.reduce((sum, g) => sum + parseFloat(g.amount || 0), 0);
+
+        const doc = new PDFDocument({ size: 'A4', margin: 40 });
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename="Folder_${tipo}_${mes}.pdf"`);
+        doc.pipe(res);
+
+        // ENCABEZADO
+        doc.rect(0, 0, 600, 100).fill('#2c3e50'); 
+        doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(14).text(tituloReporte, 40, 35, { width: 520, align: 'center' });
+        doc.fontSize(12).font('Helvetica').text(`Período Contable: ${mes}`, 40, 55, { align: 'center' });
+        
+        doc.moveDown(4);
+
+        // TABLA DE GASTOS
+        doc.rect(40, doc.y, 515, 20).fill('#f8f9fc');
+        let startY = doc.y + 6;
+        doc.fillColor('#6c757d').font('Helvetica-Bold').fontSize(9);
+        doc.text('FECHA', 50, startY, { width: 60 });
+        doc.text('SUPLIDOR', 120, startY, { width: 150 });
+        doc.text('CONCEPTO / FACTURA', 280, startY, { width: 170 });
+        doc.text('MONTO (RD$)', 460, startY, { width: 85, align: 'right' });
+        doc.y += 20;
+
+        doc.font('Helvetica').fontSize(9).fillColor('#495057');
+
+        if (gastos.length === 0) {
+            doc.moveDown(2);
+            doc.text(`No se registraron facturas para este folder en ${mes}.`, 50, doc.y, { align: 'center', width: 515 });
+        } else {
+            gastos.forEach((g, index) => {
+                if (doc.y > 720) { doc.addPage(); doc.y = 40; }
+                doc.moveDown(0.5);
+                const currentY = doc.y;
+                
+                doc.text(new Date(g.expense_date).toLocaleDateString(), 50, currentY, { width: 60 });
+                doc.text(g.supplier_name, 120, currentY, { width: 150 });
+                doc.text(g.description || '-', 280, currentY, { width: 170 });
+                doc.text(parseFloat(g.amount).toLocaleString('en-US', {minimumFractionDigits: 2}), 460, currentY, { width: 85, align: 'right' });
+                
+                doc.moveTo(40, doc.y + 8).lineTo(555, doc.y + 8).lineWidth(0.5).strokeColor('#eaeaea').stroke();
+                doc.y += 5;
+            });
+
+            // TOTAL FINAL
+            doc.moveDown(2);
+            doc.rect(350, doc.y, 205, 30).fill('#e74a3b');
+            doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(12)
+               .text(`TOTAL: RD$ ${totalMes.toLocaleString('en-US', {minimumFractionDigits: 2})}`, 350, doc.y + 10, { width: 205, align: 'center' });
+        }
+
+        doc.end();
+    } catch (e) {
+        res.status(500).send("Error generando reporte: " + e.message);
+    } finally {
+        if (client) client.release();
+    }
+});
 
 
 app.listen(PORT, () => {
