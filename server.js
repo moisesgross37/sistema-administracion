@@ -2557,9 +2557,9 @@ app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, re
                 </tr>`;
         }).join('');
 
-        // CÁLCULO DE LA TEMPERATURA REAL (Flujo de Caja)
-        const flujoDeCaja = globalCobrado - globalGastado;
-        const colorFlujo = flujoDeCaja >= 0 ? '#1cc88a' : '#e74a3b'; // Verde si hay dinero, Rojo si estamos en déficit
+        // CÁLCULO DE LA RENTABILIDAD DE PROYECTOS (No es flujo de caja global)
+        const rentabilidadProyectos = globalCobrado - globalGastado;
+        const colorRentabilidad = rentabilidadProyectos >= 0 ? '#1cc88a' : '#e74a3b'; 
 
         res.send(`
             <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}
@@ -2573,25 +2573,25 @@ app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, re
             </head><body>
                 <div class="container" style="max-width:1400px;">
                     ${backToDashboardLink}
-                    <h2 style="margin-top:20px; margin-bottom: 20px;">Reporte de Cobros y Flujo (2025-2026)</h2>
+                    <h2 style="margin-top:20px; margin-bottom: 20px;">Reporte de Cobros y Rendimiento (Proyectos)</h2>
 
                     <div class="stat-grid">
                         <div class="stat-card">
-                            <div class="stat-title" style="color:#4e73df;">Venta Total Contratada</div>
+                            <div class="stat-title" style="color:#4e73df;">Venta Activa (Colegios)</div>
                             <div class="stat-value">RD$ ${globalVenta.toLocaleString('en-US', {maximumFractionDigits: 0})}</div>
                         </div>
                         <div class="stat-card" style="border-left-color:#1cc88a;">
-                            <div class="stat-title" style="color:#1cc88a;">Total Cobrado (Entradas)</div>
+                            <div class="stat-title" style="color:#1cc88a;">Total Cobrado (Proyectos)</div>
                             <div class="stat-value">RD$ ${globalCobrado.toLocaleString('en-US', {maximumFractionDigits: 0})}</div>
                         </div>
                         <div class="stat-card" style="border-left-color:#f6c23e;">
-                            <div class="stat-title" style="color:#f6c23e;">Total Gastado (Salidas)</div>
+                            <div class="stat-title" style="color:#f6c23e;">Gastos Directos (Operatividad)</div>
                             <div class="stat-value">RD$ ${globalGastado.toLocaleString('en-US', {maximumFractionDigits: 0})}</div>
                         </div>
-                        <div class="stat-card" style="border-left-color:${colorFlujo}; background: ${flujoDeCaja < 0 ? '#fff5f5' : 'white'};">
-                            <div class="stat-title" style="color:${colorFlujo};">Disponibilidad Real (Caja)</div>
-                            <div class="stat-value" style="color:${colorFlujo};">RD$ ${flujoDeCaja.toLocaleString('en-US', {minimumFractionDigits: 2})}</div>
-                            <small style="color:gray; font-size:10px;">(Cobrado - Gastado)</small>
+                        <div class="stat-card" style="border-left-color:${colorRentabilidad}; background: ${rentabilidadProyectos < 0 ? '#fff5f5' : 'white'};">
+                            <div class="stat-title" style="color:${colorRentabilidad};">Rentabilidad Bruta (Proyectos)</div>
+                            <div class="stat-value" style="color:${colorRentabilidad};">RD$ ${rentabilidadProyectos.toLocaleString('en-US', {minimumFractionDigits: 2})}</div>
+                            <small style="color:gray; font-size:10px;">(Ingresos de Colegios - Gastos de Colegios)</small>
                         </div>
                     </div>
 
@@ -6445,13 +6445,50 @@ app.post('/procesar-super-nomina', requireLogin, requireAdminOrCoord, async (req
             
             const newRecordId = recordRes.rows[0].id;
 
-            // 2. Registrar PAGO en la tabla de Préstamos (Si aplica)
-            if (entry.loan_id && prestamoDeduccion > 0) {
-                await client.query(
-                    `INSERT INTO loan_payments (loan_id, payment_date, amount_paid, payment_method, payroll_record_id) 
-                     VALUES ($1, CURRENT_DATE, $2, 'Descuento Nómina', $3)`,
-                    [entry.loan_id, prestamoDeduccion, newRecordId]
-                );
+            // 2. Registrar PAGO en Préstamos (EFECTO CASCADA INTELIGENTE)
+            let remanenteDeduccion = prestamoDeduccion;
+
+            if (remanenteDeduccion > 0) {
+                // Buscamos TODOS los préstamos activos del empleado, del más viejo al más nuevo
+                const prestamosActivos = await client.query(`
+                    SELECT l.id, l.loan_amount, 
+                           COALESCE((SELECT SUM(amount_paid) FROM loan_payments WHERE loan_id = l.id), 0) as pagado
+                    FROM loans l 
+                    WHERE l.employee_id = $1 AND l.status = 'activo' 
+                    ORDER BY l.loan_date ASC
+                `, [entry.employee_id]);
+
+                for (const prestamo of prestamosActivos.rows) {
+                    if (remanenteDeduccion <= 0) break; // Si se acabó el dinero del descuento, salimos del ciclo
+
+                    const montoPrestamo = parseFloat(prestamo.loan_amount);
+                    const montoPagado = parseFloat(prestamo.pagado);
+                    const balancePendiente = montoPrestamo - montoPagado;
+
+                    if (balancePendiente > 0) {
+                        let montoAAplicar = 0;
+
+                        if (remanenteDeduccion >= balancePendiente) {
+                            // El descuento alcanza para saldar este préstamo completo
+                            montoAAplicar = balancePendiente;
+                            remanenteDeduccion -= balancePendiente; // Restamos lo que ya usamos
+                            
+                            // Como se pagó completo, cerramos el préstamo para siempre
+                            await client.query("UPDATE loans SET status = 'saldado' WHERE id = $1", [prestamo.id]);
+                        } else {
+                            // El descuento solo da para un abono parcial
+                            montoAAplicar = remanenteDeduccion;
+                            remanenteDeduccion = 0; // Nos quedamos sin dinero para repartir
+                        }
+
+                        // Registramos el pago exacto a este préstamo en el historial
+                        await client.query(
+                            `INSERT INTO loan_payments (loan_id, payment_date, amount_paid, payment_method, payroll_record_id) 
+                             VALUES ($1, CURRENT_DATE, $2, 'Descuento Nómina', $3)`,
+                            [prestamo.id, montoAAplicar, newRecordId]
+                        );
+                    }
+                }
             }
 
             // 3. Registrar Extras y Vincular a Centros
