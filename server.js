@@ -738,43 +738,162 @@ app.get('/ver-cotizacion-pdf/:quoteId', requireLogin, async (req, res) => {
     }
 });
 
+// =======================================================
+// 🚚 MÓDULO DE SUPLIDORES (VERSIÓN MODERNA Y LIMPIA)
+// =======================================================
+
+// 1. PANTALLA PRINCIPAL
 app.get('/suplidores', requireLogin, requireAdminOrCoord, async (req, res) => {
+    let client;
     try {
-        const client = await pool.connect();
-        const result = await client.query('SELECT * FROM suppliers ORDER BY name ASC');
+        client = await pool.connect();
+        // Traemos todos los suplidores. Los activos salen arriba, inactivos abajo.
+        const result = await client.query("SELECT * FROM suppliers ORDER BY estado ASC, name ASC");
         const suppliers = result.rows;
-        client.release();
-        let suppliersHtml = suppliers.map(s => `<tr><td>${s.id}</td><td>${s.name}</td><td>${s.contact_info || ''}</td></tr>`).join('');
+
+        let tableRows = suppliers.map(s => {
+            const isActivo = s.estado !== 'inactivo';
+            const badge = isActivo 
+                ? `<span style="background:#1cc88a; color:white; padding:4px 8px; border-radius:4px; font-size:11px; font-weight:bold;">ACTIVO</span>`
+                : `<span style="background:#e74a3b; color:white; padding:4px 8px; border-radius:4px; font-size:11px; font-weight:bold;">INACTIVO</span>`;
+            
+            const btnAction = isActivo
+                ? `<form action="/suplidores/${s.id}/toggle" method="POST" style="margin:0;"><button type="submit" style="background:#f6c23e; color:white; padding:6px 12px; font-size:12px; border-radius:4px; border:none; cursor:pointer; font-weight:bold; box-shadow:0 2px 4px rgba(0,0,0,0.1);">⚠️ Desactivar</button></form>`
+                : `<form action="/suplidores/${s.id}/toggle" method="POST" style="margin:0;"><button type="submit" style="background:#1cc88a; color:white; padding:6px 12px; font-size:12px; border-radius:4px; border:none; cursor:pointer; font-weight:bold; box-shadow:0 2px 4px rgba(0,0,0,0.1);">✅ Activar</button></form>`;
+
+            return `
+                <tr class="suplidor-row" style="background: ${isActivo ? 'white' : '#f8f9fa'}; opacity: ${isActivo ? '1' : '0.6'}; transition: 0.2s;" onmouseover="this.style.background='#f8f9fc'" onmouseout="this.style.background='${isActivo ? 'white' : '#f8f9fa'}'">
+                    <td style="padding:15px; border-bottom:1px solid #eaeaea; color:#2c3e50; font-weight:bold;" class="sup-name">${s.name}</td>
+                    <td style="padding:15px; border-bottom:1px solid #eaeaea; color:#6c757d;">${s.contact_info || '-'}</td>
+                    <td style="padding:15px; border-bottom:1px solid #eaeaea; text-align:center;">${badge}</td>
+                    <td style="padding:15px; border-bottom:1px solid #eaeaea; text-align:center;">${btnAction}</td>
+                </tr>
+            `;
+        }).join('');
+
         if (suppliers.length === 0) {
-            suppliersHtml = '<tr><td colspan="3">No hay suplidores registrados.</td></tr>';
+            tableRows = '<tr><td colspan="4" style="text-align:center; padding:20px; color:#6c757d;">No hay suplidores registrados.</td></tr>';
         }
+
         res.send(`
-            <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head><body>
-                <div class="container">
-                    ${backToDashboardLink}
-                    <h2>Lista de Suplidores</h2>
-                    <table><thead><tr><th>ID</th><th>Nombre del Suplidor</th><th>Información de Contacto</th></tr></thead><tbody>${suppliersHtml}</tbody></table>
-                    <div class="form-container"><h2>Añadir Nuevo Suplidor</h2><form action="/suplidores" method="POST"><div class="form-group"><label for="name">Nombre:</label><input type="text" id="name" name="name" required></div><div class="form-group"><label for="contact_info">Contacto:</label><textarea id="contact_info" name="contact_info" rows="3"></textarea></div><button type="submit" class="btn">Guardar Suplidor</button></form></div>
+            <!DOCTYPE html><html lang="es"><head>${commonHtmlHead}</head>
+            <body style="background-color: #f4f6f9;">
+                <div class="container" style="max-width: 1050px; padding-top: 30px; padding-bottom: 50px;">
+                    <div style="margin-bottom: 20px;">${backToDashboardLink}</div>
+                    
+                    <h2 style="color: #2c3e50; margin-bottom: 25px; font-size: 24px;">🚚 Gestión de Suplidores</h2>
+
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 30px;">
+                        <div style="background: white; padding: 25px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); border: 1px solid #eaeaea;">
+                            <h3 style="margin-top:0; color:#4e73df; font-size:16px; margin-bottom:15px;">➕ Añadir Nuevo Suplidor</h3>
+                            <form action="/suplidores" method="POST">
+                                <div style="margin-bottom: 15px;">
+                                    <label style="display:block; font-size:13px; font-weight:bold; color:#495057; margin-bottom:5px;">Nombre de Empresa / Persona:</label>
+                                    <input type="text" name="name" required placeholder="Ej: Importadora del Caribe" style="width:100%; padding:10px; border:1px solid #ced4da; border-radius:5px; box-sizing:border-box; font-family:inherit;">
+                                </div>
+                                <div style="margin-bottom: 20px;">
+                                    <label style="display:block; font-size:13px; font-weight:bold; color:#495057; margin-bottom:5px;">Contacto / Teléfono (Opcional):</label>
+                                    <input type="text" name="contact_info" placeholder="Ej: 809-555-0000" style="width:100%; padding:10px; border:1px solid #ced4da; border-radius:5px; box-sizing:border-box; font-family:inherit;">
+                                </div>
+                                <button type="submit" style="background:#4e73df; color:white; padding:12px; border:none; border-radius:6px; font-weight:bold; cursor:pointer; width:100%; font-size:14px; box-shadow:0 4px 6px rgba(78,115,223,0.2);">💾 Guardar Suplidor</button>
+                            </form>
+                        </div>
+
+                        <div style="background: white; padding: 25px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); border: 1px solid #eaeaea; display: flex; flex-direction: column; justify-content: center;">
+                            <h3 style="margin-top:0; color:#1cc88a; font-size:16px; margin-bottom:10px;">🔍 Buscar Suplidor</h3>
+                            <p style="font-size:13px; color:#6c757d; margin-bottom:20px;">Escribe el nombre para filtrar la lista abajo. Por favor verifica antes de crear uno nuevo para evitar duplicados.</p>
+                            <input type="text" id="buscador" onkeyup="filtrarSuplidores()" placeholder="Escribe aquí para buscar..." style="width:100%; padding:15px; border:2px solid #1cc88a; border-radius:8px; box-sizing:border-box; font-size:15px; outline:none; font-family:inherit;">
+                        </div>
+                    </div>
+
+                    <div style="background: white; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); overflow: hidden; border: 1px solid #eaeaea;">
+                        <table style="width: 100%; border-collapse: collapse; text-align: left;">
+                            <thead style="background-color: #f8f9fa;">
+                                <tr style="border-bottom: 2px solid #dee2e6;">
+                                    <th style="padding: 15px; font-size: 12px; text-transform: uppercase; color: #6c757d;">Nombre del Suplidor</th>
+                                    <th style="padding: 15px; font-size: 12px; text-transform: uppercase; color: #6c757d;">Contacto</th>
+                                    <th style="padding: 15px; font-size: 12px; text-transform: uppercase; color: #6c757d; text-align:center;">Estado</th>
+                                    <th style="padding: 15px; font-size: 12px; text-transform: uppercase; color: #6c757d; text-align:center;">Acción</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tabla-suplidores">
+                                ${tableRows}
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
-            </body></html>`);
+
+                <script>
+                    function filtrarSuplidores() {
+                        const input = document.getElementById("buscador");
+                        const filter = input.value.toUpperCase();
+                        const rows = document.getElementsByClassName("suplidor-row");
+
+                        for (let i = 0; i < rows.length; i++) {
+                            const nameCell = rows[i].getElementsByClassName("sup-name")[0];
+                            if (nameCell) {
+                                const txtValue = nameCell.textContent || nameCell.innerText;
+                                if (txtValue.toUpperCase().indexOf(filter) > -1) {
+                                    rows[i].style.display = "";
+                                } else {
+                                    rows[i].style.display = "none";
+                                }
+                            }
+                        }
+                    }
+                </script>
+            </body></html>
+        `);
     } catch (error) {
+        console.error("Error cargando suplidores:", error);
         res.status(500).send('<h1>Error al cargar la página de suplidores ❌</h1>');
+    } finally {
+        if (client) client.release();
     }
 });
 
+// 2. RUTA PARA GUARDAR UN SUPLIDOR NUEVO
 app.post('/suplidores', requireLogin, requireAdminOrCoord, async (req, res) => {
     const { name, contact_info } = req.body;
     if (!name) return res.status(400).send("El nombre del suplidor es obligatorio.");
+    
+    let client;
     try {
-        const client = await pool.connect();
-        await client.query('INSERT INTO suppliers (name, contact_info) VALUES ($1, $2)', [name, contact_info]);
-        client.release();
+        client = await pool.connect();
+        // Se guarda por defecto como 'activo'
+        await client.query("INSERT INTO suppliers (name, contact_info, estado) VALUES ($1, $2, 'activo')", [name, contact_info]);
         res.redirect('/suplidores');
     } catch (error) {
         if (error.code === '23505') return res.status(409).send('<h1>Error: Ya existe un suplidor con ese nombre.</h1>');
+        console.error("Error al crear suplidor:", error);
         res.status(500).send('<h1>Error al guardar el suplidor ❌</h1>');
+    } finally {
+        if (client) client.release();
     }
 });
+
+// 3. RUTA PARA INACTIVAR / ACTIVAR SUPLIDORES (SOFT DELETE)
+app.post('/suplidores/:id/toggle', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const supId = req.params.id;
+    let client;
+    try {
+        client = await pool.connect();
+        const result = await client.query("SELECT estado FROM suppliers WHERE id = $1", [supId]);
+        if(result.rows.length > 0) {
+            const estadoActual = result.rows[0].estado;
+            const nuevoEstado = estadoActual === 'inactivo' ? 'activo' : 'inactivo';
+            await client.query("UPDATE suppliers SET estado = $1 WHERE id = $2", [nuevoEstado, supId]);
+        }
+        res.redirect('/suplidores');
+    } catch (error) {
+        console.error("Error al cambiar estado:", error);
+        res.status(500).send("Error al cambiar estado");
+    } finally {
+        if (client) client.release();
+    }
+});
+
+
 app.get('/proyectos-descartados', requireLogin, requireAdminOrCoord, async (req, res) => {
     try {
         const client = await pool.connect();
@@ -4725,8 +4844,15 @@ app.get('/recibo-nomina/:recordId/pdf', requireLogin, requireAdminOrCoord, async
 });
 app.get('/proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
     const centerId = req.params.id;
+
+    // 🛡️ ESCUDO 1: Bloquear enlaces rotos o "undefined" ANTES de tocar la base de datos
+    if (!centerId || centerId === 'undefined') {
+        return res.status(400).send('<div style="padding: 50px; text-align: center; font-family: sans-serif;"><h1>⚠️ Enlace Roto</h1><p>El proyecto que intentas buscar no es válido o no tiene un ID asignado.</p><a href="/clientes" style="padding: 10px 20px; background: #4e73df; color: white; text-decoration: none; border-radius: 5px;">Volver a la lista</a></div>');
+    }
+
+    let client; // Declaramos la variable afuera para poder cerrarla al final pase lo que pase
     try {
-        const client = await pool.connect();
+        client = await pool.connect();
         
         const quoteResult = await client.query(
             `SELECT q.*, c.name as centerName FROM quotes q LEFT JOIN centers c ON q.clientname = c.name WHERE c.id = $1 AND q.status = 'activa' ORDER BY q.createdat DESC LIMIT 1`,
@@ -4736,7 +4862,6 @@ app.get('/proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => 
         if (quoteResult.rows.length === 0) {
             const centerResult = await client.query('SELECT name FROM centers WHERE id = $1', [centerId]);
             const centerName = centerResult.rows.length > 0 ? centerResult.rows[0].name : "Cliente Desconocido";
-            client.release();
             return res.status(404).send(`<h1>${centerName}</h1><p>No se encontró un proyecto activo para este cliente.</p><a href="/clientes">Volver a la lista</a>`);
         }
         const quote = quoteResult.rows[0];
@@ -4748,37 +4873,37 @@ app.get('/proyecto/:id', requireLogin, requireAdminOrCoord, async (req, res) => 
             client.query(`SELECT * FROM ajustes_cotizacion WHERE quote_id = $1 ORDER BY fecha_ajuste ASC`, [quote.id])
         ]);
         
-        client.release();
         const payments = paymentsResult.rows;
         const expenses = expensesResult.rows;
         const suppliers = suppliersResult.rows;
         
         // --- LÓGICA DE CÁLCULOS PROTEGIDA ---
-const montoOriginal = parseFloat(quote.preciofinalporestudiante || 0) * parseFloat(quote.estudiantesparafacturar || 0);
+        const montoOriginal = parseFloat(quote.preciofinalporestudiante || 0) * parseFloat(quote.estudiantesparafacturar || 0);
 
-// Escudo para Ajustes
-const totalAjustes = adjustmentsResult.rows.reduce((sum, adj) => {
-    const val = parseFloat(adj.monto_ajuste);
-    return sum + (isNaN(val) ? 0 : val);
-}, 0);
+        // Escudo para Ajustes
+        const totalAjustes = adjustmentsResult.rows.reduce((sum, adj) => {
+            const val = parseFloat(adj.monto_ajuste);
+            return sum + (isNaN(val) ? 0 : val);
+        }, 0);
 
-const totalVenta = montoOriginal + totalAjustes;
+        const totalVenta = montoOriginal + totalAjustes;
 
-// Escudo para Abonos
-const totalAbonado = payments.reduce((sum, p) => {
-    const val = parseFloat(p.amount);
-    return sum + (isNaN(val) ? 0 : val);
-}, 0);
+        // Escudo para Abonos
+        const totalAbonado = payments.reduce((sum, p) => {
+            const val = parseFloat(p.amount);
+            return sum + (isNaN(val) ? 0 : val);
+        }, 0);
 
-// EL ESCUDO CRÍTICO: Escudo para Gastos (Donde vive el NaN de Griselda)
-const totalGastado = expenses.reduce((sum, e) => {
-    const val = parseFloat(e.amount);
-    return sum + (isNaN(val) ? 0 : val);
-}, 0);
+        // EL ESCUDO CRÍTICO: Escudo para Gastos
+        const totalGastado = expenses.reduce((sum, e) => {
+            const val = parseFloat(e.amount);
+            return sum + (isNaN(val) ? 0 : val);
+        }, 0);
 
-const balancePendiente = totalVenta - totalAbonado;
-const rentabilidad = totalAbonado - totalGastado;
-const rentabilidadProyectada = totalVenta - totalGastado;
+        const balancePendiente = totalVenta - totalAbonado;
+        const rentabilidad = totalAbonado - totalGastado;
+        const rentabilidadProyectada = totalVenta - totalGastado;
+        
         let adjustmentsHtml = adjustmentsResult.rows.map(adj => `
             <tr>
                 <td>${new Date(adj.fecha_ajuste).toLocaleString('es-DO')}</td>
@@ -4804,20 +4929,20 @@ const rentabilidadProyectada = totalVenta - totalGastado;
             </tr>
         `).join('') || '<tr><td colspan="5">No hay pagos registrados.</td></tr>';
         
-       let expensesHtml = expenses.map(e => {
-    const montoLimpio = isNaN(parseFloat(e.amount)) ? 0 : parseFloat(e.amount);
-    return `
-        <tr>
-            <td>${new Date(e.expense_date).toLocaleDateString()}</td>
-            <td>${e.supplier_name}</td>
-            <td>${e.description}</td>
-            <td style="font-weight: bold; color: #dc3545;">$${montoLimpio.toFixed(2)}</td>
-            <td>${e.type || ''}</td>
-            <td style="text-align: center;">
-                <a href="/desembolso/${e.id}/pdf" target="_blank" class="btn" style="padding: 5px 10px; font-size: 14px;">Imprimir</a>
-            </td>
-        </tr>`;
-}).join('') || '<tr><td colspan="6">No hay gastos registrados.</td></tr>';
+        let expensesHtml = expenses.map(e => {
+            const montoLimpio = isNaN(parseFloat(e.amount)) ? 0 : parseFloat(e.amount);
+            return `
+                <tr>
+                    <td>${new Date(e.expense_date).toLocaleDateString()}</td>
+                    <td>${e.supplier_name}</td>
+                    <td>${e.description}</td>
+                    <td style="font-weight: bold; color: #dc3545;">$${montoLimpio.toFixed(2)}</td>
+                    <td>${e.type || ''}</td>
+                    <td style="text-align: center;">
+                        <a href="/desembolso/${e.id}/pdf" target="_blank" class="btn" style="padding: 5px 10px; font-size: 14px;">Imprimir</a>
+                    </td>
+                </tr>`;
+        }).join('') || '<tr><td colspan="6">No hay gastos registrados.</td></tr>';
 
         let suppliersOptionsHtml = suppliers.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
 
@@ -4852,12 +4977,11 @@ const rentabilidadProyectada = totalVenta - totalGastado;
                         <div class="summary-box"><h3>Total Gastado</h3><p class="amount orange">$${totalGastado.toFixed(2)}</p></div>
                         <div class="summary-box"><h3>Rentabilidad Actual</h3><p class="amount ${rentabilidad >= 0 ? 'blue' : 'red'}">$${rentabilidad.toFixed(2)}</p></div>
                     </div>
-                    // Añade este cuadro al final de la clase "summary"
-<div class="summary-box">
-    <h3>Rentabilidad Final (Proyectada)</h3>
-    <p class="amount" style="color: #4e73df;">$${rentabilidadProyectada.toFixed(2)}</p>
-    <small style="color: gray;">Ganancia total al cobrar el 100%</small>
-</div>
+                    <div class="summary-box">
+                        <h3>Rentabilidad Final (Proyectada)</h3>
+                        <p class="amount" style="color: #4e73df;">$${rentabilidadProyectada.toFixed(2)}</p>
+                        <small style="color: gray;">Ganancia total al cobrar el 100%</small>
+                    </div>
                     <hr style="margin: 40px 0;">
                     <h2>Historial de Ajustes al Monto de Venta</h2>
                     <table>
@@ -4951,6 +5075,9 @@ const rentabilidadProyectada = totalVenta - totalGastado;
     } catch (error) {
         console.error("Error al obtener detalle del proyecto:", error);
         res.status(500).send('<h1>Error al obtener los detalles del proyecto ❌</h1>');
+    } finally {
+        // 🛡️ ESCUDO 2: EL MÁS IMPORTANTE. Asegurar que la conexión SIEMPRE se cierre.
+        if (client) client.release();
     }
 });
 
@@ -6343,12 +6470,14 @@ app.post('/procesar-super-nomina', requireLogin, requireAdminOrCoord, async (req
                             [entry.employee_id, centroId, montoExtra, extra.desc || 'Actividad Extra', batchPayrollId]
                         );
                         
-                        // Si es de un centro, creamos el gasto específico del centro
+                        // Si es de un centro, creamos el gasto específico del centro (BLINDADO)
                         if (centroId) {
                             await client.query(
-                                `INSERT INTO expenses (quote_id, amount, description, expense_date, supplier_id, type) 
-                                 VALUES ($1, $2, $3, CURRENT_DATE, (SELECT id FROM suppliers LIMIT 1), 'Nómina Extra')`,
-                                [centroId, montoExtra, `Pago Nómina Extra: ${extra.desc || 'Actividad'}`]
+                                `INSERT INTO expenses (quote_id, amount, paid_amount, status, description, expense_date, supplier_id, type) 
+                                 VALUES ($1, $2, $2, 'Pagada', $3, CURRENT_DATE, 
+                                 COALESCE((SELECT id FROM suppliers WHERE name ILIKE '%Nómina%' LIMIT 1), (SELECT id FROM suppliers LIMIT 1)), 
+                                 'Nomina Extra')`,
+                                [centroId, montoExtra, `Pago Nomina Extra: ${extra.desc || 'Actividad'}`]
                             );
                         }
                     }
@@ -6356,15 +6485,7 @@ app.post('/procesar-super-nomina', requireLogin, requireAdminOrCoord, async (req
             }
         } // Fin del For
 
-        // 4. CREAR EL GASTO GLOBAL DE NÓMINA (Para que afecte tus finanzas generales)
-        if (totalLote > 0) {
-            const fechaFormateada = fechaNominaSegura.toLocaleDateString('es-DO');
-            await client.query(
-                `INSERT INTO expenses (amount, description, expense_date, supplier_id, type, fund_source) 
-                 VALUES ($1, $2, $3, (SELECT id FROM suppliers LIMIT 1), 'Nómina', 'Banco')`,
-                [totalLote, `Pago Nómina General (${fechaFormateada})`, fechaNominaSegura]
-            );
-        }
+        
 
         // 5. Registro Histórico Simple
         await client.query(
@@ -6384,6 +6505,8 @@ app.post('/procesar-super-nomina', requireLogin, requireAdminOrCoord, async (req
         if (client) client.release();
     }
 });
+
+
 
 
 app.get('/imprimir-desembolso/:id', requireLogin, requireAdminOrCoord, async (req, res) => {
