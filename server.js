@@ -2645,6 +2645,9 @@ app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, re
                         <a href="/imprimir-cuentas-cobrar${advisor ? '?advisor=' + encodeURIComponent(advisor) : ''}" target="_blank" class="btn" style="background-color: #e74a3b; color: white; padding: 10px 20px; font-weight: bold; border-radius: 6px; text-decoration: none; display: flex; align-items: center; gap: 8px; box-shadow: 0 2px 4px rgba(231,74,59,0.2); transition: 0.2s;">
                             🖨️ Imprimir Reporte de Cobros
                         </a>
+                        <a href="/imprimir-rentabilidad${advisor ? '?advisor=' + encodeURIComponent(advisor) : ''}" target="_blank" class="btn" style="background-color: #4e73df; color: white; padding: 10px 20px; font-weight: bold; border-radius: 6px; text-decoration: none; display: flex; align-items: center; gap: 8px; box-shadow: 0 2px 4px rgba(78,115,223,0.1); transition: 0.2s;">
+                            📊 Imprimir Rentabilidad por Asesor
+                        </a>
                         <a href="/cuentas-por-cobrar${viendoArchivados ? '' : '?archivo=true'}" class="btn" style="background-color: #858796; color: white; padding: 10px 20px; font-weight: bold; border-radius: 6px; text-decoration: none; display: flex; align-items: center; gap: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); transition: 0.2s;">
                             ${viendoArchivados ? '🔙 Volver a Proyectos Activos' : '📂 Ver Histórico Archivado'}
                         </a>
@@ -2794,6 +2797,119 @@ app.get('/imprimir-cuentas-cobrar', requireLogin, requireAdminOrCoord, async (re
         res.status(500).send("Error generando PDF: " + e.message); 
     } finally { 
         if (client) client.release(); 
+    }
+});
+
+// --- RUTA PARA IMPRIMIR RENTABILIDAD CONSOLIDADA POR ASESOR ---
+app.get('/imprimir-rentabilidad', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { advisor } = req.query;
+    let client;
+    try {
+        client = await pool.connect();
+
+        let query = `
+            SELECT 
+                q.clientname, q.quotenumber, q.advisorname,
+                (COALESCE(q.preciofinalporestudiante * q.estudiantesparafacturar, 0) + 
+                 COALESCE((SELECT SUM(monto_ajuste) FROM ajustes_cotizacion WHERE quote_id = q.id), 0)) as venta_total,
+                COALESCE((SELECT SUM(amount) FROM payments WHERE quote_id = q.id), 0) as total_cobrado,
+                COALESCE((SELECT SUM(amount) FROM expenses WHERE quote_id = q.id), 0) as total_gastado
+            FROM quotes q
+            WHERE q.status = 'activa' 
+              AND q.is_archived = FALSE 
+              AND q.createdat >= '2025-08-01'
+        `;
+
+        const params = [];
+        if (advisor) {
+            params.push(advisor);
+            query += ` AND q.advisorname = $1`;
+        }
+        query += ` ORDER BY q.clientname ASC`;
+
+        const result = await client.query(query, params);
+
+        // Acumuladores para la fila de TOTALES
+        let tVenta = 0, tCobrado = 0, tGastado = 0, tRentabilidad = 0;
+
+        const filasHtml = result.rows.map(p => {
+            const venta = parseFloat(p.venta_total) || 0;
+            const cobrado = parseFloat(p.total_cobrado) || 0;
+            const gastado = parseFloat(p.total_gastado) || 0;
+            const rentabilidad = cobrado - gastado;
+
+            tVenta += venta;
+            tCobrado += cobrado;
+            tGastado += gastado;
+            tRentabilidad += rentabilidad;
+
+            return `
+                <tr>
+                    <td style="padding:10px; border-bottom:1px solid #ddd; text-align:left;">
+                        <b>${p.clientname}</b><br><small style="color:gray;">${p.quotenumber}</small>
+                    </td>
+                    <td style="padding:10px; border-bottom:1px solid #ddd; text-align:right;">RD$ ${venta.toLocaleString('en-US', {minimumFractionDigits:2})}</td>
+                    <td style="padding:10px; border-bottom:1px solid #ddd; text-align:right; color:#28a745;">RD$ ${cobrado.toLocaleString('en-US', {minimumFractionDigits:2})}</td>
+                    <td style="padding:10px; border-bottom:1px solid #ddd; text-align:right; color:#dc3545;">RD$ ${gastado.toLocaleString('en-US', {minimumFractionDigits:2})}</td>
+                    <td style="padding:10px; border-bottom:1px solid #ddd; text-align:right; font-weight:bold; color:${rentabilidad >= 0 ? '#28a745' : '#dc3545'};">
+                        RD$ ${rentabilidad.toLocaleString('en-US', {minimumFractionDigits:2})}
+                    </td>
+                </tr>
+            `;
+        }).join('');
+
+        const fechaEmision = new Date().toLocaleString('es-DO', { timeZone: 'America/Santo_Domingo' });
+
+        res.send(`
+            <!DOCTYPE html><html lang="es"><head>
+                <meta charset="UTF-8"><title>Informe de Rentabilidad Consolidado</title>
+                <style>
+                    body { font-family: sans-serif; color: #333; margin: 40px; }
+                    .header { text-align: center; margin-bottom: 30px; border-bottom: 3px solid #333; padding-bottom: 20px; }
+                    .title { font-size: 24px; font-weight: bold; color: #2c3e50; text-transform: uppercase; }
+                    .subtitle { font-size: 14px; margin-top: 5px; color: #555; }
+                    .table-report { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 13px; }
+                    .table-report th { background: #f4f6f9; padding: 12px 10px; font-weight: bold; text-transform: uppercase; border-bottom: 2px solid #333; }
+                    .total-row { background: #eaecf4; font-weight: bold; font-size: 14px; }
+                    .total-row td { padding: 15px 10px; border-top: 2px solid #333; border-bottom: 2px solid #333; }
+                    @media print { .no-print { display: none; } body { margin: 20px; } }
+                </style>
+            </head><body>
+                <div class="no-print" style="margin-bottom: 20px; text-align: right;">
+                    <button onclick="window.print()" style="padding: 10px 20px; font-weight: bold; background: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer;">🖨️ Confirmar Impresión / Guardar PDF</button>
+                </div>
+                <div class="header">
+                    <div class="title">Be Eventos</div>
+                    <div class="title" style="font-size:18px; margin-top:5px;">Informe de Rentabilidad Consolidado</div>
+                    <div class="subtitle"><b>Asesor:</b> ${advisor || 'Todos los Asesores'} | <b>Fecha de Emisión:</b> ${fechaEmision}</div>
+                </div>
+                <table class="table-report">
+                    <thead>
+                        <tr>
+                            <th style="text-align:left;">Centro Educativo</th>
+                            <th style="text-align:right;">Monto Venta</th>
+                            <th style="text-align:right;">Total Recaudado</th>
+                            <th style="text-align:right;">Total Gastado</th>
+                            <th style="text-align:right;">Rentabilidad Final</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${filasHtml || '<tr><td colspan="5" style="text-align:center; padding:30px;">No se encontraron proyectos activos para este criterio.</td></tr>'}
+                        <tr class="total-row">
+                            <td style="text-align:left;">TOTAL CONSOLIDADO:</td>
+                            <td style="text-align:right;">RD$ ${tVenta.toLocaleString('en-US', {minimumFractionDigits:2})}</td>
+                            <td style="text-align:right;">RD$ ${tCobrado.toLocaleString('en-US', {minimumFractionDigits:2})}</td>
+                            <td style="text-align:right;">RD$ ${tGastado.toLocaleString('en-US', {minimumFractionDigits:2})}</td>
+                            <td style="text-align:right; color:${tRentabilidad >= 0 ? '#28a745' : '#dc3545'};">RD$ ${tRentabilidad.toLocaleString('en-US', {minimumFractionDigits:2})}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </body></html>
+        `);
+    } catch (e) {
+        res.status(500).send("Error en reporte de rentabilidad: " + e.message);
+    } finally {
+        if (client) client.release();
     }
 });
 
