@@ -718,6 +718,25 @@ app.post('/activar-proyecto/:id', requireLogin, requireAdminOrCoord, async (req,
     }
 });
 
+
+// --- RUTA PARA ARCHIVAR PROYECTO (OCULTAR DE CUENTAS POR COBRAR) ---
+app.post('/proyecto/:id/archivar', requireLogin, requireAdminOrCoord, async (req, res) => {
+    const { id } = req.params;
+    let client;
+    try {
+        client = await pool.connect();
+        await client.query("UPDATE quotes SET is_archived = TRUE WHERE id = $1", [id]);
+        res.redirect('/cuentas-por-cobrar');
+    } catch (e) {
+        console.error("Error al archivar proyecto:", e);
+        res.status(500).send("Error al archivar el proyecto.");
+    } finally {
+        if (client) client.release();
+    }
+});
+
+
+
 app.get('/ver-cotizacion-pdf/:quoteId', requireLogin, async (req, res) => {
     try {
         const { quoteId } = req.params;
@@ -2480,6 +2499,7 @@ app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, re
                 (SELECT MAX(payment_date) FROM payments WHERE quote_id = q.id) as ultimo_pago
             FROM quotes q
             WHERE q.status = 'activa' 
+            AND q.is_archived = FALSE
               AND q.createdat >= '2025-08-01'
         `;
 
@@ -2534,11 +2554,10 @@ app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, re
             else { proyectosSaldados.push(item); }
         });
 
-        // 3. GENERADOR DE FILAS CON ESTADO MEJORADO
-        const generarFilas = (lista) => lista.map(p => {
+        // 3. GENERADOR DE FILAS CON BOTÓN ARCHIVAR
+        const generarFilas = (lista, mostrarBotonArchivar = false) => lista.map(p => {
             let badgeHtml = '';
             
-            // Lógica visual de inactividad
             if (p.estadoInactividad === 'new') {
                 badgeHtml = `<span style="background:#eef2ff; color:#4e73df; padding:4px 8px; border-radius:12px; font-size:10px; font-weight:bold;">🆕 Sin Pagos</span>`;
             } else if (p.estadoInactividad === 'danger') {
@@ -2549,6 +2568,20 @@ app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, re
                 badgeHtml = `<span style="background:#e6fffa; color:#2c7a7b; padding:4px 8px; border-radius:12px; font-size:10px; font-weight:bold;">🟢 Al día (${p.diasInactivo}d)</span>`;
             }
 
+            // Aquí armamos los botones de acción
+            let actionHtml = `<a href="/proyecto-detalle/${p.id}" class="btn" style="padding:5px 10px; font-size:11px; background:#4e73df; color:white; border-radius:4px; text-decoration:none;">🔍 Ver</a>`;
+            
+            // Si le decimos que es la tabla de saldados, agrega el botón de archivar al lado
+            if (mostrarBotonArchivar) {
+                actionHtml += `
+                    <form action="/proyecto/${p.id}/archivar" method="POST" style="display:inline; margin-left: 5px;">
+                        <button type="submit" onclick="return confirm('¿Seguro que deseas archivar este colegio? Desaparecerá de esta lista.')" style="padding:5px 10px; font-size:11px; background:#858796; color:white; border-radius:4px; border:none; cursor:pointer; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                            📦 Archivar
+                        </button>
+                    </form>
+                `;
+            }
+
             return `
                 <tr>
                     <td><b>${p.clientname}</b><br><small style="color:#858796;">${p.quotenumber} | ${p.advisorname}</small></td>
@@ -2556,7 +2589,7 @@ app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, re
                     <td style="text-align:right; color:#1cc88a;">RD$ ${p.cobrado.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0})}</td>
                     <td style="text-align:right; color:${p.deuda > 0 ? '#e74a3b' : '#1cc88a'}; font-weight:bold;">RD$ ${p.deuda.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
                     <td style="text-align:center;">${badgeHtml}</td>
-                    <td style="text-align:center;"><a href="/proyecto-detalle/${p.id}" class="btn" style="padding:5px 10px; font-size:11px; background:#4e73df; color:white; border-radius:4px; text-decoration:none;">🔍 Ver</a></td>
+                    <td style="text-align:center;">${actionHtml}</td>
                 </tr>`;
         }).join('');
 
@@ -2621,7 +2654,7 @@ app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, re
                     <div class="section-header" style="border-left-color:#1cc88a; margin-top:50px; opacity:0.8;">✅ PROYECTOS SALDADOS (HISTÓRICO)</div>
                     <table class="modern-table" style="opacity:0.8;">
                         <thead><tr><th>Proyecto / Asesor</th><th style="text-align:right;">Venta</th><th style="text-align:right;">Cobrado</th><th style="text-align:right;">Balance</th><th style="text-align:center;">Estado Pagos</th><th style="text-align:center;">Acción</th></tr></thead>
-                        <tbody>${generarFilas(proyectosSaldados) || '<tr><td colspan="6" style="text-align:center;">No hay proyectos saldados aún.</td></tr>'}</tbody>
+                        <tbody>${generarFilas(proyectosSaldados, true) || '<tr><td colspan="6" style="text-align:center;">No hay proyectos saldados aún.</td></tr>'}</tbody>
                     </table>
                 </div>
             </body></html>`);
