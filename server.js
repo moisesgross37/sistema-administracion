@@ -417,22 +417,6 @@ app.get('/', requireLogin, requireAdminOrCoord, async (req, res) => {
 });
 
 
-// 🛠️ RUTA TEMPORAL PARA CREAR COLUMNA ARCHIVADO EN PROYECTOS
-app.get('/crear-columna-archivar', requireLogin, async (req, res) => {
-    let client;
-    try {
-        client = await pool.connect();
-        
-        // Ejecutamos el comando SQL directo a la base de datos
-        await client.query("ALTER TABLE quotes ADD COLUMN is_archived BOOLEAN DEFAULT FALSE;");
-        
-        res.send("<h1 style='color: #1cc88a; padding: 50px; text-align: center; font-family: sans-serif;'>¡Columna is_archived creada con éxito en la tabla quotes! 🚀 Ya puedes borrar este código.</h1>");
-    } catch (e) {
-        res.send("<h1 style='color: #e74a3b; padding: 50px; text-align: center; font-family: sans-serif;'>Error: " + e.message + "</h1>");
-    } finally {
-        if (client) client.release();
-    }
-});
 
 
 app.get('/todos-los-centros', requireLogin, requireAdminOrCoord, async (req, res) => {
