@@ -2482,13 +2482,15 @@ app.get('/desembolso/:expenseId/pdf', requireLogin, requireAdminOrCoord, async (
 });
 
 app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, res) => {
-    const { advisor } = req.query; 
+    const { advisor, archivo } = req.query; 
+    const viendoArchivados = archivo === 'true'; // Nuestro interruptor mágico
+    
     let client;
     try {
         client = await pool.connect();
         const advisorsRes = await client.query("SELECT DISTINCT advisorname FROM quotes WHERE status = 'activa' ORDER BY advisorname");
 
-        // 1. CONSULTA SQL (Igual que antes, pero asegurando COALESCE)
+        // 1. CONSULTA SQL (Ahora escucha al interruptor)
         let query = `
             SELECT 
                 q.id, q.clientname, q.quotenumber, q.advisorname,
@@ -2499,7 +2501,7 @@ app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, re
                 (SELECT MAX(payment_date) FROM payments WHERE quote_id = q.id) as ultimo_pago
             FROM quotes q
             WHERE q.status = 'activa' 
-            AND q.is_archived = FALSE
+              AND q.is_archived = ${viendoArchivados ? 'TRUE' : 'FALSE'} 
               AND q.createdat >= '2025-08-01'
         `;
 
@@ -2642,6 +2644,9 @@ app.get('/cuentas-por-cobrar', requireLogin, requireAdminOrCoord, async (req, re
 
                         <a href="/imprimir-cuentas-cobrar${advisor ? '?advisor=' + encodeURIComponent(advisor) : ''}" target="_blank" class="btn" style="background-color: #e74a3b; color: white; padding: 10px 20px; font-weight: bold; border-radius: 6px; text-decoration: none; display: flex; align-items: center; gap: 8px; box-shadow: 0 2px 4px rgba(231,74,59,0.2); transition: 0.2s;">
                             🖨️ Imprimir Reporte de Cobros
+                        </a>
+                        <a href="/cuentas-por-cobrar${viendoArchivados ? '' : '?archivo=true'}" class="btn" style="background-color: #858796; color: white; padding: 10px 20px; font-weight: bold; border-radius: 6px; text-decoration: none; display: flex; align-items: center; gap: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); transition: 0.2s;">
+                            ${viendoArchivados ? '🔙 Volver a Proyectos Activos' : '📂 Ver Histórico Archivado'}
                         </a>
                     </div>
 
